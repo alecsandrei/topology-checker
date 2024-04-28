@@ -1,15 +1,10 @@
 use core::panic;
 use gdal::{
-    spatial_ref::SpatialRef,
     vector::{LayerAccess, ToGdal},
     Dataset, LayerOptions,
 };
-use geo::{
-    algorithm::euclidean_distance::nearest_neighbour_distance, point, Contains, CoordsIter,
-    CrossTrackDistance, EuclideanDistance, Extremes, GeodesicDistance, HasDimensions,
-    InteriorPoint, Intersects, LineStringSegmentize, LinesIter, RhumbDistance, VincentyDistance,
-    Winding, Within,
-};
+use geo::{EuclideanDistance, HasDimensions, Intersects};
+use std::time;
 
 const TOLERANCE: f64 = 0.01;
 
@@ -59,20 +54,35 @@ impl VectorDataset {
         let features: Vec<_> = layer.features().collect();
         let mut dangles: Vec<geo::Point> = Vec::new();
         let mut logic = |lines: Vec<geo::LineString>| {
-            println!("{}", &lines.len());
             for line in lines.iter().filter(|linestring| !linestring.is_closed()) {
                 let mut points = line.points().into_iter();
                 let mut first = Some(points.next().unwrap());
                 let mut last = Some(points.last().unwrap());
                 for other_line in &lines {
                     if other_line == line {
-                        continue;
+                        let sublines: Vec<geo::Line> = line.lines().collect();
+                        if let Some(point) = &first {
+                            for subline in sublines[1..].iter() {
+                                let distance = point.euclidean_distance(subline);
+                                if distance < TOLERANCE {
+                                    first = None;
+                                    break;
+                                }
+                            }
+                        }
+                        if let Some(point) = &last {
+                            for subline in sublines[0..sublines.len() - 1].iter() {
+                                let distance = point.euclidean_distance(subline);
+                                if distance < TOLERANCE {
+                                    last = None;
+                                    break;
+                                }
+                            }
+                        }
                     } else {
                         if let Some(point) = &first {
                             let distance = point.euclidean_distance(other_line);
-                            if distance < 0.01 && distance != 0.0 {
-                                println!("{}", distance);
-                                println!("{:?}", point);
+                            if distance < TOLERANCE {
                                 first = None
                             } else if point.intersects(other_line) {
                                 first = None
@@ -80,9 +90,7 @@ impl VectorDataset {
                         }
                         if let Some(point) = &last {
                             let distance = point.euclidean_distance(other_line);
-                            if distance < 0.01 && distance != 0.0 {
-                                println!("{}", distance);
-                                println!("{:?}", point);
+                            if distance < TOLERANCE {
                                 last = None
                             } else if point.intersects(other_line) {
                                 last = None
@@ -94,6 +102,7 @@ impl VectorDataset {
                         break;
                     }
                 }
+
                 if let Some(point) = first {
                     dangles.push(point)
                 }
