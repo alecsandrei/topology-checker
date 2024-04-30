@@ -10,5 +10,5 @@ fn main() {
     let dangles = dataset.there_are_no_dangles();
     let duration = start.elapsed();
     println!("Time elapsed in expensive_function() is: {:?}", duration);
-    topology_checker::geometries_to_file(dangles, "./assets/dangles.shp");
+    // topology_checker::geometries_to_file(dangles, "./assets/dangles.shp");
 }

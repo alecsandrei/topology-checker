@@ -5,10 +5,14 @@ use gdal::{
 };
 use geo::{
     BoundingRect, Contains, ConvexHull, EuclideanDistance, Intersects, LineString, LinesIter,
-    Within,
+    TryConvert, Within,
 };
-use std::collections::HashSet;
-use rayon::prelude::*;
+use geo_types::geometry;
+use rayon::{
+    iter::{FlatMapIter, ParallelIterator},
+    prelude::*,
+};
+use std::{borrow::BorrowMut, collections::HashSet, ops::Deref};
 
 const TOLERANCE: f64 = 0.01;
 
@@ -53,20 +57,30 @@ impl VectorDataset {
     // features
     // }
 
-    pub fn there_are_no_dangles(&self) -> Vec<geo::Point> {
+    pub fn there_are_no_dangles(&self) {
         let mut layer = self.0.layers().next().unwrap();
         let features = layer.features();
-        let mut dangles: Vec<geo::Point> = Vec::new();
-        let logic = |lines: Vec<geo::LineString>| -> Vec<geo::Point> {
-            // let lines = lines.collect::<Vec<geo::LineString>>();
-            lines.iter().filter(|linestring| !linestring.is_closed()).map(|line| {
+        let geometries: Vec<geo_types::geometry::Geometry> = features
+            .into_iter()
+            .map(|feature| feature.geometry().unwrap().to_geo().unwrap())
+            .collect();
+        let lines = gather_lines_par(geometries);
+
+        let dangles: &Vec<geo::Point> = &lines
+            .iter()
+            .par_bridge()
+            .filter(|line| !line.is_closed())
+            .flat_map(|line| {
                 let bbox = line.bounding_rect().unwrap();
                 let mut points = line.points().into_iter();
                 let mut first = Some(points.next().unwrap());
                 let mut last = Some(points.last().unwrap());
                 for other_line in lines
                     .iter()
+                    .par_bridge()
                     .filter(|linestring| linestring.intersects(&bbox))
+                    .collect::<Vec<&LineString>>()
+                    .into_iter()
                 {
                     if other_line == line {
                         let sublines: Vec<geo::Line> = line.lines().collect();
@@ -99,70 +113,36 @@ impl VectorDataset {
                         }
                     }
 
-                    if let (None, None) = (&first, &last) {
+                    if first.is_none() && last.is_none() {
                         break;
                     }
                 }
+                vec![first, last]
+                    .into_iter()
+                    .filter_map(|x| x)
+                    .collect::<Vec<_>>()
+            })
+            .collect();
 
-                if let Some(point) = first {
-                    dangles.push(point);
-                }
-                if let Some(point) = last {
-                    dangles.push(point)
-                }
-            });
-            dangles
-        };
-
-        let start = std::time::Instant::now();
-        let dangles = logic(gather_lines_vec(features));
-
-        println!("Time elapsed in logic is: {:?}", start.elapsed());
         println!("{}", dangles.len());
-        dangles
     }
 }
 
-pub fn gather_lines(features: FeatureIterator) -> Box<dyn Iterator<Item = LineString> + '_> {
-    let iterator = features
-        .map(|feature| {
-            let geometry = feature.geometry().unwrap();
-            let geometry = match geometry.geometry_name().as_str() {
-                "MULTILINESTRING" => {
-                    let geometry: geo::MultiLineString =
-                        geometry.to_geo().unwrap().try_into().unwrap();
-                    Box::new(geometry.into_iter()) as Box<dyn Iterator<Item = LineString>>
-                }
-                "LINESTRING" => {
-                    let geometry: geo::LineString = geometry.to_geo().unwrap().try_into().unwrap();
-                    Box::new(std::iter::once(geometry).into_iter())
-                        as Box<dyn Iterator<Item = LineString>>
-                }
-                _ => panic!("Wrong names"),
-            };
-            geometry
+pub fn gather_lines_par(geometries: Vec<geo_types::geometry::Geometry>) -> Vec<LineString<f64>> {
+    geometries
+        .into_iter()
+        .par_bridge()
+        .flat_map_iter(|geometry| match geometry {
+            geo_types::Geometry::LineString(linestring) => {
+                Box::new(std::iter::once(linestring)) as Box<dyn Iterator<Item = LineString<f64>>>
+            }
+            geo_types::Geometry::MultiLineString(multilinestring) => {
+                Box::new(multilinestring.into_iter().map(|linestring| linestring))
+                    as Box<dyn Iterator<Item = LineString<f64>>>
+            }
+            _ => panic!("Other type than line found."),
         })
-        .flatten();
-    Box::new(iterator) as Box<dyn Iterator<Item = LineString>>
-}
-
-pub fn gather_lines_vec(features: FeatureIterator) -> Vec<geo::LineString> {
-    let mut lines: Vec<geo::LineString> = Vec::new();
-    features.for_each(|feature| {
-        let geometry = feature.geometry().unwrap();
-        match geometry.geometry_name().as_str() {
-            "MULTILINESTRING" => {
-                let geometry: geo::MultiLineString = geometry.to_geo().unwrap().try_into().unwrap();
-                geometry.into_iter().for_each(|line| lines.push(line))
-            }
-            "LINESTRING" => {
-                let geometry: geo::LineString = geometry.to_geo().unwrap().try_into().unwrap();
-                lines.push(geometry)
-            }
-            _ => panic!("Wrong names"),
-        };
-    });
-    lines
+        .collect()
 }
 
 pub fn geometries_to_file(geometries: Vec<geo::Point>, out_path: &str) {
