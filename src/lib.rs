@@ -1,10 +1,14 @@
 use core::panic;
 use gdal::{
-    vector::{LayerAccess, ToGdal},
+    vector::{FeatureIterator, Layer, LayerAccess, ToGdal},
     Dataset, LayerOptions,
 };
-use geo::{EuclideanDistance, HasDimensions, Intersects};
-use std::time;
+use geo::{
+    BoundingRect, Contains, ConvexHull, EuclideanDistance, Intersects, LineString, LinesIter,
+    Within,
+};
+use std::collections::HashSet;
+use rayon::prelude::*;
 
 const TOLERANCE: f64 = 0.01;
 
@@ -49,22 +53,26 @@ impl VectorDataset {
     // features
     // }
 
-    pub fn there_are_no_dangles(&self) {
+    pub fn there_are_no_dangles(&self) -> Vec<geo::Point> {
         let mut layer = self.0.layers().next().unwrap();
-        let features: Vec<_> = layer.features().collect();
+        let features = layer.features();
         let mut dangles: Vec<geo::Point> = Vec::new();
-        let mut logic = |lines: Vec<geo::LineString>| {
-            for line in lines.iter().filter(|linestring| !linestring.is_closed()) {
+        let logic = |lines: Vec<geo::LineString>| -> Vec<geo::Point> {
+            // let lines = lines.collect::<Vec<geo::LineString>>();
+            lines.iter().filter(|linestring| !linestring.is_closed()).map(|line| {
+                let bbox = line.bounding_rect().unwrap();
                 let mut points = line.points().into_iter();
                 let mut first = Some(points.next().unwrap());
                 let mut last = Some(points.last().unwrap());
-                for other_line in &lines {
+                for other_line in lines
+                    .iter()
+                    .filter(|linestring| linestring.intersects(&bbox))
+                {
                     if other_line == line {
                         let sublines: Vec<geo::Line> = line.lines().collect();
                         if let Some(point) = &first {
                             for subline in sublines[1..].iter() {
-                                let distance = point.euclidean_distance(subline);
-                                if distance < TOLERANCE {
+                                if subline.intersects(point) {
                                     first = None;
                                     break;
                                 }
@@ -72,8 +80,7 @@ impl VectorDataset {
                         }
                         if let Some(point) = &last {
                             for subline in sublines[0..sublines.len() - 1].iter() {
-                                let distance = point.euclidean_distance(subline);
-                                if distance < TOLERANCE {
+                                if subline.intersects(point) {
                                     last = None;
                                     break;
                                 }
@@ -81,18 +88,12 @@ impl VectorDataset {
                         }
                     } else {
                         if let Some(point) = &first {
-                            let distance = point.euclidean_distance(other_line);
-                            if distance < TOLERANCE {
-                                first = None
-                            } else if point.intersects(other_line) {
+                            if other_line.intersects(point) {
                                 first = None
                             }
                         }
                         if let Some(point) = &last {
-                            let distance = point.euclidean_distance(other_line);
-                            if distance < TOLERANCE {
-                                last = None
-                            } else if point.intersects(other_line) {
+                            if other_line.intersects(point) {
                                 last = None
                             }
                         }
@@ -104,42 +105,67 @@ impl VectorDataset {
                 }
 
                 if let Some(point) = first {
-                    dangles.push(point)
+                    dangles.push(point);
                 }
                 if let Some(point) = last {
                     dangles.push(point)
                 }
-            }
+            });
+            dangles
         };
 
-        let mut lines: Vec<geo::LineString> = Vec::new();
-        for feature in features {
-            let geometry = feature.geometry().unwrap();
-            match geometry.geometry_name().as_str() {
-                "MULTILINESTRING" => {
-                    let geometry: geo::MultiLineString =
-                        geometry.to_geo().unwrap().try_into().unwrap();
-                    let geometry = geometry.into_iter().filter(|linestring| {
-                        linestring.to_gdal().unwrap().is_valid() && !linestring.is_empty()
-                    });
-                    lines.extend(geometry.into_iter());
-                }
-                "LINESTRING" => {
-                    let geometry: geo::LineString = geometry.to_geo().unwrap().try_into().unwrap();
-                    if geometry.to_gdal().unwrap().is_valid() && !geometry.is_empty() {
-                        lines.push(geometry);
-                    }
-                }
-                _ => panic!("Wrong names"),
-            };
-        }
-        logic(lines);
+        let start = std::time::Instant::now();
+        let dangles = logic(gather_lines_vec(features));
+
+        println!("Time elapsed in logic is: {:?}", start.elapsed());
         println!("{}", dangles.len());
-        geometries_to_file(dangles, "./assets/dangles.shp");
+        dangles
     }
 }
 
-fn geometries_to_file(geometries: Vec<geo::Point>, out_path: &str) {
+pub fn gather_lines(features: FeatureIterator) -> Box<dyn Iterator<Item = LineString> + '_> {
+    let iterator = features
+        .map(|feature| {
+            let geometry = feature.geometry().unwrap();
+            let geometry = match geometry.geometry_name().as_str() {
+                "MULTILINESTRING" => {
+                    let geometry: geo::MultiLineString =
+                        geometry.to_geo().unwrap().try_into().unwrap();
+                    Box::new(geometry.into_iter()) as Box<dyn Iterator<Item = LineString>>
+                }
+                "LINESTRING" => {
+                    let geometry: geo::LineString = geometry.to_geo().unwrap().try_into().unwrap();
+                    Box::new(std::iter::once(geometry).into_iter())
+                        as Box<dyn Iterator<Item = LineString>>
+                }
+                _ => panic!("Wrong names"),
+            };
+            geometry
+        })
+        .flatten();
+    Box::new(iterator) as Box<dyn Iterator<Item = LineString>>
+}
+
+pub fn gather_lines_vec(features: FeatureIterator) -> Vec<geo::LineString> {
+    let mut lines: Vec<geo::LineString> = Vec::new();
+    features.for_each(|feature| {
+        let geometry = feature.geometry().unwrap();
+        match geometry.geometry_name().as_str() {
+            "MULTILINESTRING" => {
+                let geometry: geo::MultiLineString = geometry.to_geo().unwrap().try_into().unwrap();
+                geometry.into_iter().for_each(|line| lines.push(line))
+            }
+            "LINESTRING" => {
+                let geometry: geo::LineString = geometry.to_geo().unwrap().try_into().unwrap();
+                lines.push(geometry)
+            }
+            _ => panic!("Wrong names"),
+        };
+    });
+    lines
+}
+
+pub fn geometries_to_file(geometries: Vec<geo::Point>, out_path: &str) {
     let geometries: Vec<gdal::vector::Geometry> = geometries
         .into_iter()
         .map(|point| point.to_gdal().unwrap())
@@ -157,14 +183,4 @@ fn geometries_to_file(geometries: Vec<geo::Point>, out_path: &str) {
     geometries.into_iter().for_each(|geom| {
         lyr.create_feature(geom).expect("Couldn't write geometry");
     });
-}
-
-fn point_to_geometry(
-    point: (f64, f64, f64),
-) -> Result<gdal::vector::Geometry, gdal::errors::GdalError> {
-    gdal::vector::Geometry::from_wkt(&format!("POINT ({} {})", point.0, point.1))
-}
-
-fn print_type_of<T>(_: &T) {
-    println!("{}", std::any::type_name::<T>())
 }

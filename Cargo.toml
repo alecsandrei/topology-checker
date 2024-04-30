@@ -8,3 +8,5 @@ edition = "2021"
 [dependencies]
 gdal = "0.16.0"
 geo = "0.28.0"
+geo-types = {version="0.7.13", features=["use-rstar_0_12"]}
+rayon = "1.10.0"
