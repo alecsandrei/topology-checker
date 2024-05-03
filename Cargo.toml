@@ -12,5 +12,4 @@ geo = "0.28.0"
 geo-types = {version="0.7.13", features=["use-rstar_0_12"]}
 rayon = "1.10.0"
 gdal-sys = "0.9.1"
-ordered-float = "4.2.0"
 itertools = "0.12.1"

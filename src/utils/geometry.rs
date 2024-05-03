@@ -1,28 +1,46 @@
 use geo::{
     algorithm::LineIntersection,
-    sweep::{self, Intersections, SweepPoint},
+    sweep::{Intersections, SweepPoint},
     Coord, GeoFloat, Geometry, Line, LineString, LinesIter, Point,
+    Polygon
 };
 use itertools::{Either, Itertools};
 use rayon::{iter::ParallelIterator, prelude::*};
+use std::collections::{BTreeSet, BinaryHeap};
 
-pub fn flatten_linestring(geometries: Vec<Geometry>) -> Vec<LineString<f64>> {
+pub fn flatten_linestrings(geometries: Vec<Geometry>) -> Vec<LineString> {
     geometries
         .into_iter()
         .par_bridge()
         .flat_map_iter(|geometry| match geometry {
             geo_types::Geometry::LineString(linestring) => {
-                Box::new(std::iter::once(linestring)) as Box<dyn Iterator<Item = LineString<f64>>>
+                Box::new(std::iter::once(linestring)) as Box<dyn Iterator<Item = LineString>>
             }
             geo_types::Geometry::MultiLineString(multilinestring) => {
-                Box::new(multilinestring.into_iter()) as Box<dyn Iterator<Item = LineString<f64>>>
+                Box::new(multilinestring.into_iter()) as Box<dyn Iterator<Item = LineString>>
             }
             _ => panic!("Unallowed geometries found."),
         })
         .collect()
 }
 
-pub fn flatten_lines(linestrings: Vec<LineString>) -> Vec<Line<f64>> {
+pub fn flatten_polygons(geometries: Vec<Geometry>) -> Vec<Polygon> {
+    geometries
+        .into_iter()
+        .par_bridge()
+        .flat_map_iter(|geometry| match geometry {
+            geo_types::Geometry::Polygon(linestring) => {
+                Box::new(std::iter::once(linestring)) as Box<dyn Iterator<Item = Polygon>>
+            }
+            geo_types::Geometry::MultiPolygon(multilinestring) => {
+                Box::new(multilinestring.into_iter()) as Box<dyn Iterator<Item = Polygon>>
+            }
+            _ => panic!("Unallowed geometries found."),
+        })
+        .collect()
+}
+
+pub fn flatten_lines(linestrings: Vec<&LineString>) -> Vec<Line> {
     linestrings
         .iter()
         .par_bridge()
@@ -30,36 +48,53 @@ pub fn flatten_lines(linestrings: Vec<LineString>) -> Vec<Line<f64>> {
         .collect()
 }
 
-pub fn linestring_inner_points(linestring: &Vec<LineString<f64>>) -> Vec<SweepPoint<f64>> {
-    // Provides an ordered vector of unique inner points (points that are not endpoints).
-    let mut vec: Vec<SweepPoint<f64>> = Vec::new();
+pub fn linestring_inner_points<T>(linestring: &Vec<&LineString<T>>) -> BinaryHeap<SweepPoint<T>>
+where
+    T: GeoFloat,
+{
+    // Provides an ordered vector of inner points (points that are not endpoints).
+    let mut heap: BinaryHeap<SweepPoint<T>> = BinaryHeap::new();
     for line in linestring.into_iter() {
         for coord in &line.0[1..line.0.len() - 1] {
-            let point: SweepPoint<f64> = <Coord as Into<SweepPoint<f64>>>::into(*coord);
-            vec.push(point);
+            let point: SweepPoint<T> = <Coord<T> as Into<SweepPoint<T>>>::into(*coord);
+            heap.push(point);
         }
     }
-    vec.sort();
-    vec
+    heap
 }
 
-pub fn linestring_endpoints(linestring: &Vec<LineString<f64>>) -> Vec<SweepPoint<f64>> {
-    // Provides an ordered vector of unique endpoints (points that are not inner points).
-    let mut vec: Vec<SweepPoint<f64>> = Vec::new();
+pub fn linestring_endpoints<T>(linestring: &Vec<&LineString<T>>) -> BinaryHeap<SweepPoint<T>>
+where
+    T: GeoFloat,
+    Coord<T>: From<Point<T>>,
+{
+    // Provides an ordered vector of endpoints (points that are not inner points).
+    let mut heap: BinaryHeap<SweepPoint<T>> = BinaryHeap::new();
     for line in linestring.into_iter() {
         let mut points = line.points();
-        vec.push(<Point as Into<SweepPoint<f64>>>::into(
+        heap.push(<Point<T> as Into<SweepPoint<T>>>::into(
             points.next().unwrap(),
         ));
-        vec.push(<Point as Into<SweepPoint<f64>>>::into(
+        heap.push(<Point<T> as Into<SweepPoint<T>>>::into(
             points.next_back().unwrap(),
         ));
     }
-    vec.sort();
-    vec
+    heap
 }
 
-pub fn intersections(lines: Vec<Line<f64>>) -> (Vec<Line>, (Vec<Coord>, Vec<Coord>)) {
+pub fn intersections<T, L, R>(
+    lines: Vec<Line<T>>,
+) -> (
+    Vec<Line<T>>,
+    (BTreeSet<SweepPoint<T>>, BTreeSet<SweepPoint<T>>),
+)
+where
+    T: GeoFloat,
+    L: From<Coord<T>>,
+    R: From<Coord<T>>,
+    BTreeSet<SweepPoint<T>>: Extend<L>,
+    BTreeSet<SweepPoint<T>>: Extend<R>,
+{
     // The intersections of lines.
     // Returns a tuple of collinear lines, unique proper single points and unique improper single points.
     let intersections = Intersections::from_iter(lines).collect::<Vec<_>>();
@@ -71,7 +106,7 @@ pub fn intersections(lines: Vec<Line<f64>>) -> (Vec<Line>, (Vec<Coord>, Vec<Coor
             LineIntersection::SinglePoint { .. } => false,
         });
 
-    let lines: Vec<Line> = lines
+    let lines: Vec<Line<T>> = lines
         .into_iter()
         .map(|line_intersection| {
             if let LineIntersection::Collinear { intersection } = line_intersection {
@@ -82,26 +117,23 @@ pub fn intersections(lines: Vec<Line<f64>>) -> (Vec<Line>, (Vec<Coord>, Vec<Coor
         })
         .collect();
 
-    let mut points: (Vec<_>, Vec<_>) =
-        points
-            .into_iter()
-            .partition_map(|points_intersection| match points_intersection {
-                LineIntersection::SinglePoint {
-                    intersection,
-                    is_proper: true,
-                } => Either::Left(intersection),
-                LineIntersection::SinglePoint {
-                    intersection,
-                    is_proper: false,
-                } => Either::Right(intersection),
-                _ => unreachable!(),
-            });
-    points.0.dedup();
-    points.1.dedup();
+    let points: (BTreeSet<SweepPoint<T>>, BTreeSet<SweepPoint<T>>) = points
+        .into_iter()
+        .partition_map(|points_intersection| match points_intersection {
+            LineIntersection::SinglePoint {
+                intersection,
+                is_proper: true,
+            } => Either::Left::<L, R>(intersection.into()),
+            LineIntersection::SinglePoint {
+                intersection,
+                is_proper: false,
+            } => Either::Right::<L, R>(intersection.into()),
+            _ => unreachable!(),
+        });
     (lines, points)
 }
 
-pub fn coords_to_points(coords: Vec<Coord>) -> Vec<Point> {
+pub fn coords_to_points<T>(coords: Vec<Coord>) -> Vec<Point> {
     coords
         .into_iter()
         .par_bridge()
