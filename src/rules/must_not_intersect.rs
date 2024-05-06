@@ -36,9 +36,6 @@ impl MustNotIntersect<Line, Point> for Vec<LineString> {
         // which are not Line or LineString endpoints.
         points.extend(proper);
         let points: Vec<Point> = sweep_points_to_points(points);
-        (
-            lines,
-            points
-        )
+        (lines, points)
     }
 }
