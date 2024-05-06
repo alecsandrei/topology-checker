@@ -2,6 +2,20 @@ mod args {
     use clap::{Args, Parser, Subcommand};
     use std::path::PathBuf;
 
+    /// Parse a single key-value pair
+    fn parse_key_val<T, U>(s: &str) -> Result<U, Box<dyn std::error::Error + Send + Sync + 'static>>
+    where
+        T: std::str::FromStr,
+        T::Err: std::error::Error + Send + Sync + 'static,
+        U: std::str::FromStr,
+        U::Err: std::error::Error + Send + Sync + 'static,
+    {
+        let pos = s
+            .find('=')
+            .ok_or_else(|| format!("invalid KEY=value: no `=` found in `{s}`"))?;
+        Ok(s[pos + 1..].parse()?)
+    }
+
     #[derive(Debug, Parser)]
     #[clap(author, version, about)]
     pub struct TopologyCheckerArgs {
@@ -16,26 +30,34 @@ mod args {
     pub enum Commands {
         #[command(arg_required_else_help(true))]
         MustNotHaveDangles {
+            #[arg(value_parser = parse_key_val::<String, PathBuf>)]
             /// Input lines
             lines: PathBuf,
+            #[arg(value_parser = parse_key_val::<String, PathBuf>)]
             /// Output dangles
             dangles: PathBuf,
         },
         #[command(arg_required_else_help(true))]
         MustNotIntersect {
+            #[arg(value_parser = parse_key_val::<String, PathBuf>)]
             /// Input lines
             lines: PathBuf,
+            #[arg(value_parser = parse_key_val::<String, PathBuf>)]
             /// Output point intersections
             single_points: PathBuf,
+            #[arg(value_parser = parse_key_val::<String, PathBuf>)]
             /// Output line intersections
             collinear_lines: PathBuf,
         },
         #[command(arg_required_else_help(true))]
         MustNotOverlap {
+            #[arg(value_parser = parse_key_val::<String, PathBuf>)]
             /// The input geometry
             geometry: PathBuf,
+            #[arg(value_parser = parse_key_val::<String, PathBuf>)]
             /// The output overlaps
             overlaps: PathBuf,
+            #[arg(value_parser = parse_key_val::<String, PathBuf>)]
             /// Optional geometry to check against. By default compares to itself
             other: Option<PathBuf>,
         },
@@ -76,7 +98,7 @@ fn main() {
             let vector_dataset = VectorDataset::new(lines.to_str().unwrap());
             let lines = vector_dataset.to_geo().unwrap();
             let lines = flatten_linestrings(lines);
-            let result = lines.there_are_no_dangles();
+            let result = lines.must_not_have_dangles();
             geometries_to_file(
                 result,
                 dangles.to_str().unwrap(),

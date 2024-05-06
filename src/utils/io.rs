@@ -18,11 +18,15 @@ pub fn geometries_to_file<G>(
         .into_iter()
         .map(|geometry| geometry.to_gdal().unwrap())
         .collect();
+
+    // If driver is not provided, attempt to infer it from the file extension.
     let driver_name = driver.unwrap_or_else(|| {
-        let mut driver_map = GdalDrivers.write();
-        driver_map.remove(out_path.split('.').last().unwrap()).expect(
-            "Could not infer driver by file extension. Consider specifying the GDAL_DRIVER environment variable."
-    )});
+        let driver = GdalDrivers
+            .infer_driver_name(out_path.split('.').last().unwrap())
+            .expect("Could not infer driver by file extension. Consider specifying the GDAL_DRIVER environment variable.");
+        driver.1.get("write").unwrap().clone().expect(format!("Driver {} is not writeable.", driver.0).as_str());
+        driver.0
+    });
     let drv = gdal::DriverManager::get_driver_by_name(&driver_name)
         .expect(format!("Driver {driver_name} does not exist.").as_str());
 
@@ -37,9 +41,26 @@ pub fn geometries_to_file<G>(
 }
 
 pub struct GdalDrivers;
+type DriverProps = HashMap<&'static str, Option<String>>;
 
 impl GdalDrivers {
-    fn driver_map(&self) -> HashMap<String, HashMap<&'static str, Option<String>>> {
+    fn infer_driver_name(&self, file_suffix: &str) -> Option<(String, DriverProps)> {
+        // Finds out whether or not the input file suffix can be mapped to a valid driver.
+        self.driver_map().into_iter().find(|(_, properties)| {
+            if properties
+                .get("extensions")
+                .unwrap()
+                .clone()
+                .unwrap()
+                .contains(file_suffix)
+            {
+                return true;
+            }
+            false
+        })
+    }
+
+    fn driver_map(&self) -> HashMap<String, DriverProps> {
         let mut drivers = HashMap::new();
         for i in 0..gdal::DriverManager::count() {
             let driver = gdal::DriverManager::get_driver(i).unwrap();

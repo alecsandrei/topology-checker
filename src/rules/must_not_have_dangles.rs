@@ -3,11 +3,11 @@ use geo::{sweep::SweepPoint, LineString, Point};
 use itertools::Itertools;
 
 pub trait MustNotHaveDangles {
-    fn there_are_no_dangles(&self) -> Vec<Point>;
+    fn must_not_have_dangles(&self) -> Vec<Point>;
 }
 
 impl MustNotHaveDangles for Vec<LineString> {
-    fn there_are_no_dangles(&self) -> Vec<Point> {
+    fn must_not_have_dangles(&self) -> Vec<Point> {
         // We find dangles by elimination from the LineString endpoints
         // BinaryHeap those points that are intersections.
         let endpoints = linestring_endpoints(self);
