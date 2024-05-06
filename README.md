@@ -2,6 +2,14 @@ A small project, **currently under development**, that can be used to check the 
 
 # Basic usage
 
+## Listing accepted drivers
+```sh
+topology-checker gdal-drivers write
+topology-checker gdal-drivers read
+topology-checker gdal-drivers read-and-write
+```
+
+## Performing checks
 ```sh
 topology-checker must-not-have-dangles LINES='./assets/lines.shp' DANGLES='./assets/dangles.shp'
 
