@@ -48,6 +48,7 @@ impl<T: GeoFloat> GeometryType<T> for Polygon<T> {}
 impl<T: GeoFloat> GeometryType<T> for LineString<T> {}
 
 mod tests {
+    // Test for the README.md file.
     #[cfg(doctest)]
     mod test_readme {
       macro_rules! external_doc_test {
