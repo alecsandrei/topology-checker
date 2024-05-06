@@ -1,12 +1,11 @@
 use geo::{
     algorithm::LineIntersection,
     sweep::{Intersections, SweepPoint},
-    Coord, GeoFloat, Geometry, Line, LineString, LinesIter, Point,
-    Polygon
+    Coord, GeoFloat, Geometry, Line, LineString, LinesIter, Point, Polygon,
 };
 use itertools::{Either, Itertools};
 use rayon::{iter::ParallelIterator, prelude::*};
-use std::collections::{BTreeSet, BinaryHeap};
+use std::collections::BTreeSet;
 
 pub fn flatten_linestrings(geometries: Vec<Geometry>) -> Vec<LineString> {
     geometries
@@ -40,7 +39,7 @@ pub fn flatten_polygons(geometries: Vec<Geometry>) -> Vec<Polygon> {
         .collect()
 }
 
-pub fn flatten_lines(linestrings: Vec<&LineString>) -> Vec<Line> {
+pub fn flatten_lines(linestrings: &Vec<LineString>) -> Vec<Line> {
     linestrings
         .iter()
         .par_bridge()
@@ -48,12 +47,12 @@ pub fn flatten_lines(linestrings: Vec<&LineString>) -> Vec<Line> {
         .collect()
 }
 
-pub fn linestring_inner_points<T>(linestring: &Vec<&LineString<T>>) -> BinaryHeap<SweepPoint<T>>
+pub fn linestring_inner_points<T>(linestring: &Vec<LineString<T>>) -> Vec<SweepPoint<T>>
 where
     T: GeoFloat,
 {
     // Provides an ordered vector of inner points (points that are not endpoints).
-    let mut heap: BinaryHeap<SweepPoint<T>> = BinaryHeap::new();
+    let mut heap: Vec<SweepPoint<T>> = Vec::new();
     for line in linestring.into_iter() {
         for coord in &line.0[1..line.0.len() - 1] {
             let point: SweepPoint<T> = <Coord<T> as Into<SweepPoint<T>>>::into(*coord);
@@ -63,13 +62,13 @@ where
     heap
 }
 
-pub fn linestring_endpoints<T>(linestring: &Vec<&LineString<T>>) -> BinaryHeap<SweepPoint<T>>
+pub fn linestring_endpoints<T>(linestring: &Vec<LineString<T>>) -> Vec<SweepPoint<T>>
 where
     T: GeoFloat,
     Coord<T>: From<Point<T>>,
 {
     // Provides an ordered vector of endpoints (points that are not inner points).
-    let mut heap: BinaryHeap<SweepPoint<T>> = BinaryHeap::new();
+    let mut heap: Vec<SweepPoint<T>> = Vec::new();
     for line in linestring.into_iter() {
         let mut points = line.points();
         heap.push(<Point<T> as Into<SweepPoint<T>>>::into(
@@ -96,7 +95,8 @@ where
     BTreeSet<SweepPoint<T>>: Extend<R>,
 {
     // The intersections of lines.
-    // Returns a tuple of collinear lines, unique proper single points and unique improper single points.
+    // Returns a tuple containing collinear lines and a tuple of
+    // unique proper single points and unique improper single points.
     let intersections = Intersections::from_iter(lines).collect::<Vec<_>>();
     let (lines, points): (Vec<_>, Vec<_>) = intersections
         .into_iter()
@@ -133,15 +133,17 @@ where
     (lines, points)
 }
 
-pub fn coords_to_points<T>(coords: Vec<Coord>) -> Vec<Point> {
-    coords
-        .into_iter()
-        .par_bridge()
-        .map(|coord| coord.into())
-        .collect()
+pub fn coords_to_points<T>(coords: impl IntoIterator<Item = Coord<T>>) -> Vec<Point>
+where
+    T: GeoFloat,
+    Point: From<Coord<T>>,
+{
+    coords.into_iter().map(|coord| coord.into()).collect()
 }
 
-pub fn sweep_points_to_points<T>(sweep_points: Vec<SweepPoint<T>>) -> Vec<Point<T>>
+pub fn sweep_points_to_points<T>(
+    sweep_points: impl IntoIterator<Item = SweepPoint<T>>,
+) -> Vec<Point<T>>
 where
     T: GeoFloat,
 {

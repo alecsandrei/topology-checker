@@ -1,43 +1,88 @@
-use crate::rules::must_not_intersect;
-use crate::utils::{flatten_polygons, intersections, sweep_points_to_points};
-use geo::sweep::SweepPoint;
-use geo::{Area, BooleanOps};
-use geo::{Geometry, Intersects, Line, MultiPolygon, Point, Polygon};
+use crate::{utils::intersections, GeometryType};
+use geo::{
+    sweep::SweepPoint, BooleanOps, GeoFloat, HasDimensions, Intersects, Line, MultiPolygon, Point,
+    Polygon,
+};
 use itertools::Itertools;
 use rayon::iter::{ParallelBridge, ParallelIterator};
+use std::collections::BTreeSet;
+use std::sync::{Arc, Mutex};
 
-pub fn must_not_overlap(geometries: Vec<Geometry>) -> Vec<MultiPolygon> {
-    let polygons = flatten_polygons(geometries);
-    let lines: Vec<Line> = polygons
-        .iter()
-        .par_bridge()
-        .map(|polygon| polygon.exterior().lines())
-        .flatten_iter()
-        .collect();
-    // let (collinear, intersections) = must_not_intersect(lines);
-    let (_, (proper, improper)) = intersections::<f64, SweepPoint<f64>, SweepPoint<f64>>(lines);
+pub trait MustNotOverlap<T: GeoFloat, I: GeometryType<T>, O: GeometryType<T>> {
+    fn must_not_overlap(&self) -> Vec<O>;
+    fn must_not_overlap_with(&self, other: Vec<I>) -> Vec<O>;
+}
 
-    let mut overlaps: Vec<MultiPolygon> = Vec::new();
-
-    for intersection in improper.into_iter().chain(proper.into_iter()) {
-        let point: Point = Point::new(intersection.x, intersection.y);
-        let intersecting_polygons: Vec<&Polygon> = polygons
+impl<T: GeoFloat + Send + Sync> MustNotOverlap<T, Polygon<T>, Polygon<T>> for Vec<Polygon<T>> {
+    fn must_not_overlap(&self) -> Vec<Polygon<T>> {
+        let lines: Vec<Line<T>> = self
             .iter()
             .par_bridge()
-            .filter(|polygon| polygon.intersects(&point))
+            .flat_map_iter(|polygon| polygon.exterior().lines())
             .collect();
-        if intersecting_polygons.len() < 2 {
-            continue;
-        }
-        for combination in intersecting_polygons
+        let (_, (proper, improper)) = intersections::<T, SweepPoint<T>, SweepPoint<T>>(lines);
+
+        let mut points: BTreeSet<SweepPoint<T>> = improper
             .into_iter()
-            .tuple_combinations::<(_, _)>()
-        {
-            let overlap = combination.0.intersection(combination.1);
-            if overlap.signed_area() != 0.0 {
-                overlaps.push(overlap);
+            .par_bridge()
+            .filter(|point| {
+                let buffer = Arc::new(Mutex::new(0));
+                let counter = Arc::clone(&buffer);
+                self.iter().par_bridge().for_each(move |polygon| {
+                    if point.intersects(polygon) {
+                        let mut counter = counter.lock().unwrap();
+                        *counter += 1;
+                    }
+                });
+                let buffer = *buffer.lock().unwrap();
+                buffer > 1
+            })
+            .collect();
+        points.extend(proper);
+
+        let mut overlaps: Vec<Polygon<T>> = Vec::new();
+        let mut combinations: Vec<(&Polygon<T>, &Polygon<T>)> = Vec::new();
+
+        for intersection in points.into_iter() {
+            let point: Point<T> = Point::new(intersection.x, intersection.y);
+            let intersecting_polygons: Vec<&Polygon<T>> = self
+                .iter()
+                .par_bridge()
+                .filter(|polygon| polygon.intersects(&point))
+                .collect();
+            for combination in intersecting_polygons
+                .into_iter()
+                .tuple_combinations::<(_, _)>()
+            {
+                if !combinations.contains(&combination)
+                    && !combinations.contains(&(combination.1, combination.0))
+                {
+                    combinations.push(combination);
+                }
             }
         }
+        for combination in combinations.into_iter() {
+            let overlap = combination.0.intersection(combination.1);
+            if !overlap.is_empty() {
+                overlaps.extend(overlap.0);
+            }
+        }
+        overlaps
     }
-    overlaps
+
+    fn must_not_overlap_with(&self, other: Vec<Polygon<T>>) -> Vec<Polygon<T>> {
+        let other = MultiPolygon::from_iter(other);
+        self.into_iter()
+            .par_bridge()
+            .filter_map(|polygon| {
+                let intersection =
+                    other.intersection(&MultiPolygon::from_iter(std::iter::once(polygon.clone())));
+                if !intersection.is_empty() {
+                    return Some(intersection.0);
+                }
+                None
+            })
+            .flatten()
+            .collect()
+    }
 }

@@ -1,10 +1,11 @@
-use core::panic;
 use gdal::{
     vector::{LayerAccess, ToGdal},
     Dataset, LayerOptions,
 };
+use geo::{GeoFloat, Geometry, LineString, MultiPolygon, Polygon};
 use geozero::{gdal::process_geom, geo_types::GeoWriter};
 
+pub mod prelude;
 pub mod rules;
 pub mod utils;
 
@@ -14,25 +15,28 @@ impl VectorDataset {
     pub fn new(path: &str) -> Self {
         VectorDataset(open_dataset(path))
     }
-
-    pub fn from_gdal(&self) -> Vec<geo::Geometry> {
-        let mut layer = self.0.layers().next().unwrap();
+    pub fn to_geo(&self) -> geozero::error::Result<Vec<Geometry<f64>>> {
+        let mut layer = self
+            .0
+            .layers()
+            .next()
+            .expect(&format!("Dataset {:?} has no layers.", self.0));
         let mut writer = GeoWriter::new();
         for feature in layer.features() {
             let geom = feature.geometry().unwrap();
-            process_geom(geom, &mut writer).unwrap();
+            process_geom(geom, &mut writer)?;
         }
         let geometry = writer.take_geometry().unwrap();
         match geometry {
-            geo::Geometry::GeometryCollection(geometry) => geometry.0,
-            _ => panic!("Wrong geometry input."),
+            geo::Geometry::GeometryCollection(geometry) => Ok(geometry.0),
+            _ => unreachable!(),
         }
     }
 }
 
 pub fn geometries_to_file<G>(geometries: Vec<G>, out_path: &str)
 where
-    G: ToGdal
+    G: ToGdal,
 {
     let geometries: Vec<gdal::vector::Geometry> = geometries
         .into_iter()
@@ -55,3 +59,10 @@ where
 fn open_dataset(path: &str) -> Dataset {
     Dataset::open(path).expect("Could not read file.")
 }
+
+pub trait GeometryType<T: GeoFloat> {}
+
+impl<T: GeoFloat> GeometryType<T> for Geometry<T> {}
+impl<T: GeoFloat> GeometryType<T> for MultiPolygon<T> {}
+impl<T: GeoFloat> GeometryType<T> for Polygon<T> {}
+impl<T: GeoFloat> GeometryType<T> for LineString<T> {}
