@@ -2,6 +2,8 @@
 name = "topology-checker"
 version = "0.1.0"
 edition = "2021"
+license = "MIT"
+categories = ["command-line-interface"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -14,5 +16,3 @@ rayon = "1.10.0"
 gdal-sys = "0.9.1"
 itertools = "0.12.1"
 clap = { version = "4.5.4", features = ["derive", "env"] }
-strum = "0.26.2"
-strum_macros = "0.26.2"

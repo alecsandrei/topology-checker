@@ -46,3 +46,17 @@ impl<T: GeoFloat> GeometryType<T> for Geometry<T> {}
 impl<T: GeoFloat> GeometryType<T> for MultiPolygon<T> {}
 impl<T: GeoFloat> GeometryType<T> for Polygon<T> {}
 impl<T: GeoFloat> GeometryType<T> for LineString<T> {}
+
+mod tests {
+    #[cfg(doctest)]
+    mod test_readme {
+      macro_rules! external_doc_test {
+        ($x:expr) => {
+            #[doc = $x]
+            extern {}
+        };
+      }
+    
+      external_doc_test!(include_str!("../README.md"));
+    }
+}
