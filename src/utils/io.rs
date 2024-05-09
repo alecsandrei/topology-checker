@@ -1,9 +1,10 @@
 use gdal::vector::ToGdal;
-use gdal::{vector::LayerAccess, Dataset, LayerOptions, Metadata};
+use gdal::{vector::LayerAccess, DatasetOptions, GdalOpenFlags, Dataset, LayerOptions, Metadata};
 use std::collections::HashMap;
 
 pub fn open_dataset(path: &str) -> Dataset {
-    Dataset::open(path).expect(format!("Could not read file {path}.").as_str())
+    Dataset::open_ex(path, DatasetOptions { open_flags: GdalOpenFlags::GDAL_OF_VECTOR, ..Default::default() })
+        .expect(format!("Could not read file {path}.").as_str())
 }
 
 pub fn geometries_to_file<G>(
