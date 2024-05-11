@@ -1,11 +1,12 @@
-use crate::utils::open_dataset;
+use crate::util::open_dataset;
 use gdal::{spatial_ref::SpatialRef, vector::LayerAccess, Dataset, Metadata};
 use geo::{GeoFloat, Geometry, LineString, MultiPolygon, Polygon};
 use geozero::{gdal::process_geom, geo_types::GeoWriter};
 
 pub mod prelude;
-pub mod rules;
-pub mod utils;
+pub mod rule;
+pub mod util;
+pub mod algorithm;
 
 pub struct VectorDataset(Dataset);
 

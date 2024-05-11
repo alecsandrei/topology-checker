@@ -1,7 +1,10 @@
-use crate::{utils::intersections, GeometryType};
+use crate::{
+    util::intersections,
+    GeometryType,
+};
 use geo::{
-    sweep::SweepPoint, BooleanOps, GeoFloat, HasDimensions, Intersects, Line, MultiPolygon, Point,
-    Polygon,
+    sweep::SweepPoint, BooleanOps, GeoFloat, HasDimensions, Intersects, Line,
+    MultiPolygon, Point, Polygon,
 };
 use itertools::Itertools;
 use rayon::iter::{ParallelBridge, ParallelIterator};
@@ -86,3 +89,10 @@ impl<T: GeoFloat + Send + Sync> MustNotOverlap<T, Polygon<T>, Polygon<T>> for Ve
             .collect()
     }
 }
+
+// impl<T: GeoFloat> MustNotOverlap<T, LineString<T>, LineString<T>> for Vec<Polygon<T>> {
+//     fn must_not_overlap(&self) -> Vec<LineString<T>> {
+//         let lines = flatten_lines(self);
+//         intersections(lines);
+//     }
+// }

@@ -1,15 +1,15 @@
 use std::collections::BTreeSet;
 
-use crate::utils::{flatten_lines, intersections, linestring_inner_points, sweep_points_to_points};
-use geo::{sweep::SweepPoint, Line, LineString, Point};
+use crate::{util::{flatten_lines, intersections, linestring_inner_points, sweep_points_to_points}, algorithm::lines_to_linestring};
+use geo::{sweep::SweepPoint, LineString, Point};
 use itertools::Itertools;
 
 pub trait MustNotIntersect<O1, O2> {
     fn must_no_intesect(&self) -> (Vec<O1>, Vec<O2>);
 }
 
-impl MustNotIntersect<Line, Point> for Vec<LineString> {
-    fn must_no_intesect(&self) -> (Vec<Line>, Vec<Point>) {
+impl MustNotIntersect<LineString, Point> for Vec<LineString> {
+    fn must_no_intesect(&self) -> (Vec<LineString>, Vec<Point>) {
         let mut endpoints = linestring_inner_points(self);
         endpoints.sort();
         let lines = flatten_lines(self);
@@ -36,6 +36,6 @@ impl MustNotIntersect<Line, Point> for Vec<LineString> {
         // which are not Line or LineString endpoints.
         points.extend(proper);
         let points: Vec<Point> = sweep_points_to_points(points);
-        (lines, points)
+        (lines_to_linestring(lines.into_iter().map_into().collect()), points)
     }
 }

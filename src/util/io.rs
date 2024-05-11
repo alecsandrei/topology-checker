@@ -77,12 +77,11 @@ impl GdalDrivers {
             properties.insert("extensions", extension);
 
             if let Some(extension) = properties.get("extensions").unwrap() {
-                if !extension.is_empty() && driver.metadata_item("DCAP_VECTOR", "").is_some() {
-                    let mut name = driver.long_name();
-                    if name.is_empty() {
-                        name = driver.short_name()
-                    }
-                    drivers.insert(name, properties);
+                if !extension.is_empty()
+                    && driver.metadata_item("DCAP_VECTOR", "").is_some()
+                    && !driver.long_name().is_empty()
+                {
+                    drivers.insert(driver.long_name(), properties);
                 }
             }
         }

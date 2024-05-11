@@ -23,7 +23,7 @@ topology-checker must-not-overlap GEOMETRY='./assets/buildings.shp' OVERLAPS='./
 # As a library
 It depends on the [geo](https://crates.io/crates/geo) crate. Import the following traits:
 ```rust
-use topology_checker::rules::{MustNotHaveDangles, MustNotIntersect, MustNotOverlap};
+use topology_checker::rule::{MustNotHaveDangles, MustNotIntersect, MustNotOverlap};
 ```
 equivalent with
 ```rust
@@ -32,14 +32,14 @@ use topology_checker::prelude::*;
 These rules will now be implemented for vectors of certain geometries. For example, you could do:
 ```rust
 use geo::{line_string, LineString, Point};
-use topology_checker::rules::MustNotHaveDangles;
+use topology_checker::rule::MustNotHaveDangles;
 let lines: Vec<LineString> = vec![line_string![(x: 0., y: 0.), (x: 1., y: 1.)], line_string![(x: 1., y: 1.), (x: 2., y: 2.)]];
 let dangles: Vec<Point> = lines.must_not_have_dangles();
 
-use topology_checker::rules::MustNotIntersect;
-let intersections: (Vec<geo::Line>, Vec<geo::Point>) = lines.must_no_intesect();
+use topology_checker::rule::MustNotIntersect;
+let intersections: (Vec<geo::LineString>, Vec<geo::Point>) = lines.must_no_intesect();
 
-use topology_checker::rules::MustNotOverlap;
+use topology_checker::rule::MustNotOverlap;
 use geo::{polygon, Polygon};
 let polygons: Vec<Polygon> = vec![polygon![(x: 0., y: 0.), (x: 1., y: 0.), (x: 1., y: 1.), (x: 0., y: 1.), (x: 0., y: 0.)], polygon![(x: 1., y: 1.), (x: 2., y: 1.), (x: 2., y: 2.), (x: 1., y: 2.), (x: 1., y: 1.)]];
 let overlaps: Vec<Polygon> = polygons.must_not_overlap();

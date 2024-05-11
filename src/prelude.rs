@@ -1,3 +1,3 @@
-pub use crate::rules::MustNotIntersect;
-pub use crate::rules::MustNotOverlap;
-pub use crate::rules::MustNotHaveDangles;
+pub use crate::rule::MustNotIntersect;
+pub use crate::rule::MustNotOverlap;
+pub use crate::rule::MustNotHaveDangles;

@@ -63,6 +63,8 @@ mod args {
         },
         /// Print the allowed GDAL drivers
         GdalDrivers(GdalDriversCommand),
+        /// Extra vector data utilities
+        Utilities(UtilitiesCommand),
     }
 
     #[derive(Debug, Args)]
@@ -80,18 +82,51 @@ mod args {
         /// List readable and writeable drivers
         ReadAndWrite,
     }
+
+    #[derive(Debug, Args)]
+    pub struct UtilitiesCommand {
+        #[clap(subcommand)]
+        pub command: Utilities,
+    }
+
+    #[derive(Debug, Subcommand)]
+    pub enum Utilities {
+        /// Merge linestrings
+        #[command(arg_required_else_help(true))]
+        MergeLinestrings {
+            #[arg(value_parser = parse_key_val::<String, PathBuf>)]
+            /// The input linestrings
+            linestrings: PathBuf,
+            #[arg(value_parser = parse_key_val::<String, PathBuf>)]
+            /// The output merged linestrings
+            merged: PathBuf,
+        },
+        /// Explode linestrings
+        #[command(arg_required_else_help(true))]
+        ExplodeLinestrings {
+            #[arg(value_parser = parse_key_val::<String, PathBuf>)]
+            /// The input linestrings
+            linestrings: PathBuf,
+            #[arg(value_parser = parse_key_val::<String, PathBuf>)]
+            /// The output exploded lines
+            lines: PathBuf,
+        },
+    }
 }
 
-use args::{Commands, Drivers, TopologyCheckerArgs};
+use args::{Commands, Drivers, TopologyCheckerArgs, Utilities};
 use clap::Parser;
 use gdal::LayerOptions;
-use topology_checker::rules::{MustNotHaveDangles, MustNotIntersect, MustNotOverlap};
-use topology_checker::utils::{
-    flatten_linestrings, flatten_polygons, geometries_to_file, GdalDrivers,
+use std::time;
+use topology_checker::{
+    algorithm::lines_to_linestring,
+    rule::{MustNotHaveDangles, MustNotIntersect, MustNotOverlap},
+    util::{flatten_lines, flatten_linestrings, flatten_polygons, geometries_to_file, GdalDrivers},
+    VectorDataset,
 };
-use topology_checker::VectorDataset;
 
 fn main() {
+    let now = time::Instant::now();
     let args = TopologyCheckerArgs::parse();
     match args.command {
         Commands::MustNotHaveDangles { lines, dangles } => {
@@ -195,5 +230,43 @@ fn main() {
                 }
             }
         },
+        Commands::Utilities(command) => match command.command {
+            Utilities::ExplodeLinestrings { linestrings, lines } => {
+                let dataset = VectorDataset::new(linestrings.to_str().unwrap());
+                let geometry = dataset.to_geo().unwrap();
+                let linestrings = flatten_linestrings(geometry);
+                let exploded = flatten_lines(&linestrings);
+                geometries_to_file(
+                    exploded,
+                    lines.to_str().unwrap(),
+                    args.gdal_driver,
+                    Some(LayerOptions {
+                        name: "merged_linestrings",
+                        srs: dataset.crs().as_ref(),
+                        ..Default::default()
+                    }),
+                )
+            }
+            Utilities::MergeLinestrings {
+                linestrings,
+                merged,
+            } => {
+                let dataset = VectorDataset::new(linestrings.to_str().unwrap());
+                let geometry = dataset.to_geo().unwrap();
+                let linestrings = flatten_linestrings(geometry);
+                let merged_linestrings = lines_to_linestring(linestrings);
+                geometries_to_file(
+                    merged_linestrings,
+                    merged.to_str().unwrap(),
+                    args.gdal_driver,
+                    Some(LayerOptions {
+                        name: "merged_linestrings",
+                        srs: dataset.crs().as_ref(),
+                        ..Default::default()
+                    }),
+                )
+            }
+        },
     }
+    println!("{:?}", now.elapsed());
 }

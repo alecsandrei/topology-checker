@@ -1,4 +1,4 @@
-use crate::utils::{flatten_lines, intersections, linestring_endpoints, sweep_points_to_points};
+use crate::util::{flatten_lines, intersections, linestring_endpoints, sweep_points_to_points};
 use geo::{sweep::SweepPoint, LineString, Point};
 use itertools::Itertools;
 
