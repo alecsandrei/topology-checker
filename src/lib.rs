@@ -1,6 +1,6 @@
 use crate::util::open_dataset;
 use gdal::{spatial_ref::SpatialRef, vector::LayerAccess, Dataset, Metadata};
-use geo::{GeoFloat, Geometry, Line, LineString, MultiPolygon, Polygon};
+use geo::{GeoFloat, Geometry, Line, LineString, MultiPolygon, Point, Polygon};
 use geozero::{gdal::process_geom, geo_types::GeoWriter};
 
 pub mod algorithm;
@@ -41,13 +41,14 @@ impl VectorDataset {
     }
 }
 
-pub trait GeometryType<T:GeoFloat> {}
+pub trait GeometryType<T: GeoFloat> {}
 
-impl<T:GeoFloat> GeometryType<T> for Geometry<T> {}
-impl<T:GeoFloat> GeometryType<T> for MultiPolygon<T> {}
-impl<T:GeoFloat> GeometryType<T> for Polygon<T> {}
-impl<T:GeoFloat> GeometryType<T> for LineString<T> {}
-impl<T:GeoFloat> GeometryType<T> for Line<T> {}
+impl<T: GeoFloat> GeometryType<T> for Geometry<T> {}
+impl<T: GeoFloat> GeometryType<T> for Point<T> {}
+impl<T: GeoFloat> GeometryType<T> for Line<T> {}
+impl<T: GeoFloat> GeometryType<T> for LineString<T> {}
+impl<T: GeoFloat> GeometryType<T> for MultiPolygon<T> {}
+impl<T: GeoFloat> GeometryType<T> for Polygon<T> {}
 
 mod tests {
     // Test for the README.md file.

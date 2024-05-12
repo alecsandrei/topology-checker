@@ -31,6 +31,24 @@ pub fn flatten_linestrings<T: GeoFloat + Send + Sync>(
         .collect()
 }
 
+pub fn flatten_points<T: GeoFloat + Send + Sync>(
+    geometries: Vec<Geometry<T>>,
+) -> Vec<Point<T>> {
+    geometries
+        .into_iter()
+        .par_bridge()
+        .flat_map_iter(|geometry| match geometry {
+            Geometry::Point(point) => {
+                Box::new(std::iter::once(point)) as Box<dyn Iterator<Item = Point<T>>>
+            }
+            Geometry::MultiPoint(points) => {
+                Box::new(points.into_iter()) as Box<dyn Iterator<Item = Point<T>>>
+            }
+            _ => panic!("Unallowed geometries found."),
+        })
+        .collect()
+}
+
 pub fn is_polygon(geometry: &Geometry) -> bool {
     if let Geometry::Polygon(_) = geometry {
         return true;

@@ -66,7 +66,18 @@ mod args {
 
     #[derive(Debug, Subcommand)]
     pub enum PointRules {
-        // TODO
+        #[command(arg_required_else_help(true))]
+        MustNotOverlap {
+            #[arg(value_parser = parse_key_val::<String, PathBuf>)]
+            /// Input lines
+            points: PathBuf,
+            #[arg(value_parser = parse_key_val::<String, PathBuf>)]
+            /// The output overlaps
+            overlaps: PathBuf,
+            #[arg(value_parser = parse_key_val::<String, PathBuf>)]
+            /// Optional geometry to check against. By default compares to itself
+            other: Option<PathBuf>,
+        },
     }
 
     #[derive(Debug, Subcommand)]
@@ -163,14 +174,17 @@ mod args {
     }
 }
 
-use args::{Commands, Drivers, LineRules, PolygonRules, TopologyCheckerArgs, Utilities};
+use args::{
+    Commands, Drivers, LineRules, PointRules, PolygonRules, TopologyCheckerArgs, Utilities,
+};
 use clap::Parser;
 use gdal::LayerOptions;
 use topology_checker::{
     algorithm::merge_linestrings,
     rule::{MustNotHaveDangles, MustNotIntersect, MustNotOverlap},
     util::{
-        explode_linestrings, flatten_linestrings, flatten_polygons, geometries_to_file, GdalDrivers,
+        explode_linestrings, flatten_linestrings, flatten_points, flatten_polygons,
+        geometries_to_file, GdalDrivers,
     },
     VectorDataset,
 };
@@ -178,9 +192,44 @@ use topology_checker::{
 fn main() {
     let args = TopologyCheckerArgs::parse();
     match args.command {
-        Commands::Point(_) => {
-            todo!()
-        }
+        Commands::Point(command) => match command.command {
+            PointRules::MustNotOverlap {
+                points,
+                overlaps,
+                other,
+            } => {
+                let vector_dataset = VectorDataset::new(points.to_str().unwrap());
+                let points = flatten_points(vector_dataset.to_geo().unwrap());
+                if let Some(other) = other {
+                    let other = flatten_points(
+                        VectorDataset::new(other.to_str().unwrap())
+                            .to_geo()
+                            .unwrap(),
+                    );
+                    geometries_to_file(
+                        points.must_not_overlap_with(other),
+                        overlaps.to_str().unwrap(),
+                        args.gdal_driver,
+                        Some(LayerOptions {
+                            name: "overlaps",
+                            srs: vector_dataset.crs().as_ref(),
+                            ..Default::default()
+                        }),
+                    )
+                } else {
+                    geometries_to_file(
+                        points.must_not_overlap(),
+                        overlaps.to_str().unwrap(),
+                        args.gdal_driver,
+                        Some(LayerOptions {
+                            name: "overlaps",
+                            srs: vector_dataset.crs().as_ref(),
+                            ..Default::default()
+                        }),
+                    )
+                }
+            }
+        },
         Commands::Lines(command) => match command.command {
             LineRules::MustNotHaveDangles { lines, dangles } => {
                 let vector_dataset = VectorDataset::new(lines.to_str().unwrap());
