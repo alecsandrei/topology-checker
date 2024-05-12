@@ -1,4 +1,6 @@
-use crate::util::{flatten_lines, intersections, linestring_endpoints, sweep_points_to_points};
+use crate::util::{
+    explode_linestrings, intersections, linestring_endpoints, sweep_points_to_points,
+};
 use geo::{sweep::SweepPoint, LineString, Point};
 use itertools::Itertools;
 
@@ -12,7 +14,7 @@ impl MustNotHaveDangles for Vec<LineString> {
         // BinaryHeap those points that are intersections.
         let endpoints = linestring_endpoints(self);
         let (_, (_, improper)) =
-            intersections::<f64, SweepPoint<f64>, SweepPoint<f64>>(flatten_lines(self));
+            intersections::<f64, SweepPoint<f64>, SweepPoint<f64>>(explode_linestrings(self));
         let endpoints = endpoints
             .into_iter()
             .filter_map(|point| {

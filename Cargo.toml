@@ -16,3 +16,4 @@ rayon = "1.10.0"
 gdal-sys = "0.9.1"
 itertools = "0.12.1"
 clap = { version = "4.5.4", features = ["derive", "env"] }
+rstar = "0.12.0"

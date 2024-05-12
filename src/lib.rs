@@ -1,12 +1,12 @@
 use crate::util::open_dataset;
 use gdal::{spatial_ref::SpatialRef, vector::LayerAccess, Dataset, Metadata};
-use geo::{GeoFloat, Geometry, LineString, MultiPolygon, Polygon};
+use geo::{GeoFloat, Geometry, Line, LineString, MultiPolygon, Polygon};
 use geozero::{gdal::process_geom, geo_types::GeoWriter};
 
+pub mod algorithm;
 pub mod prelude;
 pub mod rule;
 pub mod util;
-pub mod algorithm;
 
 pub struct VectorDataset(Dataset);
 
@@ -41,24 +41,25 @@ impl VectorDataset {
     }
 }
 
-pub trait GeometryType<T: GeoFloat> {}
+pub trait GeometryType<T:GeoFloat> {}
 
-impl<T: GeoFloat> GeometryType<T> for Geometry<T> {}
-impl<T: GeoFloat> GeometryType<T> for MultiPolygon<T> {}
-impl<T: GeoFloat> GeometryType<T> for Polygon<T> {}
-impl<T: GeoFloat> GeometryType<T> for LineString<T> {}
+impl<T:GeoFloat> GeometryType<T> for Geometry<T> {}
+impl<T:GeoFloat> GeometryType<T> for MultiPolygon<T> {}
+impl<T:GeoFloat> GeometryType<T> for Polygon<T> {}
+impl<T:GeoFloat> GeometryType<T> for LineString<T> {}
+impl<T:GeoFloat> GeometryType<T> for Line<T> {}
 
 mod tests {
     // Test for the README.md file.
     #[cfg(doctest)]
     mod test_readme {
-      macro_rules! external_doc_test {
-        ($x:expr) => {
-            #[doc = $x]
-            extern {}
-        };
-      }
-    
-      external_doc_test!(include_str!("../README.md"));
+        macro_rules! external_doc_test {
+            ($x:expr) => {
+                #[doc = $x]
+                extern "C" {}
+            };
+        }
+
+        external_doc_test!(include_str!("../README.md"));
     }
 }

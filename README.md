@@ -37,7 +37,7 @@ let lines: Vec<LineString> = vec![line_string![(x: 0., y: 0.), (x: 1., y: 1.)], 
 let dangles: Vec<Point> = lines.must_not_have_dangles();
 
 use topology_checker::rule::MustNotIntersect;
-let intersections: (Vec<geo::LineString>, Vec<geo::Point>) = lines.must_no_intesect();
+let intersections: (Vec<geo::LineString>, Vec<geo::Point>) = lines.must_not_intersect();
 
 use topology_checker::rule::MustNotOverlap;
 use geo::{polygon, Polygon};

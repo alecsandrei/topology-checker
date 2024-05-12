@@ -1,13 +1,14 @@
 use crate::{
-    util::intersections,
+    util::{explode_linestrings, intersections},
     GeometryType,
 };
 use geo::{
-    sweep::SweepPoint, BooleanOps, GeoFloat, HasDimensions, Intersects, Line,
+    sweep::SweepPoint, BooleanOps, Contains, GeoFloat, HasDimensions, Intersects, Line, LineString,
     MultiPolygon, Point, Polygon,
 };
 use itertools::Itertools;
 use rayon::iter::{ParallelBridge, ParallelIterator};
+use rstar::RTree;
 use std::collections::BTreeSet;
 use std::sync::{Arc, Mutex};
 
@@ -90,9 +91,26 @@ impl<T: GeoFloat + Send + Sync> MustNotOverlap<T, Polygon<T>, Polygon<T>> for Ve
     }
 }
 
-// impl<T: GeoFloat> MustNotOverlap<T, LineString<T>, LineString<T>> for Vec<Polygon<T>> {
-//     fn must_not_overlap(&self) -> Vec<LineString<T>> {
-//         let lines = flatten_lines(self);
-//         intersections(lines);
-//     }
-// }
+impl<T: Send + Sync + GeoFloat> MustNotOverlap<T, LineString<T>, Line<T>> for Vec<LineString<T>> {
+    fn must_not_overlap(&self) -> Vec<Line<T>> {
+        let lines = explode_linestrings(self);
+        let (line_intersections, ..) = intersections::<T, SweepPoint<T>, SweepPoint<T>>(lines);
+        line_intersections
+    }
+    fn must_not_overlap_with(&self, others: Vec<LineString<T>>) -> Vec<Line<T>> {
+        let lines: Vec<Line<T>> = explode_linestrings(self).into_iter().collect();
+        let others: Vec<Line<T>> = explode_linestrings(&others).into_iter().collect();
+        let lines_tree: RTree<Line<T>> = RTree::bulk_load(lines);
+        let others_tree = RTree::bulk_load(others);
+        let candidates = lines_tree.intersection_candidates_with_other_tree(&others_tree);
+        candidates
+            .into_iter()
+            .filter_map(|(line, other)| {
+                if line.contains(other) {
+                    return Some(*line);
+                }
+                None
+            })
+            .collect()
+    }
+}

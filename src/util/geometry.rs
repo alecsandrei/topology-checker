@@ -1,37 +1,76 @@
 use geo::{
     algorithm::LineIntersection,
     sweep::{Intersections, SweepPoint},
-    Coord, GeoFloat, Geometry, Line, LineString, LinesIter, Point, Polygon,
+    Coord, GeoFloat, Geometry, Line, LineString, LinesIter, Point,
+    Polygon,
 };
 use itertools::{Either, Itertools};
 use rayon::{iter::ParallelIterator, prelude::*};
 use std::collections::BTreeSet;
 
-pub fn flatten_linestrings(geometries: Vec<Geometry>) -> Vec<LineString> {
+/// Convert Geometry to Linestring.
+/// Converts multipart features to singlepart.
+pub fn flatten_linestrings<T: GeoFloat + Send + Sync>(
+    geometries: Vec<Geometry<T>>,
+) -> Vec<LineString<T>> {
     geometries
         .into_iter()
         .par_bridge()
         .flat_map_iter(|geometry| match geometry {
-            geo_types::Geometry::LineString(linestring) => {
-                Box::new(std::iter::once(linestring)) as Box<dyn Iterator<Item = LineString>>
+            Geometry::LineString(linestring) => {
+                Box::new(std::iter::once(linestring)) as Box<dyn Iterator<Item = LineString<T>>>
             }
-            geo_types::Geometry::MultiLineString(multilinestring) => {
-                Box::new(multilinestring.into_iter()) as Box<dyn Iterator<Item = LineString>>
+            Geometry::MultiLineString(multilinestring) => {
+                Box::new(multilinestring.into_iter()) as Box<dyn Iterator<Item = LineString<T>>>
+            }
+            Geometry::Line(line) => {
+                Box::new(std::iter::once(line.into())) as Box<dyn Iterator<Item = LineString<T>>>
             }
             _ => panic!("Unallowed geometries found."),
         })
         .collect()
 }
 
+pub fn is_polygon(geometry: &Geometry) -> bool {
+    if let Geometry::Polygon(_) = geometry {
+        return true;
+    } else if let Geometry::MultiPolygon(_) = geometry {
+        return true;
+    }
+    false
+}
+
+pub fn is_point(geometry: &Geometry) -> bool {
+    if let Geometry::MultiPoint(_) = geometry {
+        return true;
+    } else if let Geometry::Point(_) = geometry {
+        return true;
+    }
+    false
+}
+
+pub fn is_line(geometry: &Geometry) -> bool {
+    if let Geometry::LineString(_) = geometry {
+        return true;
+    } else if let Geometry::MultiLineString(_) = geometry {
+        return true;
+    } else if let Geometry::Line(_) = geometry {
+        return true;
+    }
+    false
+}
+
+/// Convert Geometry to Polygon.
+/// Converts multipart features to singlepart.
 pub fn flatten_polygons(geometries: Vec<Geometry>) -> Vec<Polygon> {
     geometries
         .into_iter()
         .par_bridge()
         .flat_map_iter(|geometry| match geometry {
-            geo_types::Geometry::Polygon(linestring) => {
+            Geometry::Polygon(linestring) => {
                 Box::new(std::iter::once(linestring)) as Box<dyn Iterator<Item = Polygon>>
             }
-            geo_types::Geometry::MultiPolygon(multilinestring) => {
+            Geometry::MultiPolygon(multilinestring) => {
                 Box::new(multilinestring.into_iter()) as Box<dyn Iterator<Item = Polygon>>
             }
             _ => panic!("Unallowed geometries found."),
@@ -39,7 +78,10 @@ pub fn flatten_polygons(geometries: Vec<Geometry>) -> Vec<Polygon> {
         .collect()
 }
 
-pub fn flatten_lines(linestrings: &Vec<LineString>) -> Vec<Line> {
+/// Converts Linestring to Line.
+pub fn explode_linestrings<T: GeoFloat + Send + Sync>(
+    linestrings: &Vec<LineString<T>>,
+) -> Vec<Line<T>> {
     linestrings
         .iter()
         .par_bridge()
@@ -47,40 +89,40 @@ pub fn flatten_lines(linestrings: &Vec<LineString>) -> Vec<Line> {
         .collect()
 }
 
-pub fn linestring_inner_points<T>(linestring: &Vec<LineString<T>>) -> Vec<SweepPoint<T>>
-where
-    T: GeoFloat,
-{
-    // Provides an ordered vector of inner points (points that are not endpoints).
-    let mut heap: Vec<SweepPoint<T>> = Vec::new();
+/// Extract inner points (points that are not endpoints) from linestrings.
+pub fn linestring_inner_points<T: GeoFloat>(linestring: &Vec<LineString<T>>) -> Vec<SweepPoint<T>> {
+    let mut vec: Vec<SweepPoint<T>> = Vec::new();
     for line in linestring.into_iter() {
         for coord in &line.0[1..line.0.len() - 1] {
             let point: SweepPoint<T> = <Coord<T> as Into<SweepPoint<T>>>::into(*coord);
-            heap.push(point);
+            vec.push(point);
         }
     }
-    heap
+    vec
 }
 
+/// Extract endpoints from linestrings.
 pub fn linestring_endpoints<T>(linestring: &Vec<LineString<T>>) -> Vec<SweepPoint<T>>
 where
     T: GeoFloat,
     Coord<T>: From<Point<T>>,
 {
-    // Provides an ordered vector of endpoints (points that are not inner points).
-    let mut heap: Vec<SweepPoint<T>> = Vec::new();
+    let mut vec: Vec<SweepPoint<T>> = Vec::new();
     for line in linestring.into_iter() {
         let mut points = line.points();
-        heap.push(<Point<T> as Into<SweepPoint<T>>>::into(
+        vec.push(<Point<T> as Into<SweepPoint<T>>>::into(
             points.next().unwrap(),
         ));
-        heap.push(<Point<T> as Into<SweepPoint<T>>>::into(
+        vec.push(<Point<T> as Into<SweepPoint<T>>>::into(
             points.next_back().unwrap(),
         ));
     }
-    heap
+    vec
 }
 
+/// Extract single point and line intersections from lines.
+/// Returns a tuple containing collinear lines and a tuple of
+/// unique proper single points and unique improper single points.
 pub fn intersections<T, L, R>(
     lines: Vec<Line<T>>,
 ) -> (
@@ -94,9 +136,6 @@ where
     BTreeSet<SweepPoint<T>>: Extend<L>,
     BTreeSet<SweepPoint<T>>: Extend<R>,
 {
-    // The intersections of lines.
-    // Returns a tuple containing collinear lines and a tuple of
-    // unique proper single points and unique improper single points.
     let intersections = Intersections::from_iter(lines).collect::<Vec<_>>();
     let (lines, points): (Vec<_>, Vec<_>) = intersections
         .into_iter()
@@ -133,14 +172,16 @@ where
     (lines, points)
 }
 
+/// Converts [Coord] to [Point]
 pub fn coords_to_points<T>(coords: impl IntoIterator<Item = Coord<T>>) -> Vec<Point>
 where
     T: GeoFloat,
     Point: From<Coord<T>>,
 {
-    coords.into_iter().map(|coord| coord.into()).collect()
+    coords.into_iter().map_into().collect()
 }
 
+/// Converts [SweepPoint] to [Point].
 pub fn sweep_points_to_points<T>(
     sweep_points: impl IntoIterator<Item = SweepPoint<T>>,
 ) -> Vec<Point<T>>
@@ -157,3 +198,28 @@ where
         })
         .collect()
 }
+
+// struct GeometryNotNa()
+
+// pub fn to_ordered<T, G, O>(geometries: Vec<G>) -> Vec<O>
+// where
+//     T: GeoFloat,
+//     G: GeometryType<T> + MapCoords<T, T> + Convert<T, T, Output = O>,
+//     O: GeometryType<ordered_float::NotNan<T>> + GeoNum + ordered_float::Float + float_next_after::NextAfter + num_traits::sign::Signed,
+// {
+//     let geometries: Vec<O> = geometries
+//         .into_iter()
+//         .map(|geometry| geometry.convert())
+//         .collect();
+//     geometries
+// }
+
+// #[cfg(test)]
+// mod tests {
+//     use super::*;
+
+//     #[test]
+//     fn test_flatten() {
+//         flatten()
+//     }
+// }
