@@ -135,9 +135,9 @@ where
     vec
 }
 
-/// Extract single point and line intersections from lines.
-/// Returns a tuple containing collinear lines and a tuple of
-/// unique proper single points and unique improper single points.
+// Extract single point and line intersections from lines.
+// Returns a tuple containing collinear lines and a tuple of
+// unique proper single points and unique improper single points.
 pub fn intersections<T, L, R>(
     lines: impl IntoIterator<Item = Line<T>>,
 ) -> (

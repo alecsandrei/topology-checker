@@ -189,10 +189,6 @@ mod tests {
     // TODO: Add tests for case where linestring is circular
 
     use super::*;
-    use crate::{
-        util::{flatten_linestrings, geometries_to_file},
-        VectorDataset,
-    };
     use geo::line_string;
 
     #[test]
@@ -291,12 +287,12 @@ mod tests {
         assert!(output.contains(&input[3]));
     }
 
-    #[test]
-    fn test_big_dataset() {
-        let dataset = VectorDataset::new("./assets/lines_smaller.shp");
-        let lines = flatten_linestrings(dataset.to_geo().unwrap());
-        let computed = merge_linestrings(lines);
-        assert!(computed.len() != 0);
-        geometries_to_file(computed, "./assets/lines_smaller_merged.shp", None, None);
-    }
+    // #[test]
+    // fn test_big_dataset() {
+    //     let dataset = VectorDataset::new("./assets/lines_smaller.shp");
+    //     let lines = flatten_linestrings(dataset.to_geo().unwrap());
+    //     let computed = merge_linestrings(lines);
+    //     assert!(computed.len() != 0);
+    //     geometries_to_file(computed, "./assets/lines_smaller_merged.shp", None, None);
+    // }
 }

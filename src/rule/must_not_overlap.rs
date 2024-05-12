@@ -6,7 +6,9 @@ use geo::{
     sweep::SweepPoint, BooleanOps, Contains, GeoFloat, HasDimensions, Intersects, Line, LineString,
     LinesIter, Point, Polygon,
 };
+use itertools::Itertools;
 use rstar::RTree;
+use std::ptr::addr_of;
 
 pub trait MustNotOverlap<T: GeoFloat, I: GeometryType<T>, O: GeometryType<T>> {
     fn must_not_overlap(self) -> Vec<O>;
@@ -20,10 +22,22 @@ pub trait MustNotSelfOverlap<T: GeoFloat, I: GeometryType<T>, O: GeometryType<T>
 impl<T: GeoFloat + Send + Sync> MustNotOverlap<T, Polygon<T>, Polygon<T>> for Vec<Polygon<T>> {
     fn must_not_overlap(self) -> Vec<Polygon<T>> {
         let polygons = RTree::bulk_load(self);
+        // We make this addresses container to avoid duplicate geometries.
+        // The 'intersection_candidates_with_other_tree' method will yield both
+        // (Polygon1, Polygon2) and (Polygon2, Polygon1).
+        // By comparing addresses we make a lightweight assurance that we have not already
+        // visited (Polygon1, Polygon2).
+        // TODO: implement this addresses container for other 'must_not_overlap'.
+        let mut addresses = Vec::new();
         polygons
             .intersection_candidates_with_other_tree(&polygons)
             .filter_map(|(polygon, other)| {
-                if !std::ptr::addr_eq(polygon, other) && polygon.intersects(other) {
+                let address = (addr_of!(*polygon), addr_of!(*other));
+                if !std::ptr::addr_eq(polygon, other)
+                    && !addresses.contains(&(address.1, address.0))
+                    && polygon.intersects(other)
+                {
+                    addresses.push(address);
                     let intersection = polygon.intersection(other);
                     if !intersection.is_empty() {
                         return Some(intersection.into_iter());
@@ -70,7 +84,7 @@ impl<T: Send + Sync + GeoFloat> MustNotOverlap<T, LineString<T>, Line<T>> for Ve
             .into_iter()
             .filter_map(|(line, other)| {
                 if line.contains(other) {
-                    return Some(*line);
+                    return Some(*other);
                 }
                 None
             })
@@ -81,10 +95,22 @@ impl<T: Send + Sync + GeoFloat> MustNotOverlap<T, LineString<T>, Line<T>> for Ve
 impl<T: Send + Sync + GeoFloat> MustNotOverlap<T, Point<T>, Point<T>> for Vec<Point<T>> {
     fn must_not_overlap(self) -> Vec<Point<T>> {
         let points = RTree::bulk_load(self);
+        // We make this addresses container to avoid duplicate geometries.
+        // The 'intersection_candidates_with_other_tree' method will yield both
+        // (Polygon1, Polygon2) and (Polygon2, Polygon1).
+        // By comparing addresses we make a lightweight assurance that we have not already
+        // visited (Polygon1, Polygon2).
+        // TODO: implement this addresses container for other 'must_not_overlap'.
+        let mut addresses = Vec::new();
         points
             .intersection_candidates_with_other_tree(&points)
             .filter_map(|(point, other)| {
-                if !std::ptr::addr_eq(point, other) && point.intersects(other) {
+                let address = (addr_of!(point), addr_of!(other));
+                if !std::ptr::addr_eq(point, other)
+                    && !addresses.contains(&(address.1, address.0))
+                    && point.intersects(other)
+                {
+                    addresses.push(address);
                     return Some(*point);
                 }
                 None
@@ -108,14 +134,73 @@ impl<T: Send + Sync + GeoFloat> MustNotOverlap<T, Point<T>, Point<T>> for Vec<Po
     }
 }
 
-impl<T: Send + Sync + GeoFloat> MustNotSelfOverlap<T, LineString<T>, Line<T>>
-    for Vec<LineString<T>>
-{
+impl<T: GeoFloat> MustNotSelfOverlap<T, LineString<T>, Line<T>> for Vec<LineString<T>> {
     fn must_not_self_overlap(self) -> Vec<Line<T>> {
         self.into_iter()
             .flat_map(|linestring| {
-                intersections::<T, SweepPoint<T>, SweepPoint<T>>(linestring.lines_iter()).0
+                let lines = RTree::bulk_load(linestring.lines_iter().collect());
+                lines
+                    .intersection_candidates_with_other_tree(&lines)
+                    .filter_map(|(line, other)| {
+                        if !std::ptr::addr_eq(line, other) && line.contains(other) {
+                            return Some(*other);
+                        }
+                        None
+                    })
+                    .collect_vec()
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    use geo::line_string;
+    use geo::polygon;
+
+    use super::*;
+
+    #[cfg(test)]
+    mod line_strings {
+        use super::*;
+        #[test]
+        fn self_overlap() {
+            let input = vec![line_string![(x: 1., y: 1.), (x: 4., y: 4.), (x: 2., y: 2.)]];
+            let output = vec![Line::new((4., 4.), (2., 2.))];
+            assert_eq!(input.must_not_self_overlap(), output);
+        }
+
+        #[test]
+        fn overlap() {
+            let input = vec![
+                line_string![(x: 1., y: 1.), (x: 4., y: 4.)],
+                line_string![(x: 4., y: 4.), (x: 2., y: 2.)],
+            ];
+            let output = vec![Line::new((2., 2.), (4., 4.))];
+            assert_eq!(input.must_not_overlap(), output);
+        }
+
+        #[test]
+        fn overlap_with() {
+            let input1 = vec![line_string![(x: 1., y: 1.), (x: 4., y: 4.)]];
+            let input2 = vec![line_string![(x: 4., y: 4.), (x: 2., y: 2.)]];
+            let output = vec![Line::new((4., 4.), (2., 2.))];
+            assert_eq!(input1.must_not_overlap_with(input2), output);
+        }
+    }
+
+    mod polygons {
+        use super::*;
+
+        #[test]
+        fn overlap() {
+            let input = vec![
+                polygon![(x: 0., y: 0.), (x: 1., y: 0.), (x: 1., y: 1.), (x: 0., y: 1.), (x: 0., y: 0.)],
+                polygon![(x: 0.25, y: 0.25), (x: 0.75, y: 0.25), (x: 0.75, y: 0.75), (x: 0.25, y: 0.75), (x: 0.25, y: 0.25)],
+            ];
+            let output = input[0].intersection(&input[1]).into_iter().next().unwrap();
+            assert_eq!(*input.must_not_overlap().first().unwrap(), output);
+        }
     }
 }

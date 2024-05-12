@@ -1,5 +1,5 @@
 mod args {
-    use clap::{ArgAction, Args, Parser, Subcommand};
+    use clap::{Args, Parser, Subcommand};
     use std::path::PathBuf;
 
     /// Parse a single key-value pair

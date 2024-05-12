@@ -42,7 +42,7 @@ let intersections: (Vec<geo::LineString>, Vec<geo::Point>) = lines.must_not_inte
 use topology_checker::rule::MustNotOverlap;
 use geo::{polygon, Polygon};
 let polygons: Vec<Polygon> = vec![polygon![(x: 0., y: 0.), (x: 1., y: 0.), (x: 1., y: 1.), (x: 0., y: 1.), (x: 0., y: 0.)], polygon![(x: 1., y: 1.), (x: 2., y: 1.), (x: 2., y: 2.), (x: 1., y: 2.), (x: 1., y: 1.)]];
-let overlaps: Vec<Polygon> = polygons.must_not_overlap();
+let overlaps: Vec<Polygon> = polygons.clone().must_not_overlap();
 let others: Vec<Polygon> = vec![polygon![(x: 0., y: 0.), (x: 1., y: 0.), (x: 1., y: 1.), (x: 0., y: 1.), (x: 0., y: 0.)], polygon![(x: 1., y: 1.), (x: 2., y: 1.), (x: 2., y: 2.), (x: 1., y: 2.), (x: 1., y: 1.)]];
-let overlaps: Vec<Polygon> = polygons.must_not_overlap_with(others);
+let overlaps: Vec<Polygon> = polygons.clone().must_not_overlap_with(others);
 ```
