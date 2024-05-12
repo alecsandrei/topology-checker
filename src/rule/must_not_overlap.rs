@@ -105,7 +105,7 @@ impl<T: Send + Sync + GeoFloat> MustNotOverlap<T, Point<T>, Point<T>> for Vec<Po
         points
             .intersection_candidates_with_other_tree(&points)
             .filter_map(|(point, other)| {
-                let address = (addr_of!(point), addr_of!(other));
+                let address = (addr_of!(*point), addr_of!(*other));
                 if !std::ptr::addr_eq(point, other)
                     && !addresses.contains(&(address.1, address.0))
                     && point.intersects(other)
@@ -125,7 +125,7 @@ impl<T: Send + Sync + GeoFloat> MustNotOverlap<T, Point<T>, Point<T>> for Vec<Po
             .intersection_candidates_with_other_tree(&others)
             .into_iter()
             .filter_map(|(point, other)| {
-                if point.eq(other) {
+                if point.intersects(other) {
                     return Some(*point);
                 }
                 None
@@ -160,6 +160,30 @@ mod tests {
     use geo::polygon;
 
     use super::*;
+
+    mod points {
+        use super::*;
+        use geo::point;
+
+        #[test]
+        fn overlap() {
+            let input = vec![
+                point! { x: 181.2, y: 51.79 },
+                point! { x: 181.2, y: 51.79 },
+                point! { x: 184.0, y: 53.0 },
+            ];
+            let output = vec![point! { x: 181.2, y: 51.79 }];
+            assert_eq!(input.must_not_overlap(), output);
+        }
+
+        #[test]
+        fn overlap_with() {
+            let input1 = vec![point! { x: 181.2, y: 51.79 }, point! { x: 184.0, y: 53.0 }];
+            let input2 = vec![point! { x: 181.2, y: 51.79 }];
+            let output = vec![point! { x: 181.2, y: 51.79 }];
+            assert_eq!(input1.must_not_overlap_with(input2), output);
+        }
+    }
 
     #[cfg(test)]
     mod line_strings {
@@ -201,6 +225,25 @@ mod tests {
             ];
             let output = input[0].intersection(&input[1]).into_iter().next().unwrap();
             assert_eq!(*input.must_not_overlap().first().unwrap(), output);
+        }
+
+        #[test]
+        fn overlap_with() {
+            let input1 = vec![
+                polygon![(x: 0., y: 0.), (x: 1., y: 0.), (x: 1., y: 1.), (x: 0., y: 1.), (x: 0., y: 0.)],
+            ];
+            let input2 = vec![
+                polygon![(x: 0.25, y: 0.25), (x: 0.75, y: 0.25), (x: 0.75, y: 0.75), (x: 0.25, y: 0.75), (x: 0.25, y: 0.25)],
+            ];
+            let output = input1[0]
+                .intersection(&input2[0])
+                .into_iter()
+                .next()
+                .unwrap();
+            assert_eq!(
+                *input1.must_not_overlap_with(input2).first().unwrap(),
+                output
+            );
         }
     }
 }

@@ -11,7 +11,7 @@ pub trait MustNotHaveDangles {
 impl MustNotHaveDangles for Vec<LineString> {
     fn must_not_have_dangles(&self) -> Vec<Point> {
         // We find dangles by elimination from the LineString endpoints
-        // BinaryHeap those points that are intersections.
+        // the points that are intersections.
         let endpoints = linestring_endpoints(self);
         let (_, (_, improper)) =
             intersections::<f64, SweepPoint<f64>, SweepPoint<f64>>(explode_linestrings(self));

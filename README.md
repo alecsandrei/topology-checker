@@ -31,13 +31,13 @@ use topology_checker::prelude::*;
 ```
 These rules will now be implemented for vectors of certain geometries. For example, you could do:
 ```rust
-use geo::{line_string, LineString, Point};
+use geo::{line_string, Line, LineString, Point};
 use topology_checker::rule::MustNotHaveDangles;
 let lines: Vec<LineString> = vec![line_string![(x: 0., y: 0.), (x: 1., y: 1.)], line_string![(x: 1., y: 1.), (x: 2., y: 2.)]];
 let dangles: Vec<Point> = lines.must_not_have_dangles();
 
 use topology_checker::rule::MustNotIntersect;
-let intersections: (Vec<geo::LineString>, Vec<geo::Point>) = lines.must_not_intersect();
+let intersections: (Vec<geo::Line>, Vec<geo::Point>) = lines.must_not_intersect();
 
 use topology_checker::rule::MustNotOverlap;
 use geo::{polygon, Polygon};

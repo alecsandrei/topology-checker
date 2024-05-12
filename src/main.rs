@@ -34,6 +34,8 @@ mod args {
         Lines(LineCommand),
         /// Topology checks for polygon geometries
         Polygon(PolygonCommand),
+        /// Topology checks for any geometry type
+        Geometry(GeometryCommand),
         /// Print the allowed GDAL drivers
         GdalDrivers(GdalDriversCommand),
         /// Extra vector data utilities
@@ -56,6 +58,12 @@ mod args {
     pub struct PolygonCommand {
         #[clap(subcommand)]
         pub command: PolygonRules,
+    }
+
+    #[derive(Debug, Args)]
+    pub struct GeometryCommand {
+        #[clap(subcommand)]
+        pub command: GeometryRules
     }
 
     #[derive(Debug, Args)]
@@ -139,6 +147,20 @@ mod args {
     }
 
     #[derive(Debug, Subcommand)]
+    pub enum GeometryRules {
+        #[command(arg_required_else_help(true))]
+        MustNotBeMultipart {
+            #[arg(value_parser = parse_key_val::<String, PathBuf>)]
+            /// Input geometries
+            geometries: PathBuf,
+            #[arg(value_parser = parse_key_val::<String, PathBuf>)]
+            /// The output multipart geometries
+            multiparts: PathBuf,
+        },
+    }
+
+
+    #[derive(Debug, Subcommand)]
     pub enum Drivers {
         /// List readable drivers
         Read,
@@ -180,13 +202,13 @@ mod args {
 }
 
 use args::{
-    Commands, Drivers, LineRules, PointRules, PolygonRules, TopologyCheckerArgs, Utilities,
+    Commands, Drivers, LineRules, PointRules, PolygonRules, GeometryRules, TopologyCheckerArgs, Utilities,
 };
 use clap::Parser;
 use gdal::LayerOptions;
 use topology_checker::{
     algorithm::merge_linestrings,
-    rule::{MustNotHaveDangles, MustNotIntersect, MustNotOverlap, MustNotSelfOverlap},
+    rule::{MustNotBeMultipart, MustNotHaveDangles, MustNotIntersect, MustNotOverlap, MustNotSelfOverlap},
     util::{
         explode_linestrings, flatten_linestrings, flatten_points, flatten_polygons,
         geometries_to_file, GdalDrivers,
@@ -367,6 +389,23 @@ fn main() {
                 }
             }
         },
+        Commands::Geometry(command) => match command.command {
+            GeometryRules::MustNotBeMultipart { geometries, multiparts } => {
+                let dataset = VectorDataset::new(geometries.to_str().unwrap());
+                let geometry = dataset.to_geo().unwrap();
+                let multipart = geometry.must_not_be_multipart();
+                geometries_to_file(
+                    multipart,
+                    multiparts.to_str().unwrap(),
+                    args.gdal_driver,
+                    Some(LayerOptions {
+                        name: "multiparts",
+                        srs: dataset.crs().as_ref(),
+                        ..Default::default()
+                    }),
+                )
+            }
+        }
         Commands::GdalDrivers(command) => match command.command {
             Drivers::Read => {
                 for (driver, extension) in GdalDrivers.read() {
