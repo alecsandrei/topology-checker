@@ -1,8 +1,7 @@
 use geo::{
     algorithm::LineIntersection,
     sweep::{Intersections, SweepPoint},
-    Coord, GeoFloat, Geometry, Line, LineString, LinesIter, Point,
-    Polygon,
+    Coord, GeoFloat, Geometry, Line, LineString, LinesIter, Point, Polygon,
 };
 use itertools::{Either, Itertools};
 use rayon::{iter::ParallelIterator, prelude::*};
@@ -31,9 +30,7 @@ pub fn flatten_linestrings<T: GeoFloat + Send + Sync>(
         .collect()
 }
 
-pub fn flatten_points<T: GeoFloat + Send + Sync>(
-    geometries: Vec<Geometry<T>>,
-) -> Vec<Point<T>> {
+pub fn flatten_points<T: GeoFloat + Send + Sync>(geometries: Vec<Geometry<T>>) -> Vec<Point<T>> {
     geometries
         .into_iter()
         .par_bridge()
@@ -142,17 +139,17 @@ where
 /// Returns a tuple containing collinear lines and a tuple of
 /// unique proper single points and unique improper single points.
 pub fn intersections<T, L, R>(
-    lines: Vec<Line<T>>,
+    lines: impl IntoIterator<Item = Line<T>>,
 ) -> (
     Vec<Line<T>>,
     (BTreeSet<SweepPoint<T>>, BTreeSet<SweepPoint<T>>),
 )
 where
     T: GeoFloat,
-    L: From<Coord<T>>,
-    R: From<Coord<T>>,
-    BTreeSet<SweepPoint<T>>: Extend<L>,
+    L: From<geo::Coord<T>>,
+    R: From<geo::Coord<T>>,
     BTreeSet<SweepPoint<T>>: Extend<R>,
+    BTreeSet<SweepPoint<T>>: Extend<L>,
 {
     let intersections = Intersections::from_iter(lines).collect::<Vec<_>>();
     let (lines, points): (Vec<_>, Vec<_>) = intersections
@@ -216,28 +213,3 @@ where
         })
         .collect()
 }
-
-// struct GeometryNotNa()
-
-// pub fn to_ordered<T, G, O>(geometries: Vec<G>) -> Vec<O>
-// where
-//     T: GeoFloat,
-//     G: GeometryType<T> + MapCoords<T, T> + Convert<T, T, Output = O>,
-//     O: GeometryType<ordered_float::NotNan<T>> + GeoNum + ordered_float::Float + float_next_after::NextAfter + num_traits::sign::Signed,
-// {
-//     let geometries: Vec<O> = geometries
-//         .into_iter()
-//         .map(|geometry| geometry.convert())
-//         .collect();
-//     geometries
-// }
-
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-
-//     #[test]
-//     fn test_flatten() {
-//         flatten()
-//     }
-// }

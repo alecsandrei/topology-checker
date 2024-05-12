@@ -4,13 +4,17 @@ use crate::{
 };
 use geo::{
     sweep::SweepPoint, BooleanOps, Contains, GeoFloat, HasDimensions, Intersects, Line, LineString,
-    Point, Polygon,
+    LinesIter, Point, Polygon,
 };
 use rstar::RTree;
 
 pub trait MustNotOverlap<T: GeoFloat, I: GeometryType<T>, O: GeometryType<T>> {
     fn must_not_overlap(self) -> Vec<O>;
     fn must_not_overlap_with(self, other: Vec<I>) -> Vec<O>;
+}
+
+pub trait MustNotSelfOverlap<T: GeoFloat, I: GeometryType<T>, O: GeometryType<T>> {
+    fn must_not_self_overlap(self) -> Vec<O>;
 }
 
 impl<T: GeoFloat + Send + Sync> MustNotOverlap<T, Polygon<T>, Polygon<T>> for Vec<Polygon<T>> {
@@ -61,8 +65,8 @@ impl<T: Send + Sync + GeoFloat> MustNotOverlap<T, LineString<T>, Line<T>> for Ve
         let others: Vec<Line<T>> = explode_linestrings(&others).into_iter().collect();
         let lines_tree: RTree<Line<T>> = RTree::bulk_load(lines);
         let others_tree = RTree::bulk_load(others);
-        let candidates = lines_tree.intersection_candidates_with_other_tree(&others_tree);
-        candidates
+        lines_tree
+            .intersection_candidates_with_other_tree(&others_tree)
             .into_iter()
             .filter_map(|(line, other)| {
                 if line.contains(other) {
@@ -87,17 +91,30 @@ impl<T: Send + Sync + GeoFloat> MustNotOverlap<T, Point<T>, Point<T>> for Vec<Po
             })
             .collect()
     }
+
     fn must_not_overlap_with(self, others: Vec<Point<T>>) -> Vec<Point<T>> {
         let points = RTree::bulk_load(self);
         let others = RTree::bulk_load(others);
-        let candidates = points.intersection_candidates_with_other_tree(&others);
-        candidates
+        points
+            .intersection_candidates_with_other_tree(&others)
             .into_iter()
             .filter_map(|(point, other)| {
-                if point.intersects(other) {
+                if point.eq(other) {
                     return Some(*point);
                 }
                 None
+            })
+            .collect()
+    }
+}
+
+impl<T: Send + Sync + GeoFloat> MustNotSelfOverlap<T, LineString<T>, Line<T>>
+    for Vec<LineString<T>>
+{
+    fn must_not_self_overlap(self) -> Vec<Line<T>> {
+        self.into_iter()
+            .flat_map(|linestring| {
+                intersections::<T, SweepPoint<T>, SweepPoint<T>>(linestring.lines_iter()).0
             })
             .collect()
     }

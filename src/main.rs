@@ -1,5 +1,5 @@
 mod args {
-    use clap::{Args, Parser, Subcommand};
+    use clap::{ArgAction, Args, Parser, Subcommand};
     use std::path::PathBuf;
 
     /// Parse a single key-value pair
@@ -75,7 +75,8 @@ mod args {
             /// The output overlaps
             overlaps: PathBuf,
             #[arg(value_parser = parse_key_val::<String, PathBuf>)]
-            /// Optional geometry to check against. By default compares to itself
+            /// Optional geometry to check against. By default compares
+            /// against other features in the input.
             other: Option<PathBuf>,
         },
     }
@@ -90,6 +91,10 @@ mod args {
             #[arg(value_parser = parse_key_val::<String, PathBuf>)]
             /// The output overlaps
             overlaps: PathBuf,
+            /// Whether or not to check for self overlaps.
+            /// This can't be true if 'other' has been specified.
+            #[arg(long, short)]
+            self_overlap: bool,
             #[arg(value_parser = parse_key_val::<String, PathBuf>)]
             /// Optional geometry to check against. By default compares to itself
             other: Option<PathBuf>,
@@ -181,7 +186,7 @@ use clap::Parser;
 use gdal::LayerOptions;
 use topology_checker::{
     algorithm::merge_linestrings,
-    rule::{MustNotHaveDangles, MustNotIntersect, MustNotOverlap},
+    rule::{MustNotHaveDangles, MustNotIntersect, MustNotOverlap, MustNotSelfOverlap},
     util::{
         explode_linestrings, flatten_linestrings, flatten_points, flatten_polygons,
         geometries_to_file, GdalDrivers,
@@ -280,6 +285,7 @@ fn main() {
             LineRules::MustNotOverlap {
                 lines,
                 overlaps,
+                self_overlap,
                 other,
             } => {
                 let vector_dataset = VectorDataset::new(lines.to_str().unwrap());
@@ -302,8 +308,14 @@ fn main() {
                         }),
                     );
                 } else {
+                    let result;
+                    if self_overlap {
+                        result = lines.must_not_self_overlap();
+                    } else {
+                        result = lines.must_not_overlap();
+                    }
                     geometries_to_file(
-                        lines.must_not_overlap(),
+                        result,
                         overlaps.to_str().unwrap(),
                         args.gdal_driver.clone(),
                         Some(LayerOptions {
