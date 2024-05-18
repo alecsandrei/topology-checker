@@ -44,7 +44,7 @@ pub struct GdalDrivers;
 type DriverProps = HashMap<&'static str, Option<String>>;
 
 impl GdalDrivers {
-    pub fn infer_driver_name(&self, file_suffix: &str) -> Option<(String, DriverProps)> {
+    pub fn infer_driver_name(&self, extension: &str) -> Option<(String, DriverProps)> {
         // Finds out whether or not the input file suffix can be mapped to a valid driver.
         self.driver_map().into_iter().find(|(_, properties)| {
             if properties
@@ -52,7 +52,7 @@ impl GdalDrivers {
                 .unwrap()
                 .clone()
                 .unwrap()
-                .ends_with(file_suffix)
+                .contains(extension)
             {
                 return true;
             }
