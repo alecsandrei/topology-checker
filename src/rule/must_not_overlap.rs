@@ -1,26 +1,26 @@
 use crate::{
     util::{explode_linestrings, intersections},
-    GeometryType,
+    GeometryError, GeometryType, TopologyResult,
 };
 use geo::{
-    sweep::SweepPoint, BooleanOps, Contains, GeoFloat, HasDimensions, Intersects, Line, LineString,
-    LinesIter, Point, Polygon,
+    sweep::SweepPoint, BooleanOps, Contains, GeoFloat, HasDimensions,
+    Intersects, Line, LineString, LinesIter, Point, Polygon,
 };
 use itertools::Itertools;
 use rstar::RTree;
 use std::ptr::addr_of;
 
 pub trait MustNotOverlap<T: GeoFloat, I: GeometryType<T>, O: GeometryType<T>> {
-    fn must_not_overlap(self) -> Vec<O>;
-    fn must_not_overlap_with(self, other: Vec<I>) -> Vec<O>;
+    fn must_not_overlap(self) -> TopologyResult<T>;
+    fn must_not_overlap_with(self, other: Vec<I>) -> TopologyResult<T>;
 }
 
-pub trait MustNotSelfOverlap<T: GeoFloat, I: GeometryType<T>, O: GeometryType<T>> {
-    fn must_not_self_overlap(self) -> Vec<O>;
+pub trait MustNotSelfOverlap<T: GeoFloat> {
+    fn must_not_self_overlap(self) -> TopologyResult<T>;
 }
 
 impl<T: GeoFloat + Send + Sync> MustNotOverlap<T, Polygon<T>, Polygon<T>> for Vec<Polygon<T>> {
-    fn must_not_overlap(self) -> Vec<Polygon<T>> {
+    fn must_not_overlap(self) -> TopologyResult<T> {
         let polygons = RTree::bulk_load(self);
         // We make this addresses container to avoid duplicate geometries.
         // The 'intersection_candidates_with_other_tree' method will yield both
@@ -29,7 +29,7 @@ impl<T: GeoFloat + Send + Sync> MustNotOverlap<T, Polygon<T>, Polygon<T>> for Ve
         // visited (Polygon1, Polygon2).
         // TODO: implement this addresses container for other 'must_not_overlap'.
         let mut addresses = Vec::new();
-        polygons
+        let geometry_errors: Vec<_> = polygons
             .intersection_candidates_with_other_tree(&polygons)
             .filter_map(|(polygon, other)| {
                 let address = (addr_of!(*polygon), addr_of!(*other));
@@ -46,13 +46,18 @@ impl<T: GeoFloat + Send + Sync> MustNotOverlap<T, Polygon<T>, Polygon<T>> for Ve
                 None
             })
             .flatten()
-            .collect()
+            .collect();
+        if geometry_errors.is_empty() {
+            TopologyResult::Valid
+        } else {
+            TopologyResult::Errors(vec![GeometryError::Polygon(geometry_errors)])
+        }
     }
 
-    fn must_not_overlap_with(self, others: Vec<Polygon<T>>) -> Vec<Polygon<T>> {
+    fn must_not_overlap_with(self, others: Vec<Polygon<T>>) -> TopologyResult<T> {
         let polygons = RTree::bulk_load(self);
         let others = RTree::bulk_load(others);
-        polygons
+        let geometry_errors: Vec<_> = polygons
             .intersection_candidates_with_other_tree(&others)
             .filter_map(|(polygon, other)| {
                 if polygon.intersects(other) {
@@ -64,22 +69,34 @@ impl<T: GeoFloat + Send + Sync> MustNotOverlap<T, Polygon<T>, Polygon<T>> for Ve
                 None
             })
             .flatten()
-            .collect()
+            .collect();
+        if geometry_errors.is_empty() {
+            TopologyResult::Valid
+        } else {
+            TopologyResult::Errors(vec![GeometryError::Polygon(geometry_errors)])
+        }
     }
 }
 
 impl<T: Send + Sync + GeoFloat> MustNotOverlap<T, LineString<T>, Line<T>> for Vec<LineString<T>> {
-    fn must_not_overlap(self) -> Vec<Line<T>> {
+    fn must_not_overlap(self) -> TopologyResult<T> {
         let lines = explode_linestrings(&self);
-        let (line_intersections, ..) = intersections::<T, SweepPoint<T>, SweepPoint<T>>(lines);
-        line_intersections
+        let (geometry_errors, ..) = intersections::<T, SweepPoint<T>, SweepPoint<T>>(lines);
+        if geometry_errors.is_empty() {
+            TopologyResult::Valid
+        } else {
+            TopologyResult::Errors(vec![GeometryError::LineString(
+                geometry_errors.into_iter().map_into().collect(),
+            )])
+        }
     }
-    fn must_not_overlap_with(self, others: Vec<LineString<T>>) -> Vec<Line<T>> {
+
+    fn must_not_overlap_with(self, others: Vec<LineString<T>>) -> TopologyResult<T> {
         let lines: Vec<Line<T>> = explode_linestrings(&self).into_iter().collect();
         let others: Vec<Line<T>> = explode_linestrings(&others).into_iter().collect();
         let lines_tree: RTree<Line<T>> = RTree::bulk_load(lines);
         let others_tree = RTree::bulk_load(others);
-        lines_tree
+        let geometry_errors: Vec<_> = lines_tree
             .intersection_candidates_with_other_tree(&others_tree)
             .into_iter()
             .filter_map(|(line, other)| {
@@ -88,12 +105,19 @@ impl<T: Send + Sync + GeoFloat> MustNotOverlap<T, LineString<T>, Line<T>> for Ve
                 }
                 None
             })
-            .collect()
+            .collect();
+        if geometry_errors.is_empty() {
+            TopologyResult::Valid
+        } else {
+            TopologyResult::Errors(vec![GeometryError::LineString(
+                geometry_errors.into_iter().map_into().collect(),
+            )])
+        }
     }
 }
 
 impl<T: Send + Sync + GeoFloat> MustNotOverlap<T, Point<T>, Point<T>> for Vec<Point<T>> {
-    fn must_not_overlap(self) -> Vec<Point<T>> {
+    fn must_not_overlap(self) -> TopologyResult<T> {
         let points = RTree::bulk_load(self);
         // We make this addresses container to avoid duplicate geometries.
         // The 'intersection_candidates_with_other_tree' method will yield both
@@ -102,7 +126,7 @@ impl<T: Send + Sync + GeoFloat> MustNotOverlap<T, Point<T>, Point<T>> for Vec<Po
         // visited (Polygon1, Polygon2).
         // TODO: implement this addresses container for other 'must_not_overlap'.
         let mut addresses = Vec::new();
-        points
+        let geometry_errors: Vec<_> = points
             .intersection_candidates_with_other_tree(&points)
             .filter_map(|(point, other)| {
                 let address = (addr_of!(*point), addr_of!(*other));
@@ -115,13 +139,20 @@ impl<T: Send + Sync + GeoFloat> MustNotOverlap<T, Point<T>, Point<T>> for Vec<Po
                 }
                 None
             })
-            .collect()
+            .collect();
+        if geometry_errors.is_empty() {
+            TopologyResult::Valid
+        } else {
+            TopologyResult::Errors(vec![GeometryError::Point(
+                geometry_errors.into_iter().map_into().collect(),
+            )])
+        }
     }
 
-    fn must_not_overlap_with(self, others: Vec<Point<T>>) -> Vec<Point<T>> {
+    fn must_not_overlap_with(self, others: Vec<Point<T>>) -> TopologyResult<T> {
         let points = RTree::bulk_load(self);
         let others = RTree::bulk_load(others);
-        points
+        let geometry_errors: Vec<_> = points
             .intersection_candidates_with_other_tree(&others)
             .into_iter()
             .filter_map(|(point, other)| {
@@ -130,13 +161,21 @@ impl<T: Send + Sync + GeoFloat> MustNotOverlap<T, Point<T>, Point<T>> for Vec<Po
                 }
                 None
             })
-            .collect()
+            .collect();
+        if geometry_errors.is_empty() {
+            TopologyResult::Valid
+        } else {
+            TopologyResult::Errors(vec![GeometryError::Point(
+                geometry_errors.into_iter().map_into().collect(),
+            )])
+        }
     }
 }
 
-impl<T: GeoFloat> MustNotSelfOverlap<T, LineString<T>, Line<T>> for Vec<LineString<T>> {
-    fn must_not_self_overlap(self) -> Vec<Line<T>> {
-        self.into_iter()
+impl<T: GeoFloat> MustNotSelfOverlap<T> for Vec<LineString<T>> {
+    fn must_not_self_overlap(self) -> TopologyResult<T> {
+        let geometry_errors: Vec<_> = self
+            .into_iter()
             .flat_map(|linestring| {
                 let lines = RTree::bulk_load(linestring.lines_iter().collect());
                 lines
@@ -149,7 +188,14 @@ impl<T: GeoFloat> MustNotSelfOverlap<T, LineString<T>, Line<T>> for Vec<LineStri
                     })
                     .collect_vec()
             })
-            .collect()
+            .collect();
+        if geometry_errors.is_empty() {
+            TopologyResult::Valid
+        } else {
+            TopologyResult::Errors(vec![GeometryError::LineString(
+                geometry_errors.into_iter().map_into().collect(),
+            )])
+        }
     }
 }
 
@@ -173,7 +219,10 @@ mod tests {
                 point! { x: 184.0, y: 53.0 },
             ];
             let output = vec![point! { x: 181.2, y: 51.79 }];
-            assert_eq!(input.must_not_overlap(), output);
+            assert_eq!(
+                input.must_not_overlap().unwrap_err_point(),
+                GeometryError::Point(output)
+            );
         }
 
         #[test]
@@ -181,18 +230,23 @@ mod tests {
             let input1 = vec![point! { x: 181.2, y: 51.79 }, point! { x: 184.0, y: 53.0 }];
             let input2 = vec![point! { x: 181.2, y: 51.79 }];
             let output = vec![point! { x: 181.2, y: 51.79 }];
-            assert_eq!(input1.must_not_overlap_with(input2), output);
+            assert_eq!(
+                input1.must_not_overlap_with(input2).unwrap_err_point(),
+                GeometryError::Point(output)
+            );
         }
     }
 
-    #[cfg(test)]
     mod line_strings {
         use super::*;
         #[test]
         fn self_overlap() {
             let input = vec![line_string![(x: 1., y: 1.), (x: 4., y: 4.), (x: 2., y: 2.)]];
-            let output = vec![Line::new((4., 4.), (2., 2.))];
-            assert_eq!(input.must_not_self_overlap(), output);
+            let output = vec![line_string![(x: 4., y: 4.), (x: 2., y: 2.)]];
+            assert_eq!(
+                input.must_not_self_overlap().unwrap_err_linestring(),
+                GeometryError::LineString(output)
+            );
         }
 
         #[test]
@@ -201,16 +255,22 @@ mod tests {
                 line_string![(x: 1., y: 1.), (x: 4., y: 4.)],
                 line_string![(x: 4., y: 4.), (x: 2., y: 2.)],
             ];
-            let output = vec![Line::new((2., 2.), (4., 4.))];
-            assert_eq!(input.must_not_overlap(), output);
+            let output = vec![line_string![(x: 2., y: 2.), (x: 4., y: 4.)]];
+            assert_eq!(
+                input.must_not_overlap().unwrap_err_linestring(),
+                GeometryError::LineString(output)
+            );
         }
 
         #[test]
         fn overlap_with() {
             let input1 = vec![line_string![(x: 1., y: 1.), (x: 4., y: 4.)]];
             let input2 = vec![line_string![(x: 4., y: 4.), (x: 2., y: 2.)]];
-            let output = vec![Line::new((4., 4.), (2., 2.))];
-            assert_eq!(input1.must_not_overlap_with(input2), output);
+            let output = vec![line_string![(x: 4., y: 4.), (x: 2., y: 2.)]];
+            assert_eq!(
+                input1.must_not_overlap_with(input2).unwrap_err_linestring(),
+                GeometryError::LineString(output)
+            );
         }
     }
 
@@ -223,8 +283,11 @@ mod tests {
                 polygon![(x: 0., y: 0.), (x: 1., y: 0.), (x: 1., y: 1.), (x: 0., y: 1.), (x: 0., y: 0.)],
                 polygon![(x: 0.25, y: 0.25), (x: 0.75, y: 0.25), (x: 0.75, y: 0.75), (x: 0.25, y: 0.75), (x: 0.25, y: 0.25)],
             ];
-            let output = input[0].intersection(&input[1]).into_iter().next().unwrap();
-            assert_eq!(*input.must_not_overlap().first().unwrap(), output);
+            let output = vec![input[0].intersection(&input[1]).into_iter().next().unwrap()];
+            assert_eq!(
+                input.must_not_overlap().unwrap_err_polygon(),
+                GeometryError::Polygon(output)
+            );
         }
 
         #[test]
@@ -235,14 +298,14 @@ mod tests {
             let input2 = vec![
                 polygon![(x: 0.25, y: 0.25), (x: 0.75, y: 0.25), (x: 0.75, y: 0.75), (x: 0.25, y: 0.75), (x: 0.25, y: 0.25)],
             ];
-            let output = input1[0]
+            let output = vec![input1[0]
                 .intersection(&input2[0])
                 .into_iter()
                 .next()
-                .unwrap();
+                .unwrap()];
             assert_eq!(
-                *input1.must_not_overlap_with(input2).first().unwrap(),
-                output
+                input1.must_not_overlap_with(input2).unwrap_err_polygon(),
+                GeometryError::Polygon(output)
             );
         }
     }

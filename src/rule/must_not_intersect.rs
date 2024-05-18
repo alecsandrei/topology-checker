@@ -1,17 +1,18 @@
 use std::collections::BTreeSet;
 
-use crate::util::{
-    explode_linestrings, intersections, linestring_inner_points, sweep_points_to_points,
+use crate::{
+    util::{explode_linestrings, intersections, linestring_inner_points, sweep_points_to_points},
+    GeometryError, TopologyResult,
 };
-use geo::{sweep::SweepPoint, Line, LineString, Point};
+use geo::{sweep::SweepPoint, GeoFloat, LineString, Point};
 use itertools::Itertools;
 
-pub trait MustNotIntersect<L, R> {
-    fn must_not_intersect(&self) -> (Vec<L>, Vec<R>);
+pub trait MustNotIntersect<T: GeoFloat> {
+    fn must_not_intersect(&self) -> TopologyResult<T>;
 }
 
-impl MustNotIntersect<Line, Point> for Vec<LineString> {
-    fn must_not_intersect(&self) -> (Vec<Line>, Vec<Point>) {
+impl<T: GeoFloat + Send + Sync> MustNotIntersect<T> for Vec<LineString<T>> {
+    fn must_not_intersect(&self) -> TopologyResult<T> {
         let mut endpoints = linestring_inner_points(self);
         endpoints.sort();
         let lines = explode_linestrings(self);
@@ -28,15 +29,27 @@ impl MustNotIntersect<Line, Point> for Vec<LineString> {
                 None
             })
             .collect_vec();
-        let (lines, (proper, improper)) =
-            intersections::<f64, SweepPoint<f64>, SweepPoint<f64>>(lines);
-        let mut points: BTreeSet<SweepPoint<f64>> = improper
+        let (lines, (proper, improper)) = intersections::<T, SweepPoint<T>, SweepPoint<T>>(lines);
+        let mut points: BTreeSet<SweepPoint<T>> = improper
             .into_iter()
             .filter(|point| subset.binary_search(&point).is_ok())
             .collect();
         // Extend with the proper intersections.
         points.extend(proper);
-        let points: Vec<Point> = sweep_points_to_points(points);
-        (lines.into_iter().map_into().collect(), points)
+        let points: Vec<Point<T>> = sweep_points_to_points(points).into_iter().collect();
+        let linestrings: Vec<LineString<T>> = lines.into_iter().map_into().collect();
+
+        let mut geometry_errors = Vec::new();
+        if !points.is_empty() {
+            geometry_errors.push(GeometryError::Point(points))
+        }
+        if !linestrings.is_empty() {
+            geometry_errors.push(GeometryError::LineString(linestrings))
+        }
+        if geometry_errors.is_empty() {
+            TopologyResult::Valid
+        } else {
+            TopologyResult::Errors(geometry_errors)
+        }
     }
 }

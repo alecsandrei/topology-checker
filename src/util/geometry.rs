@@ -46,7 +46,7 @@ pub fn flatten_points<T: GeoFloat + Send + Sync>(geometries: Vec<Geometry<T>>) -
         .collect()
 }
 
-pub fn is_polygon(geometry: &Geometry) -> bool {
+pub fn is_polygon<T: GeoFloat>(geometry: &Geometry<T>) -> bool {
     if let Geometry::Polygon(_) = geometry {
         return true;
     } else if let Geometry::MultiPolygon(_) = geometry {
@@ -55,7 +55,7 @@ pub fn is_polygon(geometry: &Geometry) -> bool {
     false
 }
 
-pub fn is_point(geometry: &Geometry) -> bool {
+pub fn is_point<T: GeoFloat>(geometry: &Geometry<T>) -> bool {
     if let Geometry::MultiPoint(_) = geometry {
         return true;
     } else if let Geometry::Point(_) = geometry {
@@ -64,7 +64,7 @@ pub fn is_point(geometry: &Geometry) -> bool {
     false
 }
 
-pub fn is_line(geometry: &Geometry) -> bool {
+pub fn is_line<T: GeoFloat>(geometry: &Geometry<T>) -> bool {
     if let Geometry::LineString(_) = geometry {
         return true;
     } else if let Geometry::MultiLineString(_) = geometry {

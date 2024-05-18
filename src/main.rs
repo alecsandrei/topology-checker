@@ -31,7 +31,7 @@ mod args {
         /// Topology checks for point geometries
         Point(PointCommand),
         /// Topology checks for line geometries
-        Lines(LineCommand),
+        Line(LineCommand),
         /// Topology checks for polygon geometries
         Polygon(PolygonCommand),
         /// Topology checks for any geometry type
@@ -63,7 +63,7 @@ mod args {
     #[derive(Debug, Args)]
     pub struct GeometryCommand {
         #[clap(subcommand)]
-        pub command: GeometryRules
+        pub command: GeometryRules,
     }
 
     #[derive(Debug, Args)]
@@ -159,7 +159,6 @@ mod args {
         },
     }
 
-
     #[derive(Debug, Subcommand)]
     pub enum Drivers {
         /// List readable drivers
@@ -202,18 +201,22 @@ mod args {
 }
 
 use args::{
-    Commands, Drivers, LineRules, PointRules, PolygonRules, GeometryRules, TopologyCheckerArgs, Utilities,
+    Commands, Drivers, GeometryRules, LineRules, PointRules, PolygonRules, TopologyCheckerArgs,
+    Utilities,
 };
 use clap::Parser;
-use gdal::LayerOptions;
+use gdal::{vector::ToGdal, LayerOptions};
 use topology_checker::{
     algorithm::merge_linestrings,
-    rule::{MustNotBeMultipart, MustNotHaveDangles, MustNotIntersect, MustNotOverlap, MustNotSelfOverlap},
+    rule::{
+        MustNotBeMultipart, MustNotHaveDangles, MustNotIntersect, MustNotOverlap,
+        MustNotSelfOverlap,
+    },
     util::{
         explode_linestrings, flatten_linestrings, flatten_points, flatten_polygons,
         geometries_to_file, GdalDrivers,
     },
-    VectorDataset,
+    GeometryError, VectorDataset,
 };
 
 fn main() {
@@ -225,84 +228,99 @@ fn main() {
                 overlaps,
                 other,
             } => {
-                let vector_dataset = VectorDataset::new(points.to_str().unwrap());
+                let vector_dataset = VectorDataset::new(&points);
                 let points = flatten_points(vector_dataset.to_geo().unwrap());
                 if let Some(other) = other {
-                    let other = flatten_points(
-                        VectorDataset::new(other.to_str().unwrap())
-                            .to_geo()
-                            .unwrap(),
-                    );
-                    geometries_to_file(
-                        points.must_not_overlap_with(other),
-                        overlaps.to_str().unwrap(),
-                        args.gdal_driver,
-                        Some(LayerOptions {
-                            name: "overlaps",
-                            srs: vector_dataset.crs().as_ref(),
-                            ..Default::default()
-                        }),
-                    )
+                    let other = flatten_points(VectorDataset::new(&other).to_geo().unwrap());
+                    let result = points.must_not_overlap_with(other);
+                    if result.is_valid() {
+                        println!("No errors found.")
+                    } else {
+                        result.unwrap_err_point().to_file(
+                            &overlaps,
+                            args.gdal_driver,
+                            Some(LayerOptions {
+                                name: "overlaps",
+                                srs: vector_dataset.crs().as_ref(),
+                                ..Default::default()
+                            }),
+                        )
+                    }
                 } else {
-                    geometries_to_file(
-                        points.must_not_overlap(),
-                        overlaps.to_str().unwrap(),
-                        args.gdal_driver,
-                        Some(LayerOptions {
-                            name: "overlaps",
-                            srs: vector_dataset.crs().as_ref(),
-                            ..Default::default()
-                        }),
-                    )
+                    let result = points.must_not_overlap();
+                    if result.is_valid() {
+                        println!("No errors found.")
+                    } else {
+                        result.unwrap_err_point().to_file(
+                            &overlaps,
+                            args.gdal_driver,
+                            Some(LayerOptions {
+                                name: "overlaps",
+                                srs: vector_dataset.crs().as_ref(),
+                                ..Default::default()
+                            }),
+                        )
+                    }
                 }
             }
         },
-        Commands::Lines(command) => match command.command {
+        Commands::Line(command) => match command.command {
             LineRules::MustNotHaveDangles { lines, dangles } => {
-                let vector_dataset = VectorDataset::new(lines.to_str().unwrap());
+                let vector_dataset = VectorDataset::new(&lines);
                 let lines = vector_dataset.to_geo().unwrap();
                 let lines = flatten_linestrings(lines);
                 let result = lines.must_not_have_dangles();
-                geometries_to_file(
-                    result,
-                    dangles.to_str().unwrap(),
-                    args.gdal_driver,
-                    Some(LayerOptions {
-                        name: "dangles",
-                        srs: vector_dataset.crs().as_ref(),
-                        ..Default::default()
-                    }),
-                );
+                if result.is_valid() {
+                    println!("No errors found.")
+                } else {
+                    result.unwrap_err_point().to_file(
+                        &dangles,
+                        args.gdal_driver,
+                        Some(LayerOptions {
+                            name: "dangles",
+                            srs: vector_dataset.crs().as_ref(),
+                            ..Default::default()
+                        }),
+                    );
+                }
             }
             LineRules::MustNotIntersect {
                 lines,
                 single_points,
                 collinear_lines,
             } => {
-                let vector_dataset = VectorDataset::new(lines.to_str().unwrap());
+                let vector_dataset = VectorDataset::new(&lines);
                 let lines = vector_dataset.to_geo().unwrap();
                 let lines = flatten_linestrings(lines);
-                let intersections = lines.must_not_intersect();
-                geometries_to_file(
-                    intersections.0,
-                    collinear_lines.to_str().unwrap(),
-                    args.gdal_driver.clone(),
-                    Some(LayerOptions {
-                        name: "collinear_lines",
-                        srs: vector_dataset.crs().as_ref(),
-                        ..Default::default()
-                    }),
-                );
-                geometries_to_file(
-                    intersections.1,
-                    single_points.to_str().unwrap(),
-                    args.gdal_driver.clone(),
-                    Some(LayerOptions {
-                        name: "point_intersections",
-                        srs: vector_dataset.crs().as_ref(),
-                        ..Default::default()
-                    }),
-                );
+                let result = lines.must_not_intersect();
+                if result.is_valid() {
+                    println!("No errors found.")
+                } else {
+                    let errors = result.unwrap_err();
+                    for error in errors.into_iter() {
+                        if let GeometryError::Point(_) = error {
+                            error.to_file(
+                                &single_points,
+                                args.gdal_driver.clone(),
+                                Some(LayerOptions {
+                                    name: "intersections",
+                                    srs: vector_dataset.crs().as_ref(),
+                                    ..Default::default()
+                                }),
+                            );
+                        } else if let GeometryError::LineString(_) = error {
+                            error.to_file(
+                                &collinear_lines,
+                                args.gdal_driver.clone(),
+                                Some(LayerOptions {
+                                    name: "intersections",
+                                    srs: vector_dataset.crs().as_ref(),
+                                    ..Default::default()
+                                }),
+                            );
+                        }
+                    }
+                }
             }
             LineRules::MustNotOverlap {
                 lines,
@@ -310,25 +328,25 @@ fn main() {
                 self_overlap,
                 other,
             } => {
-                let vector_dataset = VectorDataset::new(lines.to_str().unwrap());
+                let vector_dataset = VectorDataset::new(&lines);
                 let lines = vector_dataset.to_geo().unwrap();
                 let lines = flatten_linestrings(lines);
                 if let Some(other) = other {
-                    let other = flatten_linestrings(
-                        VectorDataset::new(other.to_str().unwrap())
-                            .to_geo()
-                            .unwrap(),
-                    );
-                    geometries_to_file(
-                        lines.must_not_overlap_with(other),
-                        overlaps.to_str().unwrap(),
-                        args.gdal_driver.clone(),
-                        Some(LayerOptions {
-                            name: "overlaps",
-                            srs: vector_dataset.crs().as_ref(),
-                            ..Default::default()
-                        }),
-                    );
+                    let other = flatten_linestrings(VectorDataset::new(&other).to_geo().unwrap());
+                    let result = lines.must_not_overlap_with(other);
+                    if result.is_valid() {
+                        println!("No errors found.")
+                    } else {
+                        result.unwrap_err_linestring().to_file(
+                            &overlaps,
+                            args.gdal_driver.clone(),
+                            Some(LayerOptions {
+                                name: "overlaps",
+                                srs: vector_dataset.crs().as_ref(),
+                                ..Default::default()
+                            }),
+                        );
+                    }
                 } else {
                     let result;
                     if self_overlap {
@@ -336,16 +354,19 @@ fn main() {
                     } else {
                         result = lines.must_not_overlap();
                     }
-                    geometries_to_file(
-                        result,
-                        overlaps.to_str().unwrap(),
-                        args.gdal_driver.clone(),
-                        Some(LayerOptions {
-                            name: "overlaps",
-                            srs: vector_dataset.crs().as_ref(),
-                            ..Default::default()
-                        }),
-                    );
+                    if result.is_valid() {
+                        println!("No errors found.")
+                    } else {
+                        result.unwrap_err_linestring().to_file(
+                            &overlaps,
+                            args.gdal_driver.clone(),
+                            Some(LayerOptions {
+                                name: "overlaps",
+                                srs: vector_dataset.crs().as_ref(),
+                                ..Default::default()
+                            }),
+                        );
+                    }
                 }
             }
         },
@@ -355,57 +376,67 @@ fn main() {
                 overlaps,
                 other,
             } => {
-                let vector_dataset = VectorDataset::new(polygons.to_str().unwrap());
+                let vector_dataset = VectorDataset::new(&polygons);
                 let polygons = vector_dataset.to_geo().unwrap();
                 let polygons = flatten_polygons(polygons);
                 if let Some(other) = other {
-                    let other_polygons = VectorDataset::new(other.to_str().unwrap())
-                        .to_geo()
-                        .unwrap();
+                    let other_polygons = VectorDataset::new(&other).to_geo().unwrap();
                     let other_polygons = flatten_polygons(other_polygons);
                     let result = polygons.must_not_overlap_with(other_polygons);
-                    geometries_to_file(
-                        result,
-                        overlaps.to_str().unwrap(),
-                        args.gdal_driver,
-                        Some(LayerOptions {
-                            name: "overlaps",
-                            srs: vector_dataset.crs().as_ref(),
-                            ..Default::default()
-                        }),
-                    )
+                    if result.is_valid() {
+                        println!("No errors found.")
+                    } else {
+                        result.unwrap_err_polygon().to_file(
+                            &overlaps,
+                            args.gdal_driver,
+                            Some(LayerOptions {
+                                name: "overlaps",
+                                srs: vector_dataset.crs().as_ref(),
+                                ..Default::default()
+                            }),
+                        )
+                    }
                 } else {
                     let result = polygons.must_not_overlap();
-                    geometries_to_file(
-                        result,
-                        overlaps.to_str().unwrap(),
+                    if result.is_valid() {
+                        println!("No errors found.")
+                    } else {
+                        result.unwrap_err_polygon().to_file(
+                            &overlaps,
+                            args.gdal_driver,
+                            Some(LayerOptions {
+                                name: "overlaps",
+                                srs: vector_dataset.crs().as_ref(),
+                                ..Default::default()
+                            }),
+                        )
+                    }
+                }
+            }
+        },
+        Commands::Geometry(command) => match command.command {
+            GeometryRules::MustNotBeMultipart {
+                geometries,
+                multiparts,
+            } => {
+                let dataset = VectorDataset::new(&geometries);
+                let geometry = dataset.to_geo().unwrap();
+                let result = geometry.must_not_be_multipart();
+                if result.is_valid() {
+                    println!("No errors found.")
+                } else {
+                    result.unwrap_err().into_iter().next().unwrap().to_file(
+                        &multiparts,
                         args.gdal_driver,
                         Some(LayerOptions {
-                            name: "overlaps",
-                            srs: vector_dataset.crs().as_ref(),
+                            name: "multiparts",
+                            srs: dataset.crs().as_ref(),
                             ..Default::default()
                         }),
                     )
                 }
             }
         },
-        Commands::Geometry(command) => match command.command {
-            GeometryRules::MustNotBeMultipart { geometries, multiparts } => {
-                let dataset = VectorDataset::new(geometries.to_str().unwrap());
-                let geometry = dataset.to_geo().unwrap();
-                let multipart = geometry.must_not_be_multipart();
-                geometries_to_file(
-                    multipart,
-                    multiparts.to_str().unwrap(),
-                    args.gdal_driver,
-                    Some(LayerOptions {
-                        name: "multiparts",
-                        srs: dataset.crs().as_ref(),
-                        ..Default::default()
-                    }),
-                )
-            }
-        }
         Commands::GdalDrivers(command) => match command.command {
             Drivers::Read => {
                 for (driver, extension) in GdalDrivers.read() {
@@ -425,13 +456,16 @@ fn main() {
         },
         Commands::Utilities(command) => match command.command {
             Utilities::ExplodeLinestrings { linestrings, lines } => {
-                let dataset = VectorDataset::new(linestrings.to_str().unwrap());
+                let dataset = VectorDataset::new(&linestrings);
                 let geometry = dataset.to_geo().unwrap();
                 let linestrings = flatten_linestrings(geometry);
                 let exploded = explode_linestrings(&linestrings);
                 geometries_to_file(
-                    exploded,
-                    lines.to_str().unwrap(),
+                    exploded
+                        .into_iter()
+                        .map(|line| line.to_gdal().expect("Failed to convert to GDAL."))
+                        .collect(),
+                    &lines,
                     args.gdal_driver,
                     Some(LayerOptions {
                         name: "merged_linestrings",
@@ -444,13 +478,16 @@ fn main() {
                 linestrings,
                 merged,
             } => {
-                let dataset = VectorDataset::new(linestrings.to_str().unwrap());
+                let dataset = VectorDataset::new(&linestrings);
                 let geometry = dataset.to_geo().unwrap();
                 let linestrings = flatten_linestrings(geometry);
                 let merged_linestrings = merge_linestrings(linestrings);
                 geometries_to_file(
-                    merged_linestrings,
-                    merged.to_str().unwrap(),
+                    merged_linestrings
+                        .into_iter()
+                        .map(|line| line.to_gdal().expect("Failed to convert to GDAL."))
+                        .collect(),
+                    &merged,
                     args.gdal_driver,
                     Some(LayerOptions {
                         name: "merged_linestrings",

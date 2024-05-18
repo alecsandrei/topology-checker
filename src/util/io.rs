@@ -1,8 +1,8 @@
-use gdal::vector::ToGdal;
 use gdal::{vector::LayerAccess, Dataset, DatasetOptions, GdalOpenFlags, LayerOptions, Metadata};
 use std::collections::HashMap;
+use std::path::PathBuf;
 
-pub fn open_dataset(path: &str) -> Dataset {
+pub fn open_dataset(path: &PathBuf) -> Dataset {
     Dataset::open_ex(
         path,
         DatasetOptions {
@@ -10,30 +10,23 @@ pub fn open_dataset(path: &str) -> Dataset {
             ..Default::default()
         },
     )
-    .expect(format!("Could not read file {path}.").as_str())
+    .expect(format!("Could not read file {path:?}.").as_str())
 }
 
-pub fn geometries_to_file<G>(
-    geometries: Vec<G>,
-    out_path: &str,
+pub fn geometries_to_file(
+    geometries: Vec<gdal::vector::Geometry>,
+    out_path: &PathBuf,
     driver: Option<String>,
     options: Option<LayerOptions>,
-) where
-    G: ToGdal,
-{
-    let geometries: Vec<gdal::vector::Geometry> = geometries
-        .into_iter()
-        .map(|geometry| geometry.to_gdal().unwrap())
-        .collect();
-
+) {
     // If driver is not provided, attempt to infer it from the file extension.
     let driver_name = driver.unwrap_or_else(|| {
-        let driver = GdalDrivers
-            .infer_driver_name(out_path.split('.').last().unwrap())
-            .expect("Could not infer driver by file extension. Consider specifying the GDAL_DRIVER environment variable.");
-        driver.1.get("write").unwrap().clone().expect(format!("Driver {} is not writeable.", driver.0).as_str());
-        driver.0
-    });
+    let driver = GdalDrivers
+        .infer_driver_name(out_path.extension().expect(format!("Path {out_path:?} does not have a valid extension.").as_str()).to_str().unwrap())
+        .expect("Could not infer driver by file extension. Consider specifying the GDAL_DRIVER environment variable.");
+    driver.1.get("write").unwrap().clone().expect(format!("Driver {} is not writeable.", driver.0).as_str());
+    driver.0
+});
     let drv = gdal::DriverManager::get_driver_by_name(&driver_name)
         .expect(format!("Driver {driver_name} does not exist.").as_str());
 
@@ -51,7 +44,7 @@ pub struct GdalDrivers;
 type DriverProps = HashMap<&'static str, Option<String>>;
 
 impl GdalDrivers {
-    fn infer_driver_name(&self, file_suffix: &str) -> Option<(String, DriverProps)> {
+    pub fn infer_driver_name(&self, file_suffix: &str) -> Option<(String, DriverProps)> {
         // Finds out whether or not the input file suffix can be mapped to a valid driver.
         self.driver_map().into_iter().find(|(_, properties)| {
             if properties
@@ -59,7 +52,7 @@ impl GdalDrivers {
                 .unwrap()
                 .clone()
                 .unwrap()
-                .contains(file_suffix)
+                .ends_with(file_suffix)
             {
                 return true;
             }

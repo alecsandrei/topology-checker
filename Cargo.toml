@@ -8,12 +8,12 @@ categories = ["command-line-interface"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-geozero = { version = "=0.11.0", features = ["with-gdal"] }
+geozero = { version = "=0.13.0", features = ["with-gdal"] }
 gdal = "0.16.0"
 geo = "0.28.0"
 geo-types = { version = "0.7.13", features = ["use-rstar_0_12"] }
 rayon = "1.10.0"
 gdal-sys = "0.9.1"
-itertools = "0.12.1"
+itertools = "0.13.0"
 clap = { version = "4.5.4", features = ["derive", "env"] }
 rstar = "0.12.0"

@@ -1,20 +1,21 @@
-use crate::util::{
-    explode_linestrings, intersections, linestring_endpoints, sweep_points_to_points,
+use crate::{
+    util::{explode_linestrings, intersections, linestring_endpoints, sweep_points_to_points},
+    GeometryError, TopologyResult,
 };
-use geo::{sweep::SweepPoint, LineString, Point};
+use geo::{sweep::SweepPoint, GeoFloat, LineString};
 use itertools::Itertools;
 
-pub trait MustNotHaveDangles {
-    fn must_not_have_dangles(&self) -> Vec<Point>;
+pub trait MustNotHaveDangles<T: GeoFloat> {
+    fn must_not_have_dangles(&self) -> TopologyResult<T>;
 }
 
-impl MustNotHaveDangles for Vec<LineString> {
-    fn must_not_have_dangles(&self) -> Vec<Point> {
+impl<T: GeoFloat + Send + Sync> MustNotHaveDangles<T> for Vec<LineString<T>> {
+    fn must_not_have_dangles(&self) -> TopologyResult<T> {
         // We find dangles by elimination from the LineString endpoints
         // the points that are intersections.
         let endpoints = linestring_endpoints(self);
         let (_, (_, improper)) =
-            intersections::<f64, SweepPoint<f64>, SweepPoint<f64>>(explode_linestrings(self));
+            intersections::<T, SweepPoint<T>, SweepPoint<T>>(explode_linestrings(self));
         let endpoints = endpoints
             .into_iter()
             .filter_map(|point| {
@@ -24,6 +25,13 @@ impl MustNotHaveDangles for Vec<LineString> {
                 None
             })
             .collect_vec();
-        sweep_points_to_points(endpoints)
+        let geometry_errors = vec![GeometryError::Point(
+            sweep_points_to_points(endpoints).into_iter().collect(),
+        )];
+        if geometry_errors.is_empty() {
+            TopologyResult::Valid
+        } else {
+            TopologyResult::Errors(geometry_errors)
+        }
     }
 }
