@@ -1,5 +1,6 @@
 mod args {
     use clap::{Args, Parser, Subcommand};
+    use serde::{Deserialize, Serialize};
     use std::path::PathBuf;
 
     /// Parse a single key-value pair
@@ -26,7 +27,8 @@ mod args {
         pub command: Commands,
     }
 
-    #[derive(Debug, Subcommand)]
+    #[derive(Debug, Serialize, Deserialize, Subcommand)]
+    #[serde(rename_all = "lowercase")]
     pub enum Commands {
         /// Topology checks for point geometries
         Point(PointCommand),
@@ -40,39 +42,42 @@ mod args {
         GdalDrivers(GdalDriversCommand),
         /// Extra vector data utilities
         Utilities(UtilitiesCommand),
+        /// Interactive mode
+        Interactive,
     }
 
-    #[derive(Debug, Args)]
+    #[derive(Debug, Args, Serialize, Deserialize)]
     pub struct PointCommand {
         #[clap(subcommand)]
         pub command: PointRules,
     }
 
-    #[derive(Debug, Args)]
+    #[derive(Debug, Args, Serialize, Deserialize)]
     pub struct LineCommand {
         #[clap(subcommand)]
         pub command: LineRules,
     }
 
-    #[derive(Debug, Args)]
+    #[derive(Debug, Args, Serialize, Deserialize)]
     pub struct PolygonCommand {
         #[clap(subcommand)]
         pub command: PolygonRules,
     }
 
-    #[derive(Debug, Args)]
+    #[derive(Debug, Args, Serialize, Deserialize)]
     pub struct GeometryCommand {
         #[clap(subcommand)]
         pub command: GeometryRules,
     }
 
-    #[derive(Debug, Args)]
+    #[derive(Debug, Args, Serialize, Deserialize)]
     pub struct GdalDriversCommand {
         #[clap(subcommand)]
         pub command: Drivers,
     }
 
-    #[derive(Debug, Subcommand)]
+    #[derive(Debug, Subcommand, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
     pub enum PointRules {
         #[command(arg_required_else_help(true))]
         MustNotOverlap {
@@ -89,7 +94,8 @@ mod args {
         },
     }
 
-    #[derive(Debug, Subcommand)]
+    #[derive(Debug, Subcommand, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
     pub enum LineRules {
         #[command(arg_required_else_help(true))]
         MustNotOverlap {
@@ -130,7 +136,8 @@ mod args {
         },
     }
 
-    #[derive(Debug, Subcommand)]
+    #[derive(Debug, Subcommand, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
     pub enum PolygonRules {
         #[command(arg_required_else_help(true))]
         MustNotOverlap {
@@ -146,7 +153,8 @@ mod args {
         },
     }
 
-    #[derive(Debug, Subcommand)]
+    #[derive(Debug, Subcommand, Serialize, Deserialize)]
+    #[serde(rename_all = "snake_case")]
     pub enum GeometryRules {
         #[command(arg_required_else_help(true))]
         MustNotBeMultipart {
@@ -159,7 +167,7 @@ mod args {
         },
     }
 
-    #[derive(Debug, Subcommand)]
+    #[derive(Debug, Subcommand, Serialize, Deserialize)]
     pub enum Drivers {
         /// List readable drivers
         Read,
@@ -169,13 +177,13 @@ mod args {
         ReadAndWrite,
     }
 
-    #[derive(Debug, Args)]
+    #[derive(Debug, Args, Serialize, Deserialize)]
     pub struct UtilitiesCommand {
         #[clap(subcommand)]
         pub command: Utilities,
     }
 
-    #[derive(Debug, Subcommand)]
+    #[derive(Debug, Subcommand, Serialize, Deserialize)]
     pub enum Utilities {
         /// Merge linestrings
         #[command(arg_required_else_help(true))]
@@ -206,6 +214,8 @@ use args::{
 };
 use clap::Parser;
 use gdal::{vector::ToGdal, LayerOptions};
+use itertools::Itertools;
+use serde::Deserialize;
 use topology_checker::{
     algorithm::merge_linestrings,
     rule::{
@@ -497,5 +507,61 @@ fn main() {
                 )
             }
         },
+        Commands::Interactive => {
+            println!("Write 'summary' to stop the loop.");
+            let mut commands: Vec<Commands> = Vec::new();
+            loop {
+                let mut input = String::new();
+                std::io::stdin()
+                    .read_line(&mut input)
+                    .expect("Wrong input.");
+                println!("{input}");
+                if input.trim_end() == "summary" {
+                    break;
+                }
+                let mut slices = input.split_whitespace();
+                let geometry = match slices.next() {
+                    Some(geometry) => geometry,
+                    None => {
+                        eprintln!("Geometry parameter was not provided.");
+                        continue;
+                    }
+                };
+                let rule = match slices.next() {
+                    Some(rule) => rule,
+                    None => {
+                        eprintln!("Rule parameter was not provided.");
+                        continue;
+                    }
+                };
+                let mut args = std::collections::HashMap::new();
+                for arg in slices.into_iter() {
+                    let split = arg.split("=").collect_vec();
+                    match split[..] {
+                        [arg, param] => {
+                            args.insert(arg, param);
+                        }
+                        [..] => {
+                            eprintln!("Parameters should be split by an equals sign.");
+                            continue;
+                        }
+                    };
+                }
+                let json = serde_json::json!({
+                    geometry: {
+                        "command": {rule: args}
+                    }
+                });
+                let deserialized = Commands::deserialize(json);
+                match deserialized {
+                    Ok(deserialized) => {
+                        commands.push(deserialized);
+                        println!("Command successfully added.")
+                    },
+                    Err(error) => eprintln!("{error:?}"),
+                }
+            }
+            // println!("{commands:?}")
+        }
     }
 }
