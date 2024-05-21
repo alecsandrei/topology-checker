@@ -1,6 +1,4 @@
-use crate::util::{
-    open_dataset, GdalDrivers,
-};
+use crate::util::{open_dataset, GdalDrivers};
 use gdal::{
     spatial_ref::SpatialRef,
     vector::{LayerAccess, ToGdal},
@@ -10,7 +8,7 @@ use geo::{
     GeoFloat, Geometry, Line, LineString, MultiLineString, MultiPoint, MultiPolygon, Point, Polygon,
 };
 use geozero::{gdal::process_geom, geo_types::GeoWriter};
-use std::path::PathBuf;
+use std::{fmt::Display, path::PathBuf};
 
 pub mod algorithm;
 pub mod prelude;
@@ -67,6 +65,33 @@ pub enum GeometryError<T: GeoFloat> {
     MultiPoint(Vec<MultiPoint<T>>),
     MultiLineString(Vec<MultiLineString<T>>),
     MultiPolygon(Vec<MultiPolygon<T>>),
+}
+
+impl<T: GeoFloat> GeometryError<T> {
+    fn len(&self) -> usize {
+        match self {
+            GeometryError::LineString(vec) => vec.len(),
+            GeometryError::MultiLineString(vec) => vec.len(),
+            GeometryError::MultiPoint(vec) => vec.len(),
+            GeometryError::MultiPolygon(vec) => vec.len(),
+            GeometryError::Point(vec) => vec.len(),
+            GeometryError::Polygon(vec) => vec.len(),
+        }
+    }
+}
+
+impl<T: GeoFloat> Display for GeometryError<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GeometryError::LineString(_) => write!(f, "{} LineString errors", self.len()),
+            GeometryError::MultiLineString(_) => write!(f, "{} MultiLineString errors", self.len()),
+            GeometryError::MultiPoint(_) => write!(f, "{} MultiPoint errors", self.len()),
+            GeometryError::MultiPolygon(_) => write!(f, "{} MultiPolygon errors", self.len()),
+            GeometryError::Point(_) => write!(f, "{} Point errors", self.len()),
+            GeometryError::Polygon(_) => write!(f, "{} Polygon errors", self.len()),
+        }
+        
+    }
 }
 
 impl<T: GeoFloat> GeometryError<T> {
@@ -267,6 +292,31 @@ impl<T: GeoFloat> TopologyResult<T> {
     //                 lines_layer = Some(create_layer(&mut polygons_dataset, options.clone()));
     //             }
     //         }
+    //     }
+    // }
+}
+
+pub struct TopologyResults<T: GeoFloat>(pub Vec<(String, TopologyResult<T>)>);
+
+impl<T: GeoFloat> TopologyResults<T> {
+    pub fn summary(self, output: Option<&PathBuf>) {
+        for result in self.0 {
+            let mut summary = String::new();
+            summary.push_str(format!("{0: <25}", result.0).as_str());
+            if result.1.is_valid() {
+                summary.push_str(format!("{0: <25}\n", "No topology errors found.").as_str())
+            } else {
+                for error in result.1.unwrap_err() {
+                    summary.push_str(format!("{0: <25}\n", error).as_str())
+                }
+            }
+            println!("{summary}");
+        }
+    }
+
+    // fn add_to_geopackage(&self, output: &PathBuf, errors: GeometryError<T>) {
+    //     if !output.exists() {
+    //         geometries_to_file(errors.to_gdal(), out_path, driver, options)
     //     }
     // }
 }
