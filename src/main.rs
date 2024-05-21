@@ -43,9 +43,7 @@ mod args {
         /// Extra vector data utilities
         Utilities(UtilitiesCommand),
         /// Interactive mode
-        Interactive {
-            output: Option<PathBuf>
-        },
+        Interactive { output: Option<PathBuf> },
     }
 
     #[derive(Debug, PartialEq, Args, Serialize, Deserialize)]
@@ -219,6 +217,7 @@ use colored::Colorize;
 use gdal::{vector::ToGdal, LayerOptions};
 use itertools::Itertools;
 use rayon::iter::{ParallelBridge, ParallelIterator};
+use regex::Regex;
 use serde::Deserialize;
 use topology_checker::{
     algorithm::merge_linestrings,
@@ -278,6 +277,7 @@ fn interactive_mode(args: TopologyCheckerArgs) {
             .read_line(&mut input)
             .expect("Wrong input.");
         if input.trim_end() == "summary" {
+            println!("{:?}", commands);
             break;
         }
         let mut slices = input.split_whitespace();
@@ -303,38 +303,30 @@ fn interactive_mode(args: TopologyCheckerArgs) {
                 continue;
             }
         };
-        // let slices = slices.collect_vec().join("");
-
-        // let mut slices_parsed = Vec::new();
-
-        // if slices.contains('"') {
-        //     let indices = slices.match_indices('"');
-        //     if indices % 2 == 1 {
-        //         eprintln!("The symbol \"\\\" should be present an even amount of times.");
-        //         continue 'outer
-        //     }
-        //     for i in (0..indices.try_len().unwrap()).step_by(2) {
-
-        //     }
-        // }
-
         let mut args = std::collections::HashMap::new();
-
-        for arg in slices.into_iter() {
-            let split = arg.split("=").collect_vec();
-            match split[..] {
-                [arg, param] => {
-                    args.insert(arg, param);
-                }
-                [..] => {
-                    eprintln!(
-                        "{}",
-                        "The parameter and the value should be split by an equals sign.".red()
-                    );
-                    continue 'outer;
-                }
-            };
+        // TODO: document what this regex does.
+        let re = Regex::new(r#"([-\w]+)=("[^"]+"|\S+)"#).unwrap();
+        for captures in re.captures_iter(&input) {
+            let mut subcaptures: std::iter::Skip<regex::SubCaptureMatches> =
+                captures.iter().skip(1);
+            if subcaptures.len() != 2 {
+                eprintln!(
+                    "Problem near {:?}. Failed to parse.",
+                    subcaptures.next().unwrap().unwrap()
+                );
+                continue 'outer;
+            }
+            args.insert(
+                subcaptures.next().unwrap().unwrap().as_str(),
+                subcaptures
+                    .next()
+                    .unwrap()
+                    .unwrap()
+                    .as_str()
+                    .replace("\"", ""),
+            );
         }
+
         let json = serde_json::json!({
             geometry: {
                 "command": {rule: args}
@@ -353,16 +345,20 @@ fn interactive_mode(args: TopologyCheckerArgs) {
             Err(error) => eprintln!("{}", error.to_string().red()),
         }
     }
-    let results = TopologyResults(commands.into_iter().par_bridge().map(|command| {
-        let args = TopologyCheckerArgs {
-            gdal_driver: args.gdal_driver.clone(),
-            command: command,
-        };
-        (rule_name(&args.command), parse_rules(args).unwrap())
-    }).collect());
+    let results = TopologyResults(
+        commands
+            .into_iter()
+            .par_bridge()
+            .map(|command| {
+                let args = TopologyCheckerArgs {
+                    gdal_driver: args.gdal_driver.clone(),
+                    command: command,
+                };
+                (rule_name(&args.command), parse_rules(args).unwrap())
+            })
+            .collect(),
+    );
     results.summary(None);
-
-
 }
 
 /// If the output location is provided, the [TopologyResult] gets consumed and
@@ -370,7 +366,9 @@ fn interactive_mode(args: TopologyCheckerArgs) {
 /// Otherwise, Some(TopologyResult) is returned.
 fn parse_rules(args: TopologyCheckerArgs) -> Option<TopologyResult<f64>> {
     match args.command {
-        Command::GdalDrivers(_) | Command::Interactive { .. } | Command::Utilities(_) => unreachable!(),
+        Command::GdalDrivers(_) | Command::Interactive { .. } | Command::Utilities(_) => {
+            unreachable!()
+        }
         Command::Point(command) => match command.command {
             PointRules::MustNotOverlap {
                 points,

@@ -247,53 +247,6 @@ impl<T: GeoFloat> TopologyResult<T> {
             Self::Errors(_) => false,
         }
     }
-
-    // pub fn write_report(
-    //     self,
-    //     out_dir: &PathBuf,
-    //     driver: Option<String>,
-    //     options: Option<LayerOptions>,
-    // ) {
-
-    //     let dataset = RefCell::new(create_dataset(
-    //         out_dir.join("/errors"),
-    //         driver,
-    //     ));
-
-    //     let mut points_dataset = dataset.borrow_mut();
-    //     let mut lines_dataset = dataset.borrow_mut();
-    //     let mut polygons_dataset = dataset.borrow_mut();
-
-    //     let mut points_layer = None;
-    //     let mut lines_layer = None;
-    //     let mut polygons_layer = None;
-
-    //     fn write_to_layer<T: GeoFloat>(layer: &mut Layer<'_>, geom: Geometry<T>) {
-    //         layer
-    //             .create_feature(
-    //                 geom.to_gdal()
-    //                     .expect("Failed to convert geo-types to GDAL."),
-    //             )
-    //             .expect("Failed to write point geometry.")
-    //     }
-
-    //     for geom in self.unwrap_err() {
-    //         if is_point(&geom) {
-    //             if points_layer.is_none() {
-    //                 points_layer = Some(create_layer(&mut points_dataset, options.clone()));
-    //             }
-    //             write_to_layer(&mut points_layer.unwrap(), geom)
-    //         } else if is_line(&geom) {
-    //             if polygons_layer.is_none() {
-    //                 polygons_layer = Some(create_layer(&mut lines_dataset, options.clone()));
-    //             }
-    //         } else if is_polygon(&geom) {
-    //             if lines_layer.is_none() {
-    //                 lines_layer = Some(create_layer(&mut polygons_dataset, options.clone()));
-    //             }
-    //         }
-    //     }
-    // }
 }
 
 pub struct TopologyResults<T: GeoFloat>(pub Vec<(String, TopologyResult<T>)>);
@@ -304,21 +257,15 @@ impl<T: GeoFloat> TopologyResults<T> {
             let mut summary = String::new();
             summary.push_str(format!("{0: <25}", result.0).as_str());
             if result.1.is_valid() {
-                summary.push_str(format!("{0: <25}\n", "No topology errors found.").as_str())
+                summary.push_str(format!("{0: >25}\n", "No topology errors found.").as_str())
             } else {
                 for error in result.1.unwrap_err() {
-                    summary.push_str(format!("{0: <25}\n", error).as_str())
+                    summary.push_str(format!("{0: >25}\n", error).as_str())
                 }
             }
             println!("{summary}");
         }
     }
-
-    // fn add_to_geopackage(&self, output: &PathBuf, errors: GeometryError<T>) {
-    //     if !output.exists() {
-    //         geometries_to_file(errors.to_gdal(), out_path, driver, options)
-    //     }
-    // }
 }
 
 #[cfg(test)]
