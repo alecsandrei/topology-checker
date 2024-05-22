@@ -79,9 +79,9 @@ impl GdalDrivers {
             if let Some(extension) = properties.get("extensions").unwrap() {
                 if !extension.is_empty()
                     && driver.metadata_item("DCAP_VECTOR", "").is_some()
-                    && !driver.long_name().is_empty()
+                    && !driver.short_name().is_empty()
                 {
-                    drivers.insert(driver.long_name(), properties);
+                    drivers.insert(driver.short_name(), properties);
                 }
             }
         }

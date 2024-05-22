@@ -43,7 +43,10 @@ mod args {
         /// Extra vector data utilities
         Utilities(UtilitiesCommand),
         /// Interactive mode
-        Interactive { output: Option<PathBuf> },
+        Interactive {
+            #[arg(value_parser = parse_key_val::<String, PathBuf>)]
+            output: PathBuf,
+        },
     }
 
     #[derive(Debug, PartialEq, Args, Serialize, Deserialize)]
@@ -215,7 +218,6 @@ use args::{
 use clap::Parser;
 use colored::Colorize;
 use gdal::{vector::ToGdal, LayerOptions};
-use itertools::Itertools;
 use rayon::iter::{ParallelBridge, ParallelIterator};
 use regex::Regex;
 use serde::Deserialize;
@@ -269,7 +271,7 @@ fn rule_name(command: &Command) -> String {
 }
 
 fn interactive_mode(args: TopologyCheckerArgs) {
-    println!("{}", "Write 'summary' to stop the loop.".yellow());
+    println!("{}", "Write 'summary' to stop the loop. Example input: line must-not-have-dangles lines=./lines.shp".yellow());
     let mut commands: Vec<Command> = Vec::new();
     'outer: loop {
         let mut input = String::new();
@@ -277,7 +279,6 @@ fn interactive_mode(args: TopologyCheckerArgs) {
             .read_line(&mut input)
             .expect("Wrong input.");
         if input.trim_end() == "summary" {
-            println!("{:?}", commands);
             break;
         }
         let mut slices = input.split_whitespace();
@@ -339,7 +340,7 @@ fn interactive_mode(args: TopologyCheckerArgs) {
                     eprintln!("{}", "The command was already added".red())
                 } else {
                     commands.push(deserialized);
-                    println!("Command successfully added.")
+                    println!("{}", "Command successfully added.".green())
                 }
             }
             Err(error) => eprintln!("{}", error.to_string().red()),
@@ -358,7 +359,10 @@ fn interactive_mode(args: TopologyCheckerArgs) {
             })
             .collect(),
     );
-    results.summary(None);
+    match args.command {
+        Command::Interactive { output } => results.summary(&output, None),
+        _ => unreachable!(),
+    }
 }
 
 /// If the output location is provided, the [TopologyResult] gets consumed and

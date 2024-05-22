@@ -8,7 +8,11 @@ use geo::{
     GeoFloat, Geometry, Line, LineString, MultiLineString, MultiPoint, MultiPolygon, Point, Polygon,
 };
 use geozero::{gdal::process_geom, geo_types::GeoWriter};
-use std::{fmt::Display, path::PathBuf};
+use std::{
+    borrow::Borrow,
+    fmt::Display,
+    path::PathBuf,
+};
 
 pub mod algorithm;
 pub mod prelude;
@@ -90,7 +94,6 @@ impl<T: GeoFloat> Display for GeometryError<T> {
             GeometryError::Point(_) => write!(f, "{} Point errors", self.len()),
             GeometryError::Polygon(_) => write!(f, "{} Polygon errors", self.len()),
         }
-        
     }
 }
 
@@ -252,18 +255,66 @@ impl<T: GeoFloat> TopologyResult<T> {
 pub struct TopologyResults<T: GeoFloat>(pub Vec<(String, TopologyResult<T>)>);
 
 impl<T: GeoFloat> TopologyResults<T> {
-    pub fn summary(self, output: Option<&PathBuf>) {
+    pub fn summary(self, output: &PathBuf, srs: Option<&SpatialRef>) {
+        let driver = gdal::DriverManager::get_driver_by_name(
+            &GdalDrivers.infer_driver_name("gpkg").unwrap().0,
+        )
+        .unwrap();
+        let mut dataset = driver
+            .create_vector_only(output)
+            .map_err(|err| eprintln!("Failed to create gpkg with error {err}"))
+            .unwrap();
+        let bar = "|";
         for result in self.0 {
-            let mut summary = String::new();
-            summary.push_str(format!("{0: <25}", result.0).as_str());
+            println!("{:-^50}", result.0);
             if result.1.is_valid() {
-                summary.push_str(format!("{0: >25}\n", "No topology errors found.").as_str())
+                println!("{: <25}{: >25}", "| No topology errors found.", bar);
             } else {
                 for error in result.1.unwrap_err() {
-                    summary.push_str(format!("{0: >25}\n", error).as_str())
+                    println!("{: <25}{: >25}", format!("| {}", error), bar);
+                    let geometries: Vec<gdal::vector::Geometry> = error.to_gdal();
+                    let geometry_type = geometries[0].geometry_type();
+                    let mut layers = dataset.borrow().layers().filter(|layer| {
+                        layer.defn().geom_fields().next().unwrap().field_type() == geometry_type
+                    });
+                    if let Some(mut layer) = layers.next() {
+                        geometries.into_iter().for_each(|geom| {
+                            layer
+                                .create_feature_fields(
+                                    geom,
+                                    &["rule"],
+                                    &[gdal::vector::FieldValue::StringValue(result.0.clone())],
+                                )
+                                .unwrap();
+                        })
+                    } else {
+                        let mut layer = dataset
+                            .create_layer(LayerOptions {
+                                name: &geometries[0].geometry_name(),
+                                ty: geometry_type,
+                                srs: srs,
+                                ..Default::default()
+                            })
+                            .unwrap();
+                        let field = gdal::vector::FieldDefn::new(
+                            "rule",
+                            gdal::vector::OGRFieldType::OFTString,
+                        )
+                        .unwrap();
+                        field.add_to_layer(&layer).unwrap();
+                        geometries.into_iter().for_each(|geom| {
+                            layer
+                                .create_feature_fields(
+                                    geom,
+                                    &["rule"],
+                                    &[gdal::vector::FieldValue::StringValue(result.0.clone())],
+                                )
+                                .unwrap();
+                        })
+                    }
                 }
+                println!("{:-^50}\n", "");
             }
-            println!("{summary}");
         }
     }
 }
