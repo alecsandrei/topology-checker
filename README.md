@@ -11,13 +11,13 @@ topology-checker gdal-drivers read-and-write
 
 ## Performing checks
 ```sh
-topology-checker must-not-have-dangles LINES='./assets/lines.shp' DANGLES='./assets/dangles.shp'
+topology-checker must-not-have-dangles LINES="./assets/lines.shp" DANGLES="./assets/dangles.shp"
 
-topology-checker must-not-intersect LINES='./assets/lines.shp' SINGLE_POINTS='./assets/point_intersections.shp' COLLINEAR_LINES='./assets/line_intersections.shp'
+topology-checker must-not-intersect LINES="./assets/lines.shp" SINGLE_POINTS="./assets/point_intersections.shp" COLLINEAR_LINES="./assets/line_intersections.shp"
 
-topology-checker must-not-overlap GEOMETRY='./assets/buildings.shp' OVERLAPS='./assets/overlaps.shp'
+topology-checker must-not-overlap GEOMETRY="./assets/buildings.shp" OVERLAPS="./assets/overlaps.shp"
 
-topology-checker must-not-overlap GEOMETRY='./assets/buildings.shp' OVERLAPS='./assets/overlaps.shp' OTHER='./assets/buildings_other.shp'
+topology-checker must-not-overlap GEOMETRY="./assets/buildings.shp" OVERLAPS="./assets/overlaps.shp" OTHER="./assets/buildings_other.shp"
 ```
 
 # As a library
