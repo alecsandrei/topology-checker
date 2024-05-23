@@ -8,11 +8,7 @@ use geo::{
     GeoFloat, Geometry, Line, LineString, MultiLineString, MultiPoint, MultiPolygon, Point, Polygon,
 };
 use geozero::{gdal::process_geom, geo_types::GeoWriter};
-use std::{
-    borrow::Borrow,
-    fmt::Display,
-    path::PathBuf,
-};
+use std::{borrow::Borrow, fmt::Display, path::PathBuf};
 
 pub mod algorithm;
 pub mod prelude;
@@ -264,17 +260,20 @@ impl<T: GeoFloat> TopologyResults<T> {
             .create_vector_only(output)
             .map_err(|err| eprintln!("Failed to create gpkg with error {err}"))
             .unwrap();
+        let mut txn = dataset
+            .start_transaction()
+            .expect("Failed to start transaction.");
         let bar = "|";
         for result in self.0 {
-            println!("{:-^50}", result.0);
+            println!("{:-^60}", result.0);
             if result.1.is_valid() {
-                println!("{: <25}{: >25}", "| No topology errors found.", bar);
+                println!("{: <30}{: >30}", "| No topology errors found.", bar);
             } else {
                 for error in result.1.unwrap_err() {
-                    println!("{: <25}{: >25}", format!("| {}", error), bar);
+                    println!("{: <30}{: >30}", format!("| {}", error), bar);
                     let geometries: Vec<gdal::vector::Geometry> = error.to_gdal();
                     let geometry_type = geometries[0].geometry_type();
-                    let mut layers = dataset.borrow().layers().filter(|layer| {
+                    let mut layers = txn.borrow().layers().filter(|layer| {
                         layer.defn().geom_fields().next().unwrap().field_type() == geometry_type
                     });
                     if let Some(mut layer) = layers.next() {
@@ -288,7 +287,7 @@ impl<T: GeoFloat> TopologyResults<T> {
                                 .unwrap();
                         })
                     } else {
-                        let mut layer = dataset
+                        let mut layer = txn
                             .create_layer(LayerOptions {
                                 name: &geometries[0].geometry_name(),
                                 ty: geometry_type,
@@ -313,9 +312,10 @@ impl<T: GeoFloat> TopologyResults<T> {
                         })
                     }
                 }
-                println!("{:-^50}\n", "");
             }
+            println!("{:-^60}\n", "");
         }
+        txn.commit().expect("Failed to commit changes.");
     }
 }
 
