@@ -1,8 +1,14 @@
-use gdal::{vector::LayerAccess, Dataset, DatasetOptions, GdalOpenFlags, LayerOptions, Metadata};
+use gdal::{
+    errors::GdalError, vector::LayerAccess, Dataset, DatasetOptions, GdalOpenFlags, LayerOptions,
+    Metadata,
+};
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-pub fn open_dataset(path: &PathBuf) -> Dataset {
+pub fn open_dataset(path: &PathBuf) -> Result<Dataset, GdalError> {
+    if !path.exists() {
+        panic!("The provided path {:?} does not exist.", path)
+    }
     Dataset::open_ex(
         path,
         DatasetOptions {
@@ -10,7 +16,21 @@ pub fn open_dataset(path: &PathBuf) -> Dataset {
             ..Default::default()
         },
     )
-    .expect(format!("Could not read file {path:?}.").as_str())
+}
+
+pub fn create_dataset(out_path: &PathBuf, driver: Option<String>) -> Dataset {
+    // If driver is not provided, attempt to infer it from the file extension.
+    let driver_name = driver.unwrap_or_else(|| {
+        let driver = GdalDrivers
+            .infer_driver_name(out_path.extension().expect(format!("Path {out_path:?} does not have a valid extension.").as_str()).to_str().unwrap())
+            .expect("Could not infer driver by file extension. Consider specifying the GDAL_DRIVER environment variable.");
+        driver.1.get("write").unwrap().clone().expect(format!("Driver {} is not writeable.", driver.0).as_str());
+        driver.0
+    });
+    let drv = gdal::DriverManager::get_driver_by_name(&driver_name)
+        .expect(format!("Driver {driver_name} does not exist.").as_str());
+
+    drv.create_vector_only(out_path).unwrap()
 }
 
 pub fn geometries_to_file(

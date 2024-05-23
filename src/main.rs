@@ -231,7 +231,7 @@ use topology_checker::{
         explode_linestrings, flatten_linestrings, flatten_points, flatten_polygons,
         geometries_to_file, GdalDrivers,
     },
-    GeometryError, TopologyResult, TopologyResults, VectorDataset,
+    GeometryError, SummaryConfig, TopologyResult, TopologyResults, VectorDataset,
 };
 
 fn main() {
@@ -245,9 +245,11 @@ fn main() {
     }
 }
 
+type RuleName = String;
+
 /// Used to get the serialized rule name from a [Command] object.
 /// TODO: Find a better solution for this, it's really ugly.
-fn rule_name(command: &Command) -> String {
+fn rule_name(command: &Command) -> RuleName {
     let value = serde_json::to_value(command).unwrap();
     let geometry = value
         .as_object()
@@ -360,7 +362,7 @@ fn interactive_mode(args: TopologyCheckerArgs) {
             .collect(),
     );
     match args.command {
-        Command::Interactive { output } => results.summary(&output, None),
+        Command::Interactive { output } => results.summary(&output),
         _ => unreachable!(),
     }
 }
@@ -373,7 +375,7 @@ fn parse_rules(args: TopologyCheckerArgs) -> Option<TopologyResult<f64>> {
         Command::GdalDrivers(_) | Command::Interactive { .. } | Command::Utilities(_) => {
             unreachable!()
         }
-        Command::Point(command) => match command.command {
+        Command::Point(ref command) => match &command.command {
             PointRules::MustNotOverlap {
                 points,
                 overlaps,
@@ -381,24 +383,26 @@ fn parse_rules(args: TopologyCheckerArgs) -> Option<TopologyResult<f64>> {
             } => {
                 let vector_dataset = VectorDataset::new(&points);
                 let points = flatten_points(vector_dataset.to_geo().unwrap());
+                let srs = vector_dataset.crs();
+                let options = LayerOptions {
+                    name: "overlaps",
+                    srs: srs.as_ref(),
+                    ..Default::default()
+                };
                 if let Some(other) = other {
                     let other = flatten_points(VectorDataset::new(&other).to_geo().unwrap());
                     let result = points.must_not_overlap_with(other);
-                    if !result.is_valid() {
-                        if let Some(overlaps) = overlaps {
-                            result.unwrap_err_point().to_file(
-                                &overlaps,
-                                args.gdal_driver,
-                                Some(LayerOptions {
-                                    name: "overlaps",
-                                    srs: vector_dataset.crs().as_ref(),
-                                    ..Default::default()
-                                }),
-                            );
-                        }
-                        return None;
+                    if overlaps.is_some() {
+                        result.summary(SummaryConfig {
+                            rule_name: rule_name(&args.command),
+                            output: overlaps.as_ref(),
+                            options: options,
+                            ..Default::default()
+                        });
+                        None
+                    } else {
+                        Some(result)
                     }
-                    Some(result)
                 } else {
                     let result = points.must_not_overlap();
                     if !result.is_valid() {

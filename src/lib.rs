@@ -1,14 +1,14 @@
-use crate::util::{open_dataset, GdalDrivers};
+use crate::util::{create_dataset, open_dataset, GdalDrivers};
 use gdal::{
     spatial_ref::SpatialRef,
     vector::{LayerAccess, ToGdal},
-    Dataset, LayerOptions, Metadata,
+    Dataset, LayerOptions, Metadata, Transaction,
 };
 use geo::{
     GeoFloat, Geometry, Line, LineString, MultiLineString, MultiPoint, MultiPolygon, Point, Polygon,
 };
 use geozero::{gdal::process_geom, geo_types::GeoWriter};
-use std::{borrow::Borrow, fmt::Display, path::PathBuf};
+use std::{fmt::Display, path::PathBuf};
 
 pub mod algorithm;
 pub mod prelude;
@@ -19,7 +19,10 @@ pub struct VectorDataset(Dataset);
 
 impl VectorDataset {
     pub fn new(path: &PathBuf) -> Self {
-        VectorDataset(open_dataset(path))
+        match open_dataset(path) {
+            Ok(dataset) => VectorDataset(dataset),
+            Err(e) => panic!("Failed to open dataset with error {e}."),
+        }
     }
 
     pub fn to_geo(&self) -> geozero::error::Result<Vec<Geometry<f64>>> {
@@ -160,12 +163,132 @@ pub enum TopologyResult<T: GeoFloat> {
     Valid,
 }
 
+pub struct SummaryConfig<'a> {
+    pub rule_name: String,
+    pub output: Option<&'a PathBuf>,
+    pub options: LayerOptions<'a>,
+    pub dataset: Option<&'a mut Dataset>,
+    pub transaction: Option<&'a mut Transaction<'a>>,
+}
+
+impl<'a> Default for SummaryConfig<'a> {
+    fn default() -> Self {
+        SummaryConfig {
+            rule_name: String::new(),
+            output: None,
+            options: LayerOptions {
+                ..Default::default()
+            },
+            dataset: None,
+            transaction: None,
+        }
+    }
+}
+
 impl<T: GeoFloat> TopologyResult<T> {
     pub fn unwrap_err(self) -> Vec<GeometryError<T>> {
         match self {
             Self::Errors(geometry_errors) => geometry_errors,
             Self::Valid => panic!("Called unwrap_err on a Valid variant."),
         }
+    }
+
+    /// Provides the possibility of writing into a [Dataset] or a [Transaction].
+    /// If 'dataset' or 'transaction' are not provided but 'output' is, create
+    /// a dataset at that location. Additionally provide [LayerOptions].
+    pub fn summary(self, config: SummaryConfig) {
+        let SummaryConfig {
+            rule_name,
+            output,
+            options,
+            mut dataset,
+            mut transaction,
+        } = config;
+
+        // We make this created_dataset object to store the
+        // created dataset so it lives long enough.
+        let mut created_dataset = None;
+        {
+            // This scope creates a dataset in case it was not provided.
+            if dataset.is_none() && transaction.is_none() && output.is_some() {
+                let _ = created_dataset.insert(create_dataset(output.unwrap(), None));
+                let _ = dataset.insert(created_dataset.as_mut().unwrap());
+            }
+        }
+        let transaction_mut = &mut transaction;
+        let dataset_mut = &mut dataset;
+        if dataset_mut.is_none() && transaction_mut.is_none() && output.is_some() {}
+        println!("{:-^60}", rule_name);
+        let bar = "|";
+        if self.is_valid() {
+            println!("{: <30}{: >30}", "| No topology errors found.", bar);
+        } else {
+            for error in self.unwrap_err() {
+                println!("{: <30}{: >30}", format!("| {}", error), bar);
+                if output.is_some() {
+                    let geometries: Vec<gdal::vector::Geometry> = error.to_gdal();
+                    let geometry_type = geometries[0].geometry_type();
+                    let mut layer = None;
+                    if let Some(ref transaction) = transaction_mut {
+                        layer = transaction.layers().find_map(|layer| {
+                            if layer.defn().geom_fields().next().unwrap().field_type()
+                                == geometry_type
+                            {
+                                return Some(layer);
+                            }
+                            None
+                        });
+                    } else if let Some(ref dataset) = dataset_mut {
+                        layer = dataset.layers().find_map(|layer| {
+                            if layer.defn().geom_fields().next().unwrap().field_type()
+                                == geometry_type
+                            {
+                                return Some(layer);
+                            }
+                            None
+                        });
+                    }
+                    if let Some(mut layer) = layer {
+                        geometries.into_iter().for_each(|geom| {
+                            layer
+                                .create_feature_fields(
+                                    geom,
+                                    &["rule"],
+                                    &[gdal::vector::FieldValue::StringValue(rule_name.to_string())],
+                                )
+                                .unwrap();
+                        })
+                    } else {
+                        let mut layer = None;
+                        if let Some(transaction) = transaction_mut {
+                            let _ =
+                                layer.insert(transaction.create_layer(options.clone()).unwrap());
+                        }
+                        if let Some(dataset) = dataset_mut {
+                            let _ = layer.insert(dataset.create_layer(options.clone()).unwrap());
+                        }
+                        let field = gdal::vector::FieldDefn::new(
+                            "rule",
+                            gdal::vector::OGRFieldType::OFTString,
+                        )
+                        .unwrap();
+                        field.add_to_layer(layer.as_mut().unwrap()).unwrap();
+                        geometries.into_iter().for_each(|geom| {
+                            layer
+                                .as_mut()
+                                .unwrap()
+                                .create_feature_fields(
+                                    geom,
+                                    &["rule"],
+                                    &[gdal::vector::FieldValue::StringValue(rule_name.to_string())],
+                                )
+                                .unwrap();
+                        })
+                    }
+                }
+            }
+        }
+        println!("{:-^60}\n", "");
     }
 
     pub fn unwrap_err_point(self) -> GeometryError<T> {
@@ -248,10 +371,12 @@ impl<T: GeoFloat> TopologyResult<T> {
     }
 }
 
-pub struct TopologyResults<T: GeoFloat>(pub Vec<(String, TopologyResult<T>)>);
+type RuleName = String;
+
+pub struct TopologyResults<T: GeoFloat>(pub Vec<(RuleName, TopologyResult<T>)>);
 
 impl<T: GeoFloat> TopologyResults<T> {
-    pub fn summary(self, output: &PathBuf, srs: Option<&SpatialRef>) {
+    pub fn summary(self, output: &PathBuf) {
         let driver = gdal::DriverManager::get_driver_by_name(
             &GdalDrivers.infer_driver_name("gpkg").unwrap().0,
         )
@@ -263,57 +388,12 @@ impl<T: GeoFloat> TopologyResults<T> {
         let mut txn = dataset
             .start_transaction()
             .expect("Failed to start transaction.");
-        let bar = "|";
         for result in self.0 {
-            println!("{:-^60}", result.0);
-            if result.1.is_valid() {
-                println!("{: <30}{: >30}", "| No topology errors found.", bar);
-            } else {
-                for error in result.1.unwrap_err() {
-                    println!("{: <30}{: >30}", format!("| {}", error), bar);
-                    let geometries: Vec<gdal::vector::Geometry> = error.to_gdal();
-                    let geometry_type = geometries[0].geometry_type();
-                    let mut layers = txn.borrow().layers().filter(|layer| {
-                        layer.defn().geom_fields().next().unwrap().field_type() == geometry_type
-                    });
-                    if let Some(mut layer) = layers.next() {
-                        geometries.into_iter().for_each(|geom| {
-                            layer
-                                .create_feature_fields(
-                                    geom,
-                                    &["rule"],
-                                    &[gdal::vector::FieldValue::StringValue(result.0.clone())],
-                                )
-                                .unwrap();
-                        })
-                    } else {
-                        let mut layer = txn
-                            .create_layer(LayerOptions {
-                                name: &geometries[0].geometry_name(),
-                                ty: geometry_type,
-                                srs: srs,
-                                ..Default::default()
-                            })
-                            .unwrap();
-                        let field = gdal::vector::FieldDefn::new(
-                            "rule",
-                            gdal::vector::OGRFieldType::OFTString,
-                        )
-                        .unwrap();
-                        field.add_to_layer(&layer).unwrap();
-                        geometries.into_iter().for_each(|geom| {
-                            layer
-                                .create_feature_fields(
-                                    geom,
-                                    &["rule"],
-                                    &[gdal::vector::FieldValue::StringValue(result.0.clone())],
-                                )
-                                .unwrap();
-                        })
-                    }
-                }
-            }
-            println!("{:-^60}\n", "");
+            result.1.summary(SummaryConfig {
+                rule_name: result.0,
+                dataset: Some(&mut txn),
+                ..Default::default()
+            })
         }
         txn.commit().expect("Failed to commit changes.");
     }
