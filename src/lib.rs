@@ -42,7 +42,7 @@ impl VectorDataset {
         }
     }
 
-    pub fn crs(&self) -> Option<SpatialRef> {
+    pub fn srs(&self) -> Option<SpatialRef> {
         let layer =
             self.0.layers().next().expect(
                 format!("Dataset {} has no layers.", self.0.description().unwrap()).as_str(),
@@ -130,24 +130,15 @@ impl<T: GeoFloat> GeometryError<T> {
         }
     }
     pub fn to_file(
-        self,
+        &self,
         out_path: &PathBuf,
         driver: Option<String>,
         options: Option<LayerOptions>,
     ) {
         let geometries = self.to_gdal();
         // If driver is not provided, attempt to infer it from the file extension.
-        let driver_name = driver.unwrap_or_else(|| {
-        let driver = GdalDrivers
-            .infer_driver_name(out_path.extension().expect(format!("Path {out_path:?} does not have a valid extension.").as_str()).to_str().unwrap())
-            .expect("Could not infer driver by file extension. Consider specifying the GDAL_DRIVER environment variable.");
-        driver.1.get("write").unwrap().clone().expect(format!("Driver {} is not writeable.", driver.0).as_str());
-        driver.0
-    });
-        let drv = gdal::DriverManager::get_driver_by_name(&driver_name)
-            .expect(format!("Driver {driver_name} does not exist.").as_str());
-
-        let mut ds = drv.create_vector_only(out_path).unwrap();
+        let mut ds = create_dataset(out_path, driver)
+            .unwrap_or_else(|err| panic!("Failed creating dataset with error {err}."));
         let options = options.unwrap_or(LayerOptions {
             ..Default::default()
         });
@@ -186,7 +177,7 @@ impl<'a> Default for SummaryConfig<'a> {
 }
 
 impl<T: GeoFloat> TopologyResult<T> {
-    pub fn unwrap_err(self) -> Vec<GeometryError<T>> {
+    pub fn unwrap_err(&self) -> &Vec<GeometryError<T>> {
         match self {
             Self::Errors(geometry_errors) => geometry_errors,
             Self::Valid => panic!("Called unwrap_err on a Valid variant."),
@@ -196,7 +187,7 @@ impl<T: GeoFloat> TopologyResult<T> {
     /// Provides the possibility of writing into a [Dataset] or a [Transaction].
     /// If 'dataset' or 'transaction' are not provided but 'output' is, create
     /// a dataset at that location. Additionally provide [LayerOptions].
-    pub fn summary(self, config: SummaryConfig) {
+    pub fn summary(&self, config: SummaryConfig) {
         let SummaryConfig {
             rule_name,
             output,
@@ -211,7 +202,10 @@ impl<T: GeoFloat> TopologyResult<T> {
         {
             // This scope creates a dataset in case it was not provided.
             if dataset.is_none() && transaction.is_none() && output.is_some() {
-                let _ = created_dataset.insert(create_dataset(output.unwrap(), None));
+                let _ = created_dataset.insert(
+                    create_dataset(output.unwrap(), None)
+                        .unwrap_or_else(|err| panic!("Failed to create dataset with error {err}")),
+                );
                 let _ = dataset.insert(created_dataset.as_mut().unwrap());
             }
         }
@@ -291,7 +285,7 @@ impl<T: GeoFloat> TopologyResult<T> {
         println!("{:-^60}\n", "");
     }
 
-    pub fn unwrap_err_point(self) -> GeometryError<T> {
+    pub fn unwrap_err_point(&self) -> &GeometryError<T> {
         self.unwrap_err()
             .into_iter()
             .find(|error| {
@@ -303,7 +297,7 @@ impl<T: GeoFloat> TopologyResult<T> {
             .expect("No point errors exist.")
     }
 
-    pub fn unwrap_err_linestring(self) -> GeometryError<T> {
+    pub fn unwrap_err_linestring(&self) -> &GeometryError<T> {
         self.unwrap_err()
             .into_iter()
             .find(|error| {
@@ -315,7 +309,7 @@ impl<T: GeoFloat> TopologyResult<T> {
             .expect("No linestring errors exist.")
     }
 
-    pub fn unwrap_err_polygon(self) -> GeometryError<T> {
+    pub fn unwrap_err_polygon(&self) -> &GeometryError<T> {
         self.unwrap_err()
             .into_iter()
             .find(|error| {
@@ -327,7 +321,7 @@ impl<T: GeoFloat> TopologyResult<T> {
             .expect("No polygon errors exist.")
     }
 
-    pub fn unwrap_err_multipoint(self) -> GeometryError<T> {
+    pub fn unwrap_err_multipoint(&self) -> &GeometryError<T> {
         self.unwrap_err()
             .into_iter()
             .find(|error| {
@@ -339,7 +333,7 @@ impl<T: GeoFloat> TopologyResult<T> {
             .expect("No multipoint errors exist.")
     }
 
-    pub fn unwrap_err_multilinestring(self) -> GeometryError<T> {
+    pub fn unwrap_err_multilinestring(&self) -> &GeometryError<T> {
         self.unwrap_err()
             .into_iter()
             .find(|error| {
@@ -351,7 +345,7 @@ impl<T: GeoFloat> TopologyResult<T> {
             .expect("No multilinestring errors exist.")
     }
 
-    pub fn unwrap_err_multipolygon(self) -> GeometryError<T> {
+    pub fn unwrap_err_multipolygon(&self) -> &GeometryError<T> {
         self.unwrap_err()
             .into_iter()
             .find(|error| {
@@ -383,8 +377,7 @@ impl<T: GeoFloat> TopologyResults<T> {
         .unwrap();
         let mut dataset = driver
             .create_vector_only(output)
-            .map_err(|err| eprintln!("Failed to create gpkg with error {err}"))
-            .unwrap();
+            .unwrap_or_else(|err| panic!("Failed to create gpkg with error {err}"));
         let mut txn = dataset
             .start_transaction()
             .expect("Failed to start transaction.");

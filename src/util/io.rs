@@ -18,7 +18,7 @@ pub fn open_dataset(path: &PathBuf) -> Result<Dataset, GdalError> {
     )
 }
 
-pub fn create_dataset(out_path: &PathBuf, driver: Option<String>) -> Dataset {
+pub fn create_dataset(out_path: &PathBuf, driver: Option<String>) -> Result<Dataset, GdalError> {
     // If driver is not provided, attempt to infer it from the file extension.
     let driver_name = driver.unwrap_or_else(|| {
         let driver = GdalDrivers
@@ -30,7 +30,7 @@ pub fn create_dataset(out_path: &PathBuf, driver: Option<String>) -> Dataset {
     let drv = gdal::DriverManager::get_driver_by_name(&driver_name)
         .expect(format!("Driver {driver_name} does not exist.").as_str());
 
-    drv.create_vector_only(out_path).unwrap()
+    drv.create_vector_only(out_path)
 }
 
 pub fn geometries_to_file(

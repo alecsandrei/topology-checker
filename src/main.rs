@@ -90,10 +90,18 @@ mod args {
             #[arg(value_parser = parse_key_val::<String, PathBuf>)]
             /// The output overlaps
             overlaps: Option<PathBuf>,
+        },
+        #[command(arg_required_else_help(true))]
+        MustNotOverlapWith {
             #[arg(value_parser = parse_key_val::<String, PathBuf>)]
-            /// Optional geometry to check against. By default compares
-            /// against other features in the input.
-            other: Option<PathBuf>,
+            /// Input lines
+            points: PathBuf,
+            #[arg(value_parser = parse_key_val::<String, PathBuf>)]
+            /// Input points to check against
+            other: PathBuf,
+            #[arg(value_parser = parse_key_val::<String, PathBuf>)]
+            /// The output overlaps
+            overlaps: Option<PathBuf>,
         },
     }
 
@@ -108,13 +116,27 @@ mod args {
             #[arg(value_parser = parse_key_val::<String, PathBuf>)]
             /// The output overlaps
             overlaps: Option<PathBuf>,
-            /// Whether or not to check for self overlaps.
-            /// This can't be true if 'other' has been specified.
-            #[arg(long, short, action)]
-            self_overlap: Option<bool>,
+        },
+        #[command(arg_required_else_help(true))]
+        MustNotOverlapWith {
             #[arg(value_parser = parse_key_val::<String, PathBuf>)]
-            /// Optional geometry to check against. By default compares to itself
-            other: Option<PathBuf>,
+            /// Input lines
+            lines: PathBuf,
+            #[arg(value_parser = parse_key_val::<String, PathBuf>)]
+            /// Input lines to check against
+            other: PathBuf,
+            #[arg(value_parser = parse_key_val::<String, PathBuf>)]
+            /// The output overlaps
+            overlaps: Option<PathBuf>,
+        },
+        #[command(arg_required_else_help(true))]
+        MustNotSelfOverlap {
+            #[arg(value_parser = parse_key_val::<String, PathBuf>)]
+            /// Input lines
+            lines: PathBuf,
+            #[arg(value_parser = parse_key_val::<String, PathBuf>)]
+            /// The output overlaps
+            overlaps: Option<PathBuf>,
         },
         #[command(arg_required_else_help(true))]
         MustNotHaveDangles {
@@ -150,9 +172,18 @@ mod args {
             #[arg(value_parser = parse_key_val::<String, PathBuf>)]
             /// The output overlaps
             overlaps: Option<PathBuf>,
+        },
+        #[command(arg_required_else_help(true))]
+        MustNotOverlapWith {
             #[arg(value_parser = parse_key_val::<String, PathBuf>)]
-            /// Optional geometry to check against. By default compares to itself
-            other: Option<PathBuf>,
+            /// Input polygons
+            polygons: PathBuf,
+            #[arg(value_parser = parse_key_val::<String, PathBuf>)]
+            /// Input polygons to check against
+            other: PathBuf,
+            #[arg(value_parser = parse_key_val::<String, PathBuf>)]
+            /// The output overlaps
+            overlaps: Option<PathBuf>,
         },
     }
 
@@ -218,7 +249,7 @@ use args::{
 use clap::Parser;
 use colored::Colorize;
 use gdal::{vector::ToGdal, LayerOptions};
-use rayon::iter::{ParallelBridge, ParallelIterator};
+use rayon::{iter::ParallelBridge, iter::ParallelIterator};
 use regex::Regex;
 use serde::Deserialize;
 use topology_checker::{
@@ -320,13 +351,19 @@ fn interactive_mode(args: TopologyCheckerArgs) {
                 continue 'outer;
             }
             args.insert(
-                subcaptures.next().unwrap().unwrap().as_str(),
                 subcaptures
                     .next()
                     .unwrap()
                     .unwrap()
                     .as_str()
-                    .replace("\"", ""),
+                    .replace("--", "")
+                    .replace("-", "_"),
+                subcaptures
+                    .next()
+                    .unwrap()
+                    .unwrap()
+                    .as_str()
+                    .replace("\"", ""), // remove quotation marks
             );
         }
 
@@ -335,10 +372,14 @@ fn interactive_mode(args: TopologyCheckerArgs) {
                 "command": {rule: args}
             }
         });
+        println!("{json:?}");
         let deserialized = Command::deserialize(json);
         match deserialized {
             Ok(deserialized) => {
                 if commands.contains(&deserialized) {
+                    println!("{:?}", args);
+                    println!("{:?}", deserialized);
+                    println!("{:?}", commands);
                     eprintln!("{}", "The command was already added".red())
                 } else {
                     commands.push(deserialized);
@@ -371,78 +412,66 @@ fn interactive_mode(args: TopologyCheckerArgs) {
 /// the geometries are saved at that specific location, returning None.
 /// Otherwise, Some(TopologyResult) is returned.
 fn parse_rules(args: TopologyCheckerArgs) -> Option<TopologyResult<f64>> {
+    let rule_name = rule_name(&args.command);
+    let options = LayerOptions {
+        name: &rule_name.clone(),
+        ..Default::default()
+    };
+    let mut config = SummaryConfig {
+        rule_name: rule_name,
+        options: options,
+        ..Default::default()
+    };
     match args.command {
-        Command::GdalDrivers(_) | Command::Interactive { .. } | Command::Utilities(_) => {
-            unreachable!()
-        }
         Command::Point(ref command) => match &command.command {
-            PointRules::MustNotOverlap {
+            PointRules::MustNotOverlap { points, overlaps } => {
+                let vector_dataset = VectorDataset::new(&points);
+                let points = flatten_points(vector_dataset.to_geo().unwrap());
+                let srs = vector_dataset.srs();
+                let result = points.must_not_overlap();
+                if overlaps.is_some() {
+                    config.output = overlaps.as_ref();
+                    config.options.srs = srs.as_ref();
+                    result.summary(config);
+                    return None;
+                }
+                result.summary(config);
+                Some(result)
+            }
+            PointRules::MustNotOverlapWith {
                 points,
-                overlaps,
                 other,
+                overlaps,
             } => {
                 let vector_dataset = VectorDataset::new(&points);
                 let points = flatten_points(vector_dataset.to_geo().unwrap());
-                let srs = vector_dataset.crs();
-                let options = LayerOptions {
-                    name: "overlaps",
-                    srs: srs.as_ref(),
-                    ..Default::default()
-                };
-                if let Some(other) = other {
-                    let other = flatten_points(VectorDataset::new(&other).to_geo().unwrap());
-                    let result = points.must_not_overlap_with(other);
-                    if overlaps.is_some() {
-                        result.summary(SummaryConfig {
-                            rule_name: rule_name(&args.command),
-                            output: overlaps.as_ref(),
-                            options: options,
-                            ..Default::default()
-                        });
-                        None
-                    } else {
-                        Some(result)
-                    }
-                } else {
-                    let result = points.must_not_overlap();
-                    if !result.is_valid() {
-                        if let Some(overlaps) = overlaps {
-                            result.unwrap_err_point().to_file(
-                                &overlaps,
-                                args.gdal_driver,
-                                Some(LayerOptions {
-                                    name: "overlaps",
-                                    srs: vector_dataset.crs().as_ref(),
-                                    ..Default::default()
-                                }),
-                            );
-                            return None;
-                        }
-                    }
-                    Some(result)
+                let srs = vector_dataset.srs();
+                let other = flatten_points(VectorDataset::new(&other).to_geo().unwrap());
+                let result = points.must_not_overlap_with(other);
+                if overlaps.is_some() {
+                    config.output = overlaps.as_ref();
+                    config.options.srs = srs.as_ref();
+                    result.summary(config);
+                    return None;
                 }
+                result.summary(config);
+                Some(result)
             }
         },
         Command::Line(command) => match command.command {
             LineRules::MustNotHaveDangles { lines, dangles } => {
                 let vector_dataset = VectorDataset::new(&lines);
+                let srs = vector_dataset.srs();
                 let lines = vector_dataset.to_geo().unwrap();
                 let lines = flatten_linestrings(lines);
                 let result = lines.must_not_have_dangles();
-                if !result.is_valid() {
-                    if let Some(dangles) = dangles {
-                        result.unwrap_err_point().to_file(
-                            &dangles,
-                            args.gdal_driver,
-                            Some(LayerOptions {
-                                name: "dangles",
-                                srs: vector_dataset.crs().as_ref(),
-                                ..Default::default()
-                            }),
-                        );
-                        return None;
-                    }
-                }
+                config.output = dangles.as_ref();
+                config.options.srs = srs.as_ref();
+                if dangles.is_some() {
+                    result.summary(config);
+                    return None;
+                };
+                result.summary(config);
                 Some(result)
             }
             LineRules::MustNotIntersect {
@@ -451,143 +480,126 @@ fn parse_rules(args: TopologyCheckerArgs) -> Option<TopologyResult<f64>> {
                 collinear_lines,
             } => {
                 let vector_dataset = VectorDataset::new(&lines);
+                let srs = vector_dataset.srs();
                 let lines = vector_dataset.to_geo().unwrap();
                 let lines = flatten_linestrings(lines);
                 let result = lines.must_not_intersect();
-                if !result.is_valid() {
-                    if single_points.is_some() | collinear_lines.is_some() {
-                        for error in result.unwrap_err().into_iter() {
-                            if let GeometryError::Point(_) = error {
-                                if let Some(single_points) = single_points.clone() {
-                                    error.to_file(
-                                        &single_points,
-                                        args.gdal_driver.clone(),
-                                        Some(LayerOptions {
-                                            name: "intersections",
-                                            srs: vector_dataset.crs().as_ref(),
-                                            ..Default::default()
-                                        }),
-                                    );
-                                }
-                            } else if let GeometryError::LineString(_) = error {
-                                if let Some(collinear_lines) = collinear_lines.clone() {
-                                    error.to_file(
-                                        &collinear_lines,
-                                        args.gdal_driver.clone(),
-                                        Some(LayerOptions {
-                                            name: "intersections",
-                                            srs: vector_dataset.crs().as_ref(),
-                                            ..Default::default()
-                                        }),
-                                    );
-                                }
+                let mut options = config.options.clone();
+                // Some workaround for the case where the rule can have
+                // two output files.
+                if single_points.is_some() | collinear_lines.is_some() {
+                    options.srs = srs.as_ref();
+                    for error in result.unwrap_err() {
+                        if let GeometryError::Point(_) = error {
+                            if let Some(ref single_points) = single_points {
+                                error.to_file(
+                                    &single_points,
+                                    args.gdal_driver.clone(),
+                                    Some(options.clone()),
+                                )
                             }
                         }
-                        return None;
+                        if let GeometryError::LineString(_) = error {
+                            if let Some(ref collinear_lines) = collinear_lines {
+                                error.to_file(
+                                    &collinear_lines,
+                                    args.gdal_driver.clone(),
+                                    Some(options.clone()),
+                                )
+                            }
+                        }
                     }
+                    return None;
                 }
+                result.summary(config);
                 Some(result)
             }
-            LineRules::MustNotOverlap {
-                lines,
-                overlaps,
-                self_overlap,
-                other,
-            } => {
+            LineRules::MustNotOverlap { lines, overlaps } => {
                 let vector_dataset = VectorDataset::new(&lines);
+                let srs = vector_dataset.srs();
                 let lines = vector_dataset.to_geo().unwrap();
                 let lines = flatten_linestrings(lines);
-                if let Some(other) = other {
-                    let other = flatten_linestrings(VectorDataset::new(&other).to_geo().unwrap());
-                    let result = lines.must_not_overlap_with(other);
-                    if !result.is_valid() {
-                        if let Some(overlaps) = overlaps {
-                            result.unwrap_err_linestring().to_file(
-                                &overlaps,
-                                args.gdal_driver.clone(),
-                                Some(LayerOptions {
-                                    name: "overlaps",
-                                    srs: vector_dataset.crs().as_ref(),
-                                    ..Default::default()
-                                }),
-                            );
-                            return None;
-                        }
-                    }
-                    Some(result)
-                } else {
-                    let result;
-                    if self_overlap.is_some() && self_overlap.unwrap() {
-                        result = lines.must_not_self_overlap();
-                    } else {
-                        result = lines.must_not_overlap();
-                    }
-                    if !result.is_valid() {
-                        if let Some(overlaps) = overlaps {
-                            result.unwrap_err_linestring().to_file(
-                                &overlaps,
-                                args.gdal_driver.clone(),
-                                Some(LayerOptions {
-                                    name: "overlaps",
-                                    srs: vector_dataset.crs().as_ref(),
-                                    ..Default::default()
-                                }),
-                            );
-                            return None;
-                        }
-                    }
-                    Some(result)
+                let result = lines.must_not_overlap();
+                if overlaps.is_some() {
+                    config.options.srs = srs.as_ref();
+                    config.output = overlaps.as_ref();
+                    result.summary(config);
+                    return None;
                 }
+                result.summary(config);
+                Some(result)
+            }
+            LineRules::MustNotOverlapWith {
+                lines,
+                other,
+                overlaps,
+            } => {
+                let vector_dataset = VectorDataset::new(&lines);
+                let srs = vector_dataset.srs();
+                let lines = vector_dataset.to_geo().unwrap();
+                let lines = flatten_linestrings(lines);
+                let other = flatten_linestrings(VectorDataset::new(&other).to_geo().unwrap());
+                let result = lines.must_not_overlap_with(other);
+                if overlaps.is_some() {
+                    config.options.srs = srs.as_ref();
+                    config.output = overlaps.as_ref();
+                    result.summary(config);
+                    return None;
+                }
+                result.summary(config);
+                Some(result)
+            }
+            LineRules::MustNotSelfOverlap { lines, overlaps } => {
+                let vector_dataset = VectorDataset::new(&lines);
+                let srs = vector_dataset.srs();
+                let lines = vector_dataset.to_geo().unwrap();
+                let lines = flatten_linestrings(lines);
+                let result = lines.must_not_self_overlap();
+                if overlaps.is_some() {
+                    config.options.srs = srs.as_ref();
+                    config.output = overlaps.as_ref();
+                    result.summary(config);
+                    return None;
+                }
+                result.summary(config);
+                Some(result)
             }
         },
         Command::Polygon(command) => match command.command {
-            PolygonRules::MustNotOverlap {
-                polygons,
-                overlaps,
-                other,
-            } => {
+            PolygonRules::MustNotOverlap { polygons, overlaps } => {
                 let vector_dataset = VectorDataset::new(&polygons);
+                let srs = vector_dataset.srs();
                 let polygons = vector_dataset.to_geo().unwrap();
                 let polygons = flatten_polygons(polygons);
-                if let Some(other) = other {
-                    let other_polygons = VectorDataset::new(&other).to_geo().unwrap();
-                    let other_polygons = flatten_polygons(other_polygons);
-                    let result = polygons.must_not_overlap_with(other_polygons);
-                    if !result.is_valid() {
-                        if let Some(overlaps) = overlaps {
-                            result.unwrap_err_polygon().to_file(
-                                &overlaps,
-                                args.gdal_driver,
-                                Some(LayerOptions {
-                                    name: "overlaps",
-                                    srs: vector_dataset.crs().as_ref(),
-                                    ..Default::default()
-                                }),
-                            );
-                            return None;
-                        }
-                    }
-                    Some(result)
-                } else {
-                    let result = polygons.must_not_overlap();
-                    if !result.is_valid() {
-                        println!("No errors found.")
-                    } else {
-                        if let Some(overlaps) = overlaps {
-                            result.unwrap_err_polygon().to_file(
-                                &overlaps,
-                                args.gdal_driver,
-                                Some(LayerOptions {
-                                    name: "overlaps",
-                                    srs: vector_dataset.crs().as_ref(),
-                                    ..Default::default()
-                                }),
-                            );
-                            return None;
-                        }
-                    }
-                    Some(result)
+                let result = polygons.must_not_overlap();
+                if overlaps.is_some() {
+                    config.output = overlaps.as_ref();
+                    config.options.srs = srs.as_ref();
+                    result.summary(config);
+                    return None;
                 }
+                result.summary(config);
+                Some(result)
+            }
+            PolygonRules::MustNotOverlapWith {
+                polygons,
+                other,
+                overlaps,
+            } => {
+                let vector_dataset = VectorDataset::new(&polygons);
+                let srs = vector_dataset.srs();
+                let polygons = vector_dataset.to_geo().unwrap();
+                let polygons = flatten_polygons(polygons);
+                let other = flatten_polygons(VectorDataset::new(&other).to_geo().unwrap());
+                let result = polygons.must_not_overlap_with(other);
+                if overlaps.is_some() {
+                    config.output = overlaps.as_ref();
+                    config.options.srs = srs.as_ref();
+                    result.summary(config);
+                    return None;
+                }
+                result.summary(config);
+                Some(result)
             }
         },
         Command::Geometry(command) => match command.command {
@@ -596,25 +608,22 @@ fn parse_rules(args: TopologyCheckerArgs) -> Option<TopologyResult<f64>> {
                 multiparts,
             } => {
                 let dataset = VectorDataset::new(&geometries);
+                let srs = dataset.srs();
                 let geometry = dataset.to_geo().unwrap();
                 let result = geometry.must_not_be_multipart();
-                if !result.is_valid() {
-                    if let Some(multiparts) = multiparts {
-                        result.unwrap_err().into_iter().next().unwrap().to_file(
-                            &multiparts,
-                            args.gdal_driver,
-                            Some(LayerOptions {
-                                name: "multiparts",
-                                srs: dataset.crs().as_ref(),
-                                ..Default::default()
-                            }),
-                        );
-                        return None;
-                    }
+                if multiparts.is_some() {
+                    config.options.srs = srs.as_ref();
+                    config.output = multiparts.as_ref();
+                    result.summary(config);
+                    return None;
                 }
+                result.summary(config);
                 Some(result)
             }
         },
+        Command::GdalDrivers(_) | Command::Interactive { .. } | Command::Utilities(_) => {
+            unreachable!()
+        }
     }
 }
 
@@ -659,7 +668,7 @@ fn parse_utils(args: TopologyCheckerArgs) {
                     args.gdal_driver,
                     Some(LayerOptions {
                         name: "merged_linestrings",
-                        srs: dataset.crs().as_ref(),
+                        srs: dataset.srs().as_ref(),
                         ..Default::default()
                     }),
                 )
@@ -681,7 +690,7 @@ fn parse_utils(args: TopologyCheckerArgs) {
                     args.gdal_driver,
                     Some(LayerOptions {
                         name: "merged_linestrings",
-                        srs: dataset.crs().as_ref(),
+                        srs: dataset.srs().as_ref(),
                         ..Default::default()
                     }),
                 )
