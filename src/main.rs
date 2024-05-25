@@ -262,7 +262,7 @@ use topology_checker::{
         explode_linestrings, flatten_linestrings, flatten_points, flatten_polygons,
         geometries_to_file, GdalDrivers,
     },
-    GeometryError, SummaryConfig, TopologyResult, TopologyResults, VectorDataset,
+    ExportConfig, GeometryError, TopologyResult, TopologyResults, VectorDataset,
 };
 
 fn main() {
@@ -270,7 +270,7 @@ fn main() {
     match args.command {
         Command::Interactive { .. } => interactive_mode(args),
         Command::Geometry(_) | Command::Line(_) | Command::Point(_) | Command::Polygon(_) => {
-            parse_rules(args);
+            parse_rules(args, true);
         }
         Command::Utilities(_) | Command::GdalDrivers(_) => parse_utils(args),
     }
@@ -372,18 +372,17 @@ fn interactive_mode(args: TopologyCheckerArgs) {
                 "command": {rule: args}
             }
         });
-        println!("{json:?}");
         let deserialized = Command::deserialize(json);
         match deserialized {
             Ok(deserialized) => {
                 if commands.contains(&deserialized) {
-                    println!("{:?}", args);
-                    println!("{:?}", deserialized);
-                    println!("{:?}", commands);
                     eprintln!("{}", "The command was already added".red())
                 } else {
                     commands.push(deserialized);
-                    println!("{}", "Command successfully added.".green())
+                    println!(
+                        "{}",
+                        format!("Command {} successfully added.", commands.len()).green()
+                    )
                 }
             }
             Err(error) => eprintln!("{}", error.to_string().red()),
@@ -392,51 +391,49 @@ fn interactive_mode(args: TopologyCheckerArgs) {
     let results = TopologyResults(
         commands
             .into_iter()
+            .enumerate()
             .par_bridge()
-            .map(|command| {
+            .map(|(mut index, command)| {
+                index += 1;
                 let args = TopologyCheckerArgs {
                     gdal_driver: args.gdal_driver.clone(),
                     command: command,
                 };
-                (rule_name(&args.command), parse_rules(args).unwrap())
+                let rule_name = format!("{}-{}", index, rule_name(&args.command));
+                (rule_name, parse_rules(args, false))
             })
             .collect(),
     );
     match args.command {
-        Command::Interactive { output } => results.summary(&output),
+        Command::Interactive { output } => results.export(&output),
         _ => unreachable!(),
     }
 }
 
-/// If the output location is provided, the [TopologyResult] gets consumed and
-/// the geometries are saved at that specific location, returning None.
-/// Otherwise, Some(TopologyResult) is returned.
-fn parse_rules(args: TopologyCheckerArgs) -> Option<TopologyResult<f64>> {
+fn parse_rules(args: TopologyCheckerArgs, summarize: bool) -> TopologyResult<f64> {
     let rule_name = rule_name(&args.command);
     let options = LayerOptions {
         name: &rule_name.clone(),
         ..Default::default()
     };
-    let mut config = SummaryConfig {
-        rule_name: rule_name,
+    let mut config = ExportConfig {
+        rule_name: rule_name.clone(),
         options: options,
         ..Default::default()
     };
-    match args.command {
+    let result = match args.command {
         Command::Point(ref command) => match &command.command {
             PointRules::MustNotOverlap { points, overlaps } => {
                 let vector_dataset = VectorDataset::new(&points);
                 let points = flatten_points(vector_dataset.to_geo().unwrap());
                 let srs = vector_dataset.srs();
                 let result = points.must_not_overlap();
-                if overlaps.is_some() {
+                if overlaps.is_some() && !result.is_valid() {
                     config.output = overlaps.as_ref();
                     config.options.srs = srs.as_ref();
-                    result.summary(config);
-                    return None;
+                    result.unwrap_err_point().export(config)
                 }
-                result.summary(config);
-                Some(result)
+                result
             }
             PointRules::MustNotOverlapWith {
                 points,
@@ -448,14 +445,12 @@ fn parse_rules(args: TopologyCheckerArgs) -> Option<TopologyResult<f64>> {
                 let srs = vector_dataset.srs();
                 let other = flatten_points(VectorDataset::new(&other).to_geo().unwrap());
                 let result = points.must_not_overlap_with(other);
-                if overlaps.is_some() {
+                if overlaps.is_some() && !result.is_valid() {
                     config.output = overlaps.as_ref();
                     config.options.srs = srs.as_ref();
-                    result.summary(config);
-                    return None;
+                    result.unwrap_err_point().export(config)
                 }
-                result.summary(config);
-                Some(result)
+                result
             }
         },
         Command::Line(command) => match command.command {
@@ -465,14 +460,12 @@ fn parse_rules(args: TopologyCheckerArgs) -> Option<TopologyResult<f64>> {
                 let lines = vector_dataset.to_geo().unwrap();
                 let lines = flatten_linestrings(lines);
                 let result = lines.must_not_have_dangles();
-                config.output = dangles.as_ref();
-                config.options.srs = srs.as_ref();
-                if dangles.is_some() {
-                    result.summary(config);
-                    return None;
+                if dangles.is_some() && !result.is_valid() {
+                    config.output = dangles.as_ref();
+                    config.options.srs = srs.as_ref();
+                    result.unwrap_err_linestring().export(config);
                 };
-                result.summary(config);
-                Some(result)
+                result
             }
             LineRules::MustNotIntersect {
                 lines,
@@ -484,35 +477,28 @@ fn parse_rules(args: TopologyCheckerArgs) -> Option<TopologyResult<f64>> {
                 let lines = vector_dataset.to_geo().unwrap();
                 let lines = flatten_linestrings(lines);
                 let result = lines.must_not_intersect();
-                let mut options = config.options.clone();
                 // Some workaround for the case where the rule can have
                 // two output files.
-                if single_points.is_some() | collinear_lines.is_some() {
-                    options.srs = srs.as_ref();
+                if (single_points.is_some() | collinear_lines.is_some()) && !result.is_valid() {
+                    config.options.srs = srs.as_ref();
                     for error in result.unwrap_err() {
                         if let GeometryError::Point(_) = error {
                             if let Some(ref single_points) = single_points {
-                                error.to_file(
-                                    &single_points,
-                                    args.gdal_driver.clone(),
-                                    Some(options.clone()),
-                                )
+                                let mut config = config.clone();
+                                config.output = Some(single_points);
+                                error.export(config)
                             }
                         }
                         if let GeometryError::LineString(_) = error {
                             if let Some(ref collinear_lines) = collinear_lines {
-                                error.to_file(
-                                    &collinear_lines,
-                                    args.gdal_driver.clone(),
-                                    Some(options.clone()),
-                                )
+                                let mut config = config.clone();
+                                config.output = Some(collinear_lines);
+                                error.export(config)
                             }
                         }
                     }
-                    return None;
                 }
-                result.summary(config);
-                Some(result)
+                result
             }
             LineRules::MustNotOverlap { lines, overlaps } => {
                 let vector_dataset = VectorDataset::new(&lines);
@@ -520,14 +506,12 @@ fn parse_rules(args: TopologyCheckerArgs) -> Option<TopologyResult<f64>> {
                 let lines = vector_dataset.to_geo().unwrap();
                 let lines = flatten_linestrings(lines);
                 let result = lines.must_not_overlap();
-                if overlaps.is_some() {
+                if overlaps.is_some() && !result.is_valid() {
                     config.options.srs = srs.as_ref();
                     config.output = overlaps.as_ref();
-                    result.summary(config);
-                    return None;
+                    result.unwrap_err_linestring().export(config)
                 }
-                result.summary(config);
-                Some(result)
+                result
             }
             LineRules::MustNotOverlapWith {
                 lines,
@@ -540,14 +524,12 @@ fn parse_rules(args: TopologyCheckerArgs) -> Option<TopologyResult<f64>> {
                 let lines = flatten_linestrings(lines);
                 let other = flatten_linestrings(VectorDataset::new(&other).to_geo().unwrap());
                 let result = lines.must_not_overlap_with(other);
-                if overlaps.is_some() {
+                if overlaps.is_some() && !result.is_valid() {
                     config.options.srs = srs.as_ref();
                     config.output = overlaps.as_ref();
-                    result.summary(config);
-                    return None;
+                    result.unwrap_err_linestring().export(config);
                 }
-                result.summary(config);
-                Some(result)
+                result
             }
             LineRules::MustNotSelfOverlap { lines, overlaps } => {
                 let vector_dataset = VectorDataset::new(&lines);
@@ -555,14 +537,12 @@ fn parse_rules(args: TopologyCheckerArgs) -> Option<TopologyResult<f64>> {
                 let lines = vector_dataset.to_geo().unwrap();
                 let lines = flatten_linestrings(lines);
                 let result = lines.must_not_self_overlap();
-                if overlaps.is_some() {
+                if overlaps.is_some() && !result.is_valid() {
                     config.options.srs = srs.as_ref();
                     config.output = overlaps.as_ref();
-                    result.summary(config);
-                    return None;
+                    result.unwrap_err_linestring().export(config)
                 }
-                result.summary(config);
-                Some(result)
+                result
             }
         },
         Command::Polygon(command) => match command.command {
@@ -572,14 +552,12 @@ fn parse_rules(args: TopologyCheckerArgs) -> Option<TopologyResult<f64>> {
                 let polygons = vector_dataset.to_geo().unwrap();
                 let polygons = flatten_polygons(polygons);
                 let result = polygons.must_not_overlap();
-                if overlaps.is_some() {
+                if overlaps.is_some() && !result.is_valid() {
                     config.output = overlaps.as_ref();
                     config.options.srs = srs.as_ref();
-                    result.summary(config);
-                    return None;
+                    result.unwrap_err_polygon().export(config);
                 }
-                result.summary(config);
-                Some(result)
+                result
             }
             PolygonRules::MustNotOverlapWith {
                 polygons,
@@ -595,11 +573,9 @@ fn parse_rules(args: TopologyCheckerArgs) -> Option<TopologyResult<f64>> {
                 if overlaps.is_some() {
                     config.output = overlaps.as_ref();
                     config.options.srs = srs.as_ref();
-                    result.summary(config);
-                    return None;
+                    result.unwrap_err_polygon().export(config);
                 }
-                result.summary(config);
-                Some(result)
+                result
             }
         },
         Command::Geometry(command) => match command.command {
@@ -614,17 +590,21 @@ fn parse_rules(args: TopologyCheckerArgs) -> Option<TopologyResult<f64>> {
                 if multiparts.is_some() {
                     config.options.srs = srs.as_ref();
                     config.output = multiparts.as_ref();
-                    result.summary(config);
-                    return None;
+                    for error in result.unwrap_err() {
+                        error.export(config.clone());
+                    }
                 }
-                result.summary(config);
-                Some(result)
+                result
             }
         },
         Command::GdalDrivers(_) | Command::Interactive { .. } | Command::Utilities(_) => {
             unreachable!()
         }
+    };
+    if summarize {
+        result.summary(Some(rule_name));
     }
+    result
 }
 
 fn parse_utils(args: TopologyCheckerArgs) {
