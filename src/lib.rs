@@ -38,7 +38,10 @@ impl VectorDataset {
         let geometry = writer.take_geometry().unwrap();
         match geometry {
             geo::Geometry::GeometryCollection(geometry) => Ok(geometry.0),
-            _ => unreachable!(),
+            geo::Geometry::MultiLineString(geometry) => Ok(vec![geometry.into()]),
+            geo::Geometry::MultiPolygon(geometry) => Ok(vec![geometry.into()]),
+            geo::Geometry::MultiPoint(geometry) => Ok(vec![geometry.into()]),
+            _ => panic!("Expected GeometryCollection, received {:?}", geometry),
         }
     }
 

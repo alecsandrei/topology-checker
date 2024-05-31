@@ -10,14 +10,19 @@ What this script does:
     -> Runs pyinstaller on the spec file in the current directory;
     -> Copies generated binary to target directory;
 
-Output target directory will look like this:
+Output target directory structure will look like this:
     target_dir/
     ├─ bin/
     │  ├─ topology-checker.exe
     ├─ gdal/
     ├─ topology-checker.exe
+
+Example on how to run:
+    >>> cd scripts
+    >>> python3 -m build ../builds
 """
 
+import tempfile
 import os
 from pathlib import Path
 import argparse
@@ -105,6 +110,29 @@ def main():
         HERE / 'dist' / 'topology-checker.exe',
         args.target_dir
     )
+
+    with tempfile.TemporaryDirectory() as dir:
+        dir = Path(dir)
+        name = f'topology_checker_v{parse_version()}'
+        shutil.make_archive(
+            base_name=name,
+            format='zip',
+            root_dir=args.target_dir,
+            verbose=True,
+        )
+        print(HERE / name)
+        print(args.target_dir/name)
+        shutil.move(
+            (HERE / name).with_suffix('.zip'),
+            args.target_dir
+        )
+
+
+def parse_version():
+    with open(HERE / '../Cargo.toml', mode='r', encoding='utf-8') as f:
+        for line in f.readlines():
+            if line.startswith('version'):
+                return ''.join(filter(str.isdigit, line))
 
 
 if __name__ == '__main__':
