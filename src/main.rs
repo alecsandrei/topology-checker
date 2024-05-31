@@ -264,8 +264,16 @@ use topology_checker::{
     },
     ExportConfig, GeometryError, TopologyResult, TopologyResults, VectorDataset,
 };
+#[cfg(windows)]
+fn enable_colors_for_windows() {
+    colored::control::set_virtual_terminal(true).unwrap();
+}
+
+#[cfg(not(windows))]
+fn enable_colors_for_windows() {}
 
 fn main() {
+    enable_colors_for_windows();
     let args = TopologyCheckerArgs::parse();
     match args.command {
         Command::Interactive { .. } => interactive_mode(args),
