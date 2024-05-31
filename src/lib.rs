@@ -41,7 +41,10 @@ impl VectorDataset {
             geo::Geometry::MultiLineString(geometry) => Ok(vec![geometry.into()]),
             geo::Geometry::MultiPolygon(geometry) => Ok(vec![geometry.into()]),
             geo::Geometry::MultiPoint(geometry) => Ok(vec![geometry.into()]),
-            _ => panic!("Expected GeometryCollection, received {:?}", geometry),
+            geo::Geometry::Point(geometry) => Ok(vec![geometry.into()]),
+            geo::Geometry::LineString(geometry) => Ok(vec![geometry.into()]),
+            geo::Geometry::Polygon(geometry) => Ok(vec![geometry.into()]),
+            _ => panic!("Did not expect the received geometry {:?}", geometry),
         }
     }
 
@@ -51,6 +54,16 @@ impl VectorDataset {
                 format!("Dataset {} has no layers.", self.0.description().unwrap()).as_str(),
             );
         layer.spatial_ref()
+    }
+
+    pub fn validate_srs(&self, other: &VectorDataset) {
+        if self.srs() != other.srs() {
+            panic!(
+                "{} does not have the same spatial reference system as {}",
+                self.0.description().unwrap(),
+                other.0.description().unwrap()
+            )
+        }
     }
 }
 

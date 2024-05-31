@@ -449,9 +449,11 @@ fn parse_rules(args: TopologyCheckerArgs, summarize: bool) -> TopologyResult<f64
                 overlaps,
             } => {
                 let vector_dataset = VectorDataset::new(&points);
+                let other = VectorDataset::new(&other);
+                vector_dataset.validate_srs(&other);
+                let other = flatten_points(other.to_geo().unwrap());
                 let points = flatten_points(vector_dataset.to_geo().unwrap());
                 let srs = vector_dataset.srs();
-                let other = flatten_points(VectorDataset::new(&other).to_geo().unwrap());
                 let result = points.must_not_overlap_with(other);
                 if overlaps.is_some() && !result.is_valid() {
                     config.output = overlaps.as_ref();
@@ -527,10 +529,12 @@ fn parse_rules(args: TopologyCheckerArgs, summarize: bool) -> TopologyResult<f64
                 overlaps,
             } => {
                 let vector_dataset = VectorDataset::new(&lines);
+                let other = VectorDataset::new(&other);
+                vector_dataset.validate_srs(&other);
                 let srs = vector_dataset.srs();
                 let lines = vector_dataset.to_geo().unwrap();
                 let lines = flatten_linestrings(lines);
-                let other = flatten_linestrings(VectorDataset::new(&other).to_geo().unwrap());
+                let other = flatten_linestrings(other.to_geo().unwrap());
                 let result = lines.must_not_overlap_with(other);
                 if overlaps.is_some() && !result.is_valid() {
                     config.options.srs = srs.as_ref();
@@ -573,10 +577,12 @@ fn parse_rules(args: TopologyCheckerArgs, summarize: bool) -> TopologyResult<f64
                 overlaps,
             } => {
                 let vector_dataset = VectorDataset::new(&polygons);
+                let other = VectorDataset::new(&other);
+                vector_dataset.validate_srs(&other);
                 let srs = vector_dataset.srs();
                 let polygons = vector_dataset.to_geo().unwrap();
                 let polygons = flatten_polygons(polygons);
-                let other = flatten_polygons(VectorDataset::new(&other).to_geo().unwrap());
+                let other = flatten_polygons(other.to_geo().unwrap());
                 let result = polygons.must_not_overlap_with(other);
                 if overlaps.is_some() {
                     config.output = overlaps.as_ref();
