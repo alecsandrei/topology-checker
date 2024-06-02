@@ -268,9 +268,6 @@ impl<T: GeoFloat> TopologyResult<T> {
         }
     }
 
-    /// Provides the possibility of writing into a [Dataset] or a [Transaction].
-    /// If 'dataset' or 'transaction' are not provided but 'output' is, create
-    /// a dataset at that location. Additionally provide [LayerOptions].
     pub fn summary(&self, rule_name: Option<String>) {
         if let Some(rule_name) = rule_name {
             println!("{:-^60}", rule_name);
@@ -285,7 +282,7 @@ impl<T: GeoFloat> TopologyResult<T> {
                 println!("{: <30}{: >30}", format!("| {}", error), bar);
             }
         }
-        println!("{:-^60}\n", "");
+        println!("{:-^60}", "");
     }
 
     pub fn unwrap_err_point(&self) -> &GeometryError<T> {
@@ -403,30 +400,6 @@ impl<T: GeoFloat> TopologyResults<T> {
 
 #[cfg(test)]
 mod tests {
-
-    // use super::*;
-    // use geo::{line_string, point, polygon};
-
-    // fn topology_result() {
-    //     let points =
-    //         GeometryCollection([point! { x: 181.2, y: 51.79 }, point! { x: 181.2, y: 51.79 }]);
-    //     let line_strings = vec![
-    //         line_string![
-    //             (x: -21.95156, y: 64.1446),
-    //             (x: -21.951, y: 64.14479)],
-    //         line_string![
-    //             (x: -21.95156, y: 64.1446),
-    //             (x: -21.951, y: 64.14479)],
-    //     ];
-    //     let polygons = vec![polygon![
-    //         (x: -111., y: 45.),
-    //         (x: -111., y: 41.),
-    //         (x: -104., y: 41.),
-    //         (x: -104., y: 45.)
-    //     ]];
-    //     let errors: GeometryCollection<f64> =
-    //         points.into_iter().chain(line_strings.into_iter()).collect();
-    // }
 
     // Test for the README.md file.
     #[cfg(doctest)]

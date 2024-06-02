@@ -8,3 +8,4 @@ pkg_config
 scripts/build
 scripts/dist
 # */*.spec
+*.zip
