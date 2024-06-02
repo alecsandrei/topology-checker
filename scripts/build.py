@@ -86,18 +86,23 @@ def main():
 
     copy_gdal_to(args.target_dir)
 
-    subprocess.call([
+    call = subprocess.call([
         'cargo',
         'build',
         '--release',
     ])
+    if call != 0:
+        raise Exception('Failed to build.')
 
     bin = args.target_dir / 'bin'
     if not bin.exists():
         bin.mkdir()
 
+    release = TOPOLOGY_CHECKER.parent / 'target' / 'release' / 'topology-checker.exe'
+    if (path := (bin / 'topology-checker.exe')).exists():
+        path.unlink()
     shutil.copy(
-        TOPOLOGY_CHECKER.parent / 'target' / 'release' / 'topology-checker.exe',
+        release,
         bin
     )
 
@@ -106,24 +111,29 @@ def main():
         HERE / 'topology_checker.spec'
     ])
 
+    wrapper = HERE / 'dist' / 'topology-checker.exe'
+    if (path := (args.target_dir / 'topology-checker.exe')).exists():
+        path.unlink()
     shutil.copy(
-        HERE / 'dist' / 'topology-checker.exe',
+        wrapper,
         args.target_dir
     )
 
+    print('Zipping up the release.')
     with tempfile.TemporaryDirectory() as dir:
         dir = Path(dir)
         name = f'topology_checker_v{parse_version()}'
+        out_zip = (HERE / name).with_suffix('.zip')
+        if (path := (args.target_dir / out_zip.name)).exists():
+            path.unlink()
         shutil.make_archive(
             base_name=name,
             format='zip',
             root_dir=args.target_dir,
             verbose=True,
         )
-        print(HERE / name)
-        print(args.target_dir/name)
         shutil.move(
-            (HERE / name).with_suffix('.zip'),
+            out_zip,
             args.target_dir
         )
 

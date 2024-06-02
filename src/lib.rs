@@ -36,6 +36,9 @@ impl VectorDataset {
             process_geom(geom, &mut writer)?;
         }
         let geometry = writer.take_geometry().unwrap();
+
+        // If layer has more than 1 feature, it will match GeometryCollection.
+        // Otherwise, it might match any of the rest.
         match geometry {
             geo::Geometry::GeometryCollection(geometry) => Ok(geometry.0),
             geo::Geometry::MultiLineString(geometry) => Ok(vec![geometry.into()]),
@@ -44,6 +47,7 @@ impl VectorDataset {
             geo::Geometry::Point(geometry) => Ok(vec![geometry.into()]),
             geo::Geometry::LineString(geometry) => Ok(vec![geometry.into()]),
             geo::Geometry::Polygon(geometry) => Ok(vec![geometry.into()]),
+            geo::Geometry::Line(geometry) => Ok(vec![geometry.into()]),
             _ => panic!("Did not expect the received geometry {:?}", geometry),
         }
     }
