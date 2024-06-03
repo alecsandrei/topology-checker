@@ -32,13 +32,10 @@ Output zip file directory structure will look like this:
     ├─ topology-checker.exe
 
 Example on how to run:
-1. If you want to download GDAL from gisinternals website.
-    >>> cd scripts
-    >>> python3 -m build ../builds
-2. If you have GDAL_HOME and PKG_CONFIG_PATH environment variables set.
-    >>> cd scripts
-    >>> python3 -m build --local-gdal ../builds
+>>> cd scripts
+>>> python3 -m build ../builds
 """
+from __future__ import annotations
 
 import zipfile
 import tempfile
@@ -50,15 +47,21 @@ import shutil
 import subprocess
 import requests
 from enum import Enum
+import importlib.util
+import urllib3
 
+urllib3.disable_warnings()
 
 HERE = Path(__file__).parent
 os.chdir(HERE)
 TOPOLOGY_CHECKER = Path(__file__).parent
-COMPILED_GDAL_BINARIES = 'https://build2.gisinternals.com/sdk/downloads/release-1930-x64-gdal-3-7-3-mapserver-8-0-1.zip'
-COMPILED_GDAL_LIBS_HEADERS = 'https://build2.gisinternals.com/sdk/downloads/release-1930-x64-gdal-3-7-3-mapserver-8-0-1-libs.zip'
+COMPILED_GDAL_BINARIES = 'https://build2.gisinternals.com/sdk/downloads/release-1930-x64-gdal-3-7-3-mapserver-8-0-1.zip'  # noqa
+COMPILED_GDAL_LIBS_HEADERS = 'https://build2.gisinternals.com/sdk/downloads/release-1930-x64-gdal-3-7-3-mapserver-8-0-1-libs.zip'  # noqa
 COMPILED_GDAL_BINARIES_VERSION = '3.7.3'
-assert '-'.join(COMPILED_GDAL_BINARIES_VERSION.split('.')) in COMPILED_GDAL_BINARIES
+assert (
+    '-'.join(COMPILED_GDAL_BINARIES_VERSION.split('.'))
+    in COMPILED_GDAL_BINARIES
+)
 
 
 class Bcolors(Enum):
@@ -73,7 +76,9 @@ builtin_print = print
 
 
 class _print:
-    def get_color(self, color: str):
+    def get_color(self, color: str | None):
+        if color is None:
+            return ''
         match Bcolors[color.upper()]:
             case Bcolors.BLUE:
                 return Bcolors.BLUE.value
@@ -86,12 +91,12 @@ class _print:
             case Bcolors.RED:
                 return Bcolors.RED.value
             case _:
-                return Bcolors.GREEN.value
+                return ''
 
     def __call__(self, *objects, color='green', **kwargs):
         sep = kwargs.pop('sep', ' ')
         color = self.get_color(color)
-        endc = '\033[0m'
+        endc = '\033[0m' if color else ''
         objects = map(str, objects)
         builtin_print(rf'{color}{sep.join(objects)}{endc}', **kwargs)
 
@@ -102,18 +107,18 @@ class _print:
 
 print = _print()
 
+try:
+    importlib.util.find_spec('pyinstaller')
+except ImportError:
+    print('The "pyinstaller" package was not found.', color='red')
+    exit(1)
+
 
 def parse_arguments():
     parser = argparse.ArgumentParser(description='Build topology-checker.')
     parser.add_argument('target_dir',
                         help='Release build target directory',
                         type=Path)
-    parser.add_argument('--local-gdal',
-                        help=('Whether or not to use the local GDAL '
-                              + 'installation. GDAL_HOME and PROJ_LIB '
-                              + 'environment variables must be set'),
-                        action='store_true',
-                        default=False)
     return parser.parse_args()
 
 
@@ -126,22 +131,35 @@ def handle_remote_gdal(gdal_dir: Path):
             tempfile.NamedTemporaryFile(delete=True) as binaries,
             tempfile.NamedTemporaryFile(delete=True) as libs_headers
         ):
-            print(f'Downloading GDAL bin from {COMPILED_GDAL_BINARIES}', end=' ')
-            bin = requests.get(COMPILED_GDAL_BINARIES).content
+            print(
+                f'Downloading GDAL bin from {COMPILED_GDAL_BINARIES}', end=' '
+            )
+            bin = requests.get(COMPILED_GDAL_BINARIES, verify=False).content
             binaries.write(bin)
             print('SUCCESS', color='cyan')
-            print(f'Downloading GDAL lib from {COMPILED_GDAL_LIBS_HEADERS}', end=' ')
-            lib = requests.get(COMPILED_GDAL_LIBS_HEADERS).content
+            print(
+                f'Downloading GDAL lib from {COMPILED_GDAL_LIBS_HEADERS}',
+                end=' '
+            )
+            lib = requests.get(
+                COMPILED_GDAL_LIBS_HEADERS, verify=False
+            ).content
             libs_headers.write(lib)
             print('SUCCESS', color='cyan')
             with (
                 zipfile.ZipFile(binaries, 'r') as zip_bin,
                 zipfile.ZipFile(libs_headers, 'r') as zip_lib
             ):
-                print(f'Extracting GDAL bin archive in {gdal_dir.resolve()}', end=' ')
+                print(
+                    f'Extracting GDAL bin archive in {gdal_dir.resolve()}',
+                    end=' '
+                )
                 zip_bin.extractall(gdal_dir)
                 print('SUCCESS', color='cyan')
-                print(f'Extracting GDAL lib archive at {gdal_dir.resolve()}', end=' ')
+                print(
+                    f'Extracting GDAL lib archive at {gdal_dir.resolve()}',
+                    end=' '
+                )
                 zip_lib.extractall(gdal_dir)
                 print('SUCCESS', color='cyan')
 
@@ -183,13 +201,54 @@ def handle_remote_gdal(gdal_dir: Path):
     set_environment_variables()
 
 
+def handle_remote_pkg_config(pkg_config_dir: Path):
+    def download_pkg_config():
+        url = 'https://sourceforge.net/projects/pkgconfiglite/files/latest/download'  # noqa
+        with tempfile.NamedTemporaryFile(delete=True) as pkg_config:
+            bin = requests.get(url, verify=False).content
+            pkg_config.write(bin)
+            with (
+                zipfile.ZipFile(pkg_config, 'r') as pkg_config_zip,
+            ):
+                print(
+                    f'Extracting pkg-config-lite archive in {pkg_config_dir}',
+                    end=' '
+                )
+                pkg_config_zip.extractall(pkg_config_dir)
+                print('SUCCESS', color='cyan')
+
+    def set_environment_variable():
+        print(
+            "Setting the GDAL_HOME and PKG_CONFIG_PATH env variables",
+            end=' '
+        )
+        PkgConfigEnvironmentVariables(
+            pkg_config_sysroot_dir=pkg_config_dir / 'bin'
+        ).set()
+        print('SUCCESS', color='cyan')
+
+    download_pkg_config()
+    set_environment_variable()
+
+
+class PkgConfigEnvironmentVariables(NamedTuple):
+    pkg_config_sysroot_dir: Path
+
+    def set(self):
+        os.environ['PKG_CONFIG_SYSROOT_DIR'] = (
+            self.pkg_config_sysroot_dir.resolve().as_posix()
+        )
+
+
 class GdalEnvironmentVariables(NamedTuple):
     gdal_home: Path
     pkg_config_path: Path
 
     def set(self):
         os.environ['GDAL_HOME'] = self.gdal_home.resolve().as_posix()
-        os.environ['PKG_CONFIG_PATH'] = self.pkg_config_path.resolve().as_posix()
+        os.environ['PKG_CONFIG_PATH'] = (
+            self.pkg_config_path.resolve().as_posix()
+        )
 
 
 def copy_gdal_to(target_dir: Path):
@@ -224,6 +283,7 @@ def build():
     call = subprocess.call([
         'cargo',
         'build',
+        '-q',
         '--release',
     ])
 
@@ -234,18 +294,29 @@ def build():
 
 
 def create_binary_wrapper(target_dir: Path):
-    subprocess.call([
+    print('Creating binary wrapper with pyinstaller.', end=' ')
+    call = subprocess.run([
         'pyinstaller',
-        HERE / 'topology_checker.spec'
-    ])
-
+        (HERE / 'topology_checker.spec').as_posix()
+    ], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if call.returncode != 0:
+        print('FAILED', color='red')
+        print(call.stderr.decode(encoding='utf-8'), color=None)
+        print(
+            'Failed to create binary wrapper with pyinstaller',
+            color='red'
+        )
+        exit(1)
+    print('SUCCESS', color='cyan')
     wrapper = HERE / 'dist' / 'topology-checker.exe'
     if (path := (target_dir / 'topology-checker.exe')).exists():
         path.unlink()
+    print(f'Copying {wrapper} to {path}.', end=' ')
     shutil.copy(
         wrapper,
         target_dir
     )
+    print('SUCCESS', color='cyan')
 
 
 def make_zip(target_dir: Path, out_file: Path):
@@ -256,6 +327,7 @@ def make_zip(target_dir: Path, out_file: Path):
     exclude_patterns = [
         '*Zone.Identifier:$DATA',
         '__pycache__/*',
+        'pkg-config-lite*/*',
         out_file.name
     ]
 
@@ -284,11 +356,34 @@ def main():
     args = parse_arguments()
     assert isinstance(args.target_dir, Path)
 
-    if args.local_gdal is True:
+    try:
+        os.environ['GDAL_HOME'], os.environ['PKG_CONFIG_PATH']
+        print('Found GDAL_HOME and PKG_CONFIG_PATH environment variables.')
         copy_gdal_to(args.target_dir)
-    else:
-        gdal = args.target_dir / 'gdal'
-        handle_remote_gdal(gdal)
+    except KeyError as e:
+        while True:
+            to_download = input(
+                f'{e.args[0]} not found as an environment variable. '
+                + 'Download GDAL from gisinternals? (y/n): '
+            )
+            if to_download == 'y':
+                gdal = args.target_dir / 'gdal'
+                handle_remote_gdal(gdal)
+                break
+            elif to_download == 'n':
+                exit(1)
+
+    if 'PKG_CONFIG_SYSROOT_DIR' not in os.environ:
+        while True:
+            to_download = input(
+                'PKG_CONFIG_SYSROOT_DIR not found as an environment variable. '
+                + 'Download pkg-config-lite from sourceforge? (y/n): '
+            )
+            if to_download == 'y':
+                handle_remote_pkg_config(args.target_dir)
+                break
+            elif to_download == 'n':
+                exit(1)
 
     # Create rust binary with carto
     build()
@@ -301,8 +396,8 @@ def main():
     if not bin.exists():
         bin.mkdir()
 
-    # Copy rsut binary to bin folder.
-    release = TOPOLOGY_CHECKER.parent / 'target' / 'release' / 'topology-checker.exe'
+    # Copy rust binary to bin folder.
+    release = TOPOLOGY_CHECKER.parent / 'target' / 'release' / 'topology-checker.exe'  # noqa
     if (path := (bin / 'topology-checker.exe')).exists():
         path.unlink()
     shutil.copy(
