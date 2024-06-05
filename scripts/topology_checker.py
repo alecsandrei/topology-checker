@@ -11,19 +11,21 @@ import os
 from pathlib import Path
 import subprocess
 
-
-GDAL_LOCATION = Path('./gdal/bin').resolve().as_posix()
-GDAL_APPS = Path('./gdal/bin/gdal/apps').resolve().as_posix()
-GDAL_DATA = Path('./gdal/bin/gdal-data').resolve().as_posix()
-BINARY = Path('./bin/topology-checker.exe').resolve().as_posix()
-
 if __name__ == '__main__':
-    if GDAL_LOCATION not in os.environ['PATH']:
-        os.environ['PATH'] += os.pathsep + GDAL_LOCATION
-    if GDAL_APPS not in os.environ['PATH']:
-        os.environ['PATH'] += os.pathsep + GDAL_APPS
+
+    here = Path(sys.argv[0]).parent
+    binary = here / 'bin' / 'topology-checker.exe'
+    gdal_location = Path('./gdal/bin').resolve().as_posix()
+    gdal_apps = (here / 'gdal' / 'bin'/ 'gdal' / 'apps').resolve().as_posix()
+    gdal_data = (here / 'gdal' / 'bin' / 'gdal-data').resolve().as_posix()
+
+    if gdal_location not in os.environ['PATH']:
+        os.environ['PATH'] += os.pathsep + gdal_location
+    if gdal_apps not in os.environ['PATH']:
+        os.environ['PATH'] += os.pathsep + gdal_apps
     if 'GDAL_DATA' not in os.environ:
-        os.environ['GDAL_DATA'] = GDAL_DATA
+        os.environ['GDAL_DATA'] = gdal_data
+
     subprocess.call(
-        [BINARY, *sys.argv[1:]]
+        [binary, *sys.argv[1:]]
     )

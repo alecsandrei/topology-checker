@@ -5,10 +5,12 @@ What this script does:
 
     -> Takes as input a target directory;
     -> Downloads/copies compiled GDAL bin/lib to target directory under gdal/;
+    -> Downloads pkg-config-lite and sets PKG_CONFIG_SYSROOT_DIR;
     -> Runs cargo build --release;
     -> Copies generated binary to target directory under bin/;
     -> Runs pyinstaller on the spec file in the current directory;
     -> Copies generated binary to target directory;
+    -> Creates the zip file of the release.
 
 Output target directory structure will look like this:
     target_dir/
@@ -54,9 +56,9 @@ urllib3.disable_warnings()
 
 HERE = Path(__file__).parent
 os.chdir(HERE)
-TOPOLOGY_CHECKER = Path(__file__).parent
 COMPILED_GDAL_BINARIES = 'https://build2.gisinternals.com/sdk/downloads/release-1930-x64-gdal-3-7-3-mapserver-8-0-1.zip'  # noqa
 COMPILED_GDAL_LIBS_HEADERS = 'https://build2.gisinternals.com/sdk/downloads/release-1930-x64-gdal-3-7-3-mapserver-8-0-1-libs.zip'  # noqa
+PKG_CONFIG_LITE = 'https://sourceforge.net/projects/pkgconfiglite/files/latest/download'  # noqa
 COMPILED_GDAL_BINARIES_VERSION = '3.7.3'
 assert (
     '-'.join(COMPILED_GDAL_BINARIES_VERSION.split('.'))
@@ -203,9 +205,8 @@ def handle_remote_gdal(gdal_dir: Path):
 
 def handle_remote_pkg_config(pkg_config_dir: Path):
     def download_pkg_config():
-        url = 'https://sourceforge.net/projects/pkgconfiglite/files/latest/download'  # noqa
         with tempfile.NamedTemporaryFile(delete=True) as pkg_config:
-            bin = requests.get(url, verify=False).content
+            bin = requests.get(PKG_CONFIG_LITE, verify=False).content
             pkg_config.write(bin)
             with (
                 zipfile.ZipFile(pkg_config, 'r') as pkg_config_zip,
@@ -280,24 +281,29 @@ def remove_leftover_files(gdal: Path):
 
 
 def build():
-    call = subprocess.call([
+    print('Creating binary with cargo.', end=' ')
+    call = subprocess.run([
         'cargo',
         'build',
-        '-q',
         '--release',
-    ])
+    ], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-    if call != 0:
-        raise Exception(
-            'Failed to build. cargo build did not return exit status 0.'
+    if call.returncode != 0:
+        print('FAILED', color='red')
+        print(call.stderr.decode(encoding='utf-8'), color=None)
+        print(
+            'Failed to create binary with cargo',
+            color='red'
         )
+        exit(1)
+    print('SUCCESS', color='cyan')
 
 
 def create_binary_wrapper(target_dir: Path):
     print('Creating binary wrapper with pyinstaller.', end=' ')
     call = subprocess.run([
         'pyinstaller',
-        (HERE / 'topology_checker.spec').as_posix()
+        HERE / 'topology_checker.spec'
     ], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     if call.returncode != 0:
         print('FAILED', color='red')
@@ -327,7 +333,7 @@ def make_zip(target_dir: Path, out_file: Path):
     exclude_patterns = [
         '*Zone.Identifier:$DATA',
         '__pycache__/*',
-        'pkg-config-lite*/*',
+        '*/pkg-config-lite*/*',
         out_file.name
     ]
 
@@ -336,8 +342,9 @@ def make_zip(target_dir: Path, out_file: Path):
             return False
         if any(file.is_relative_to(dir) for dir in exclude_dirs):
             return False
-        elif any(file.match(pat) for pat in exclude_patterns):
-            return False
+        for path in [file, *file.parents]:
+            if any(path.match(pat) for pat in exclude_patterns):
+                return False
         return True
 
     print(f'\rCreating zip at {out_file}.')
@@ -397,7 +404,7 @@ def main():
         bin.mkdir()
 
     # Copy rust binary to bin folder.
-    release = TOPOLOGY_CHECKER.parent / 'target' / 'release' / 'topology-checker.exe'  # noqa
+    release = HERE.parent / 'target' / 'release' / 'topology-checker.exe'  # noqa
     if (path := (bin / 'topology-checker.exe')).exists():
         path.unlink()
     shutil.copy(

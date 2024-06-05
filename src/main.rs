@@ -473,7 +473,7 @@ fn parse_rules(args: TopologyCheckerArgs, summarize: bool) -> TopologyResult<f64
                 if dangles.is_some() && !result.is_valid() {
                     config.output = dangles.as_ref();
                     config.options.srs = srs.as_ref();
-                    result.unwrap_err_linestring().export(config);
+                    result.unwrap_err_point().export(config);
                 };
                 result
             }
