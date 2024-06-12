@@ -1,4 +1,5 @@
 use crate::util::{create_dataset, open_dataset, GdalDrivers};
+use colored::Colorize;
 use gdal::{
     spatial_ref::SpatialRef,
     vector::{LayerAccess, ToGdal},
@@ -33,17 +34,22 @@ impl VectorDataset {
         let mut writer = GeoWriter::new();
         for feature in layer.features() {
             let geom = feature.geometry().unwrap();
-            let _ = process_geom(geom, &mut writer)
-                .map_err(|err| {
-                    eprintln!(
-                        "Failed to parse FID {} with error '{}'",
+            let _ = process_geom(geom, &mut writer).map_err(|err| {
+                eprintln!(
+                    "{}",
+                    format!(
+                        "{} {} {} '{}'",
+                        "Failed to parse FID",
                         feature
                             .fid()
                             .expect(format!("Failed to get FID of feature {:?}", feature).as_str()),
+                        "with error".red(),
                         err
                     )
-                });
-        };
+                    .red()
+                )
+            });
+        }
         let geometry = writer.take_geometry().expect("Failed to take geometry.");
 
         // If layer has more than 1 feature, it will match GeometryCollection.
