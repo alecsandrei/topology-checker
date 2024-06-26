@@ -1,4 +1,5 @@
 use crate::util::{create_dataset, open_dataset, GdalDrivers};
+use anyhow::Context;
 use colored::Colorize;
 use gdal::{
     spatial_ref::SpatialRef,
@@ -19,11 +20,8 @@ pub mod util;
 pub struct VectorDataset(Dataset);
 
 impl VectorDataset {
-    pub fn new(path: &PathBuf) -> Self {
-        match open_dataset(path) {
-            Ok(dataset) => VectorDataset(dataset),
-            Err(e) => panic!("Failed to open dataset with error {e}."),
-        }
+    pub fn new(path: &PathBuf) -> anyhow::Result<Self> {
+        Ok(VectorDataset(open_dataset(path)?))
     }
 
     pub fn to_geo(&self) -> geozero::error::Result<Vec<Geometry<f64>>> {
@@ -164,7 +162,7 @@ impl<T: GeoFloat> GeometryError<T> {
                 .collect(),
         }
     }
-    pub fn export(&self, config: ExportConfig) {
+    pub fn export(&self, config: ExportConfig) -> anyhow::Result<()> {
         let ExportConfig {
             rule_name,
             output,
@@ -179,7 +177,7 @@ impl<T: GeoFloat> GeometryError<T> {
             if dataset.is_none() && output.is_some() {
                 let _ = created_dataset.insert(
                     create_dataset(output.unwrap(), None)
-                        .unwrap_or_else(|err| panic!("Failed to create dataset with error {err}")),
+                        .with_context(|| format!("Failed to create the dataset at {output:?}."))?,
                 );
                 let _ = dataset.insert(created_dataset.as_mut().unwrap());
             }
@@ -206,14 +204,20 @@ impl<T: GeoFloat> GeometryError<T> {
                             &["rule"],
                             &[gdal::vector::FieldValue::StringValue(rule_name.to_string())],
                         )
-                        .unwrap();
-                })
+                        .unwrap_or_else(|err| {
+                            eprintln!("Failed to write row inside layer {} with error {:?} for rule {:?}.", layer.name(), err, rule_name)
+                    })
+                });
             } else {
                 let mut layer = None;
                 if let Some(dataset) = &mut dataset {
                     options.name = &geometry_name;
                     options.ty = geometry_type;
-                    let _ = layer.insert(dataset.create_layer(options.clone()).unwrap());
+                    let _ = layer.insert(
+                        dataset
+                            .create_layer(options.clone())
+                            .with_context(|| "Failed to create a layer inside the dataset.")?,
+                    );
                 }
                 let field =
                     gdal::vector::FieldDefn::new("rule", gdal::vector::OGRFieldType::OFTString)
@@ -232,6 +236,7 @@ impl<T: GeoFloat> GeometryError<T> {
                 })
             }
         }
+        Ok(())
     }
 }
 
@@ -385,31 +390,39 @@ type RuleName = String;
 pub struct TopologyResults<T: GeoFloat>(pub Vec<(RuleName, TopologyResult<T>)>);
 
 impl<T: GeoFloat> TopologyResults<T> {
-    pub fn export(self, output: &PathBuf) {
+    pub fn new(results: Vec<(RuleName, TopologyResult<T>)>) -> Self {
+        TopologyResults(results)
+    }
+}
+
+impl<T: GeoFloat> TopologyResults<T> {
+    pub fn export(self, output: &PathBuf) -> anyhow::Result<()> {
         let driver = gdal::DriverManager::get_driver_by_name(
             &GdalDrivers.infer_driver_name("gpkg").unwrap().0,
         )
-        .unwrap();
+        .expect("Error with getting the driver name from 'gpkg' abbreviation");
         let mut dataset = driver
             .create_vector_only(output)
-            .unwrap_or_else(|err| panic!("Failed to create gpkg with error {err}"));
+            .with_context(|| format!("Failed to create geopackage at {output:?}."))?;
         let mut txn = dataset
             .start_transaction()
-            .expect("Failed to start transaction.");
+            .with_context(|| "Failed to start transaction (writing into the geopackage).")?;
         for result in self.0 {
             result.1.summary(Some(result.0.clone()));
             if !result.1.is_valid() {
+                // Iterate and export all of the errors
                 for error in result.1.unwrap_err() {
                     let config = ExportConfig {
                         rule_name: result.0.clone(),
                         dataset: Some(&mut txn),
                         ..Default::default()
                     };
-                    error.export(config)
+                    error.export(config)?
                 }
             }
         }
         txn.commit().expect("Failed to commit changes.");
+        Ok(())
     }
 }
 

@@ -4,18 +4,20 @@ use gdal::{
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
+use colored::Colorize;
 
-pub fn open_dataset(path: &PathBuf) -> Result<Dataset, GdalError> {
+pub fn open_dataset(path: &PathBuf) -> anyhow::Result<Dataset> {
     if !path.exists() {
-        panic!("The provided path {:?} does not exist.", path)
+        return Err(anyhow::anyhow!("The provided path {:?} does not exist", path));
     }
-    Dataset::open_ex(
-        path,
-        DatasetOptions {
-            open_flags: GdalOpenFlags::GDAL_OF_VECTOR,
-            ..Default::default()
-        },
-    )
+    let options = DatasetOptions {
+        open_flags: GdalOpenFlags::GDAL_OF_VECTOR,
+        ..Default::default()
+    };
+
+    let dataset = Dataset::open_ex(path, options)?;
+
+    Ok(dataset)
 }
 
 pub fn create_dataset(out_path: &PathBuf, driver: Option<String>) -> Result<Dataset, GdalError> {
