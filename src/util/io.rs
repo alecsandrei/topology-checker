@@ -1,14 +1,14 @@
-use gdal::{
-    errors::GdalError, vector::LayerAccess, Dataset, DatasetOptions, GdalOpenFlags, LayerOptions,
-    Metadata,
-};
+use anyhow::Context;
+use gdal::{vector::LayerAccess, Dataset, DatasetOptions, GdalOpenFlags, LayerOptions, Metadata};
 use std::collections::HashMap;
 use std::path::PathBuf;
-use colored::Colorize;
 
 pub fn open_dataset(path: &PathBuf) -> anyhow::Result<Dataset> {
     if !path.exists() {
-        return Err(anyhow::anyhow!("The provided path {:?} does not exist", path));
+        return Err(anyhow::anyhow!(
+            "The provided path {:?} does not exist",
+            path
+        ));
     }
     let options = DatasetOptions {
         open_flags: GdalOpenFlags::GDAL_OF_VECTOR,
@@ -20,7 +20,7 @@ pub fn open_dataset(path: &PathBuf) -> anyhow::Result<Dataset> {
     Ok(dataset)
 }
 
-pub fn create_dataset(out_path: &PathBuf, driver: Option<String>) -> Result<Dataset, GdalError> {
+pub fn create_dataset(out_path: &PathBuf, driver: Option<String>) -> anyhow::Result<Dataset> {
     // If driver is not provided, attempt to infer it from the file extension.
     let driver_name = driver.unwrap_or_else(|| {
         let driver = GdalDrivers
@@ -31,8 +31,10 @@ pub fn create_dataset(out_path: &PathBuf, driver: Option<String>) -> Result<Data
     });
     let drv = gdal::DriverManager::get_driver_by_name(&driver_name)
         .expect(format!("Driver {driver_name} does not exist.").as_str());
-
-    drv.create_vector_only(out_path)
+    let dataset = drv
+        .create_vector_only(out_path)
+        .with_context(|| format!("Failed to create dataset at path {out_path:?}"))?;
+    Ok(dataset)
 }
 
 pub fn geometries_to_file(

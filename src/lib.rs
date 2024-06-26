@@ -1,7 +1,7 @@
 use crate::util::{create_dataset, open_dataset, GdalDrivers};
 use anyhow::Context;
-use colored::Colorize;
 use gdal::{
+    errors::GdalError,
     spatial_ref::SpatialRef,
     vector::{LayerAccess, ToGdal},
     Dataset, LayerOptions, Metadata,
@@ -24,63 +24,70 @@ impl VectorDataset {
         Ok(VectorDataset(open_dataset(path)?))
     }
 
-    pub fn to_geo(&self) -> geozero::error::Result<Vec<Geometry<f64>>> {
-        let mut layer =
-            self.0.layers().next().expect(
-                format!("Dataset {} has no layers.", self.0.description().unwrap()).as_str(),
-            );
+    pub fn to_geo(&self) -> anyhow::Result<Vec<Geometry<f64>>> {
+        let mut layer = self
+            .0
+            .layers()
+            .next()
+            .expect(format!("Dataset {} has no layers.", self.0.description()?).as_str());
         let mut writer = GeoWriter::new();
         for feature in layer.features() {
             let geom = feature.geometry().unwrap();
-            let _ = process_geom(geom, &mut writer).map_err(|err| {
-                eprintln!(
-                    "{}",
-                    format!(
-                        "{} {} {} '{}'",
-                        "Failed to parse FID",
-                        feature
-                            .fid()
-                            .expect(format!("Failed to get FID of feature {:?}", feature).as_str()),
-                        "with error".red(),
-                        err
-                    )
-                    .red()
+            process_geom(geom, &mut writer).with_context(|| {
+                format!(
+                    "{} {}",
+                    "Failed to parse FID",
+                    feature
+                        .fid()
+                        .expect(format!("Failed to get FID of feature {:?}", feature).as_str()),
                 )
-            });
+            })?;
         }
-        let geometry = writer.take_geometry().expect("Failed to take geometry.");
+        let geometry = writer.take_geometry();
 
         // If layer has more than 1 feature, it will match GeometryCollection.
         // Otherwise, it might match any of the rest.
-        match geometry {
-            geo::Geometry::GeometryCollection(geometry) => Ok(geometry.0),
-            geo::Geometry::MultiLineString(geometry) => Ok(vec![geometry.into()]),
-            geo::Geometry::MultiPolygon(geometry) => Ok(vec![geometry.into()]),
-            geo::Geometry::MultiPoint(geometry) => Ok(vec![geometry.into()]),
-            geo::Geometry::Point(geometry) => Ok(vec![geometry.into()]),
-            geo::Geometry::LineString(geometry) => Ok(vec![geometry.into()]),
-            geo::Geometry::Polygon(geometry) => Ok(vec![geometry.into()]),
-            geo::Geometry::Line(geometry) => Ok(vec![geometry.into()]),
-            _ => panic!("Did not expect the received geometry {:?}", geometry),
+        if let Some(geometry) = geometry {
+            match geometry {
+                geo::Geometry::GeometryCollection(geometry) => Ok(geometry.0),
+                geo::Geometry::MultiLineString(geometry) => Ok(vec![geometry.into()]),
+                geo::Geometry::MultiPolygon(geometry) => Ok(vec![geometry.into()]),
+                geo::Geometry::MultiPoint(geometry) => Ok(vec![geometry.into()]),
+                geo::Geometry::Point(geometry) => Ok(vec![geometry.into()]),
+                geo::Geometry::LineString(geometry) => Ok(vec![geometry.into()]),
+                geo::Geometry::Polygon(geometry) => Ok(vec![geometry.into()]),
+                geo::Geometry::Line(geometry) => Ok(vec![geometry.into()]),
+                _ => Err(anyhow::anyhow!(
+                    "Did not expect the received geometry {:?}",
+                    geometry
+                )),
+            }
+        } else {
+            Err(anyhow::anyhow!(
+                "Failed to retrieve geometry. Is the dataset {} empty?",
+                self.0.description()?
+            ))
         }
     }
 
-    pub fn srs(&self) -> Option<SpatialRef> {
-        let layer =
-            self.0.layers().next().expect(
-                format!("Dataset {} has no layers.", self.0.description().unwrap()).as_str(),
-            );
-        layer.spatial_ref()
+    pub fn srs(&self) -> anyhow::Result<Option<SpatialRef>> {
+        let layer = self
+            .0
+            .layers()
+            .next()
+            .expect(format!("Dataset {} has no layers.", self.0.description()?).as_str());
+        Ok(layer.spatial_ref())
     }
 
-    pub fn validate_srs(&self, other: &VectorDataset) {
-        if self.srs() != other.srs() {
+    pub fn compare_srs(&self, other: &VectorDataset) -> anyhow::Result<()> {
+        if self.srs()? != other.srs()? {
             panic!(
                 "{} does not have the same spatial reference system as {}",
                 self.0.description().unwrap(),
                 other.0.description().unwrap()
             )
         }
+        Ok(())
     }
 }
 
@@ -94,7 +101,7 @@ impl<T: GeoFloat> GeometryType<T> for MultiPolygon<T> {}
 impl<T: GeoFloat> GeometryType<T> for Polygon<T> {}
 
 #[derive(Hash, PartialEq, Eq, Debug)]
-pub enum GeometryError<T: GeoFloat> {
+pub enum TopologyError<T: GeoFloat> {
     Point(Vec<Point<T>>),
     LineString(Vec<LineString<T>>),
     Polygon(Vec<Polygon<T>>),
@@ -103,64 +110,58 @@ pub enum GeometryError<T: GeoFloat> {
     MultiPolygon(Vec<MultiPolygon<T>>),
 }
 
-impl<T: GeoFloat> GeometryError<T> {
+impl<T: GeoFloat> TopologyError<T> {
     fn len(&self) -> usize {
         match self {
-            GeometryError::LineString(vec) => vec.len(),
-            GeometryError::MultiLineString(vec) => vec.len(),
-            GeometryError::MultiPoint(vec) => vec.len(),
-            GeometryError::MultiPolygon(vec) => vec.len(),
-            GeometryError::Point(vec) => vec.len(),
-            GeometryError::Polygon(vec) => vec.len(),
+            TopologyError::LineString(vec) => vec.len(),
+            TopologyError::MultiLineString(vec) => vec.len(),
+            TopologyError::MultiPoint(vec) => vec.len(),
+            TopologyError::MultiPolygon(vec) => vec.len(),
+            TopologyError::Point(vec) => vec.len(),
+            TopologyError::Polygon(vec) => vec.len(),
         }
     }
 }
 
-impl<T: GeoFloat> Display for GeometryError<T> {
+impl<T: GeoFloat> Display for TopologyError<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            GeometryError::LineString(_) => write!(f, "{} LineString errors", self.len()),
-            GeometryError::MultiLineString(_) => write!(f, "{} MultiLineString errors", self.len()),
-            GeometryError::MultiPoint(_) => write!(f, "{} MultiPoint errors", self.len()),
-            GeometryError::MultiPolygon(_) => write!(f, "{} MultiPolygon errors", self.len()),
-            GeometryError::Point(_) => write!(f, "{} Point errors", self.len()),
-            GeometryError::Polygon(_) => write!(f, "{} Polygon errors", self.len()),
+            TopologyError::LineString(_) => write!(f, "{} LineString errors", self.len()),
+            TopologyError::MultiLineString(_) => write!(f, "{} MultiLineString errors", self.len()),
+            TopologyError::MultiPoint(_) => write!(f, "{} MultiPoint errors", self.len()),
+            TopologyError::MultiPolygon(_) => write!(f, "{} MultiPolygon errors", self.len()),
+            TopologyError::Point(_) => write!(f, "{} Point errors", self.len()),
+            TopologyError::Polygon(_) => write!(f, "{} Polygon errors", self.len()),
         }
     }
 }
 
-impl<T: GeoFloat> GeometryError<T> {
-    fn to_gdal(&self) -> Vec<gdal::vector::Geometry> {
-        match self {
-            Self::Point(points) => points
-                .into_iter()
-                .map(|point| point.to_gdal().expect("Failed to convert to GDAL."))
-                .collect(),
+impl<T: GeoFloat> TopologyError<T> {
+    fn to_gdal(&self) -> anyhow::Result<Vec<gdal::vector::Geometry>, GdalError> {
+        let geometries: anyhow::Result<Vec<_>, GdalError> = match self {
+            Self::Point(points) => points.into_iter().map(|point| point.to_gdal()).collect(),
             Self::LineString(linestrings) => linestrings
                 .into_iter()
-                .map(|linestring| linestring.to_gdal().expect("Failed to convert to GDAL."))
+                .map(|linestring| linestring.to_gdal())
                 .collect(),
             Self::Polygon(polygons) => polygons
                 .into_iter()
-                .map(|polygon| polygon.to_gdal().expect("Failed to convert to GDAL."))
+                .map(|polygon| polygon.to_gdal())
                 .collect(),
             Self::MultiPoint(multipoints) => multipoints
                 .into_iter()
-                .map(|multipoint| multipoint.to_gdal().expect("Failed to convert to GDAL."))
+                .map(|multipoint| multipoint.to_gdal())
                 .collect(),
             Self::MultiLineString(multilinestrings) => multilinestrings
                 .into_iter()
-                .map(|multilinestring| {
-                    multilinestring
-                        .to_gdal()
-                        .expect("Failed to convert to GDAL.")
-                })
+                .map(|multilinestring| multilinestring.to_gdal())
                 .collect(),
             Self::MultiPolygon(multipolygons) => multipolygons
                 .into_iter()
-                .map(|multipolygon| multipolygon.to_gdal().expect("Failed to convert to GDAL."))
+                .map(|multipolygon| multipolygon.to_gdal())
                 .collect(),
-        }
+        };
+        Ok(geometries?)
     }
     pub fn export(&self, config: ExportConfig) -> anyhow::Result<()> {
         let ExportConfig {
@@ -170,7 +171,8 @@ impl<T: GeoFloat> GeometryError<T> {
             mut dataset,
         } = config;
         // We make this created_dataset object to store the
-        // created dataset so it lives long enough.
+        // created dataset. This makes the possibly created dataset
+        // live long enough.
         let mut created_dataset = None;
         {
             // This scope creates a dataset in case it was not provided.
@@ -183,7 +185,7 @@ impl<T: GeoFloat> GeometryError<T> {
             }
         }
         if dataset.as_ref().is_some() {
-            let geometries: Vec<gdal::vector::Geometry> = self.to_gdal();
+            let geometries: Vec<gdal::vector::Geometry> = self.to_gdal()?;
             let geometry_type = geometries[0].geometry_type();
             let geometry_name = geometries[0].geometry_name();
             let mut layer = None;
@@ -197,17 +199,16 @@ impl<T: GeoFloat> GeometryError<T> {
                 });
             }
             if let Some(mut layer) = layer {
-                geometries.into_iter().for_each(|geom| {
-                    layer
-                        .create_feature_fields(
+                geometries
+                    .into_iter()
+                    .map(|geom| -> anyhow::Result<()> {
+                        Ok(layer.create_feature_fields(
                             geom,
                             &["rule"],
                             &[gdal::vector::FieldValue::StringValue(rule_name.to_string())],
-                        )
-                        .unwrap_or_else(|err| {
-                            eprintln!("Failed to write row inside layer {} with error {:?} for rule {:?}.", layer.name(), err, rule_name)
+                        )?)
                     })
-                });
+                    .collect::<anyhow::Result<Vec<_>>>()?;
             } else {
                 let mut layer = None;
                 if let Some(dataset) = &mut dataset {
@@ -221,19 +222,18 @@ impl<T: GeoFloat> GeometryError<T> {
                 }
                 let field =
                     gdal::vector::FieldDefn::new("rule", gdal::vector::OGRFieldType::OFTString)
-                        .unwrap();
+                        .with_context(|| "Failed to create field 'rule' inside the layer.")?;
                 field.add_to_layer(layer.as_mut().unwrap()).unwrap();
-                geometries.into_iter().for_each(|geom| {
-                    layer
-                        .as_mut()
-                        .unwrap()
-                        .create_feature_fields(
+                geometries
+                    .into_iter()
+                    .map(|geom| -> anyhow::Result<()> {
+                        Ok(layer.as_mut().unwrap().create_feature_fields(
                             geom,
                             &["rule"],
                             &[gdal::vector::FieldValue::StringValue(rule_name.to_string())],
-                        )
-                        .unwrap();
-                })
+                        )?)
+                    })
+                    .collect::<anyhow::Result<Vec<_>>>()?;
             }
         }
         Ok(())
@@ -241,7 +241,7 @@ impl<T: GeoFloat> GeometryError<T> {
 }
 
 pub enum TopologyResult<T: GeoFloat> {
-    Errors(Vec<GeometryError<T>>),
+    Errors(Vec<TopologyError<T>>),
     Valid,
 }
 
@@ -281,7 +281,7 @@ impl<'a> Clone for ExportConfig<'a> {
 }
 
 impl<T: GeoFloat> TopologyResult<T> {
-    pub fn unwrap_err(&self) -> &Vec<GeometryError<T>> {
+    pub fn unwrap_err(&self) -> &Vec<TopologyError<T>> {
         match self {
             Self::Errors(geometry_errors) => geometry_errors,
             Self::Valid => panic!("Called unwrap_err on a Valid variant."),
@@ -305,11 +305,11 @@ impl<T: GeoFloat> TopologyResult<T> {
         println!("{:-^60}", "");
     }
 
-    pub fn unwrap_err_point(&self) -> &GeometryError<T> {
+    pub fn unwrap_err_point(&self) -> &TopologyError<T> {
         self.unwrap_err()
             .into_iter()
             .find(|error| {
-                if let GeometryError::Point(_) = error {
+                if let TopologyError::Point(_) = error {
                     return true;
                 }
                 false
@@ -317,11 +317,11 @@ impl<T: GeoFloat> TopologyResult<T> {
             .expect("No point errors exist.")
     }
 
-    pub fn unwrap_err_linestring(&self) -> &GeometryError<T> {
+    pub fn unwrap_err_linestring(&self) -> &TopologyError<T> {
         self.unwrap_err()
             .into_iter()
             .find(|error| {
-                if let GeometryError::LineString(_) = error {
+                if let TopologyError::LineString(_) = error {
                     return true;
                 }
                 false
@@ -329,11 +329,11 @@ impl<T: GeoFloat> TopologyResult<T> {
             .expect("No linestring errors exist.")
     }
 
-    pub fn unwrap_err_polygon(&self) -> &GeometryError<T> {
+    pub fn unwrap_err_polygon(&self) -> &TopologyError<T> {
         self.unwrap_err()
             .into_iter()
             .find(|error| {
-                if let GeometryError::Polygon(_) = error {
+                if let TopologyError::Polygon(_) = error {
                     return true;
                 }
                 false
@@ -341,11 +341,11 @@ impl<T: GeoFloat> TopologyResult<T> {
             .expect("No polygon errors exist.")
     }
 
-    pub fn unwrap_err_multipoint(&self) -> &GeometryError<T> {
+    pub fn unwrap_err_multipoint(&self) -> &TopologyError<T> {
         self.unwrap_err()
             .into_iter()
             .find(|error| {
-                if let GeometryError::MultiPoint(_) = error {
+                if let TopologyError::MultiPoint(_) = error {
                     return true;
                 }
                 false
@@ -353,11 +353,11 @@ impl<T: GeoFloat> TopologyResult<T> {
             .expect("No multipoint errors exist.")
     }
 
-    pub fn unwrap_err_multilinestring(&self) -> &GeometryError<T> {
+    pub fn unwrap_err_multilinestring(&self) -> &TopologyError<T> {
         self.unwrap_err()
             .into_iter()
             .find(|error| {
-                if let GeometryError::MultiLineString(_) = error {
+                if let TopologyError::MultiLineString(_) = error {
                     return true;
                 }
                 false
@@ -365,11 +365,11 @@ impl<T: GeoFloat> TopologyResult<T> {
             .expect("No multilinestring errors exist.")
     }
 
-    pub fn unwrap_err_multipolygon(&self) -> &GeometryError<T> {
+    pub fn unwrap_err_multipolygon(&self) -> &TopologyError<T> {
         self.unwrap_err()
             .into_iter()
             .find(|error| {
-                if let GeometryError::MultiPolygon(_) = error {
+                if let TopologyError::MultiPolygon(_) = error {
                     return true;
                 }
                 false

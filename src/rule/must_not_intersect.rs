@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use crate::{
     util::{explode_linestrings, intersections, linestring_inner_points, sweep_points_to_points},
-    GeometryError, TopologyResult,
+    TopologyError, TopologyResult,
 };
 use geo::{sweep::SweepPoint, GeoFloat, LineString, Point};
 use itertools::Itertools;
@@ -41,10 +41,10 @@ impl<T: GeoFloat + Send + Sync> MustNotIntersect<T> for Vec<LineString<T>> {
 
         let mut geometry_errors = Vec::new();
         if !points.is_empty() {
-            geometry_errors.push(GeometryError::Point(points))
+            geometry_errors.push(TopologyError::Point(points))
         }
         if !linestrings.is_empty() {
-            geometry_errors.push(GeometryError::LineString(linestrings))
+            geometry_errors.push(TopologyError::LineString(linestrings))
         }
         if geometry_errors.is_empty() {
             TopologyResult::Valid

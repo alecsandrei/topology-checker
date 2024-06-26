@@ -1,6 +1,6 @@
 use crate::{
     util::{explode_linestrings, intersections, linestring_endpoints, sweep_points_to_points},
-    GeometryError, TopologyResult,
+    TopologyError, TopologyResult,
 };
 use geo::{sweep::SweepPoint, GeoFloat, LineString};
 use itertools::Itertools;
@@ -25,7 +25,7 @@ impl<T: GeoFloat + Send + Sync> MustNotHaveDangles<T> for Vec<LineString<T>> {
                 None
             })
             .collect_vec();
-        let geometry_errors = vec![GeometryError::Point(
+        let geometry_errors = vec![TopologyError::Point(
             sweep_points_to_points(endpoints).into_iter().collect(),
         )];
         if geometry_errors.is_empty() {

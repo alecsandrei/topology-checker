@@ -263,10 +263,12 @@ use topology_checker::{
         explode_linestrings, flatten_linestrings, flatten_points, flatten_polygons,
         geometries_to_file, GdalDrivers,
     },
-    ExportConfig, GeometryError, TopologyResult, TopologyResults, VectorDataset,
+    ExportConfig, TopologyError, TopologyResult, TopologyResults, VectorDataset,
 };
 #[cfg(windows)]
 fn enable_colors_for_windows() {
+    // The result of the set_virtual_terminal function is always Ok(())
+    // thus it is ok to unwrap
     colored::control::set_virtual_terminal(true).unwrap();
 }
 
@@ -290,8 +292,8 @@ type RuleName = String;
 
 /// Used to get the serialized rule name from a [Command] object.
 /// TODO: Find a better solution for this, it's really ugly.
-fn rule_name(command: &Command) -> RuleName {
-    let value = serde_json::to_value(command).unwrap();
+fn rule_name(command: &Command) -> anyhow::Result<RuleName> {
+    let value = serde_json::to_value(command)?;
     let geometry = value
         .as_object()
         .unwrap()
@@ -299,7 +301,7 @@ fn rule_name(command: &Command) -> RuleName {
         .map(|x| x.0)
         .next()
         .unwrap();
-    value
+    let rule_name = value
         .as_object()
         .unwrap()
         .get(geometry)
@@ -310,7 +312,8 @@ fn rule_name(command: &Command) -> RuleName {
         .map(|x| x.1.as_object().unwrap().keys().next().unwrap())
         .next()
         .unwrap()
-        .clone()
+        .clone();
+    Ok(rule_name)
 }
 
 fn interactive_mode(args: TopologyCheckerArgs) -> anyhow::Result<()> {
@@ -349,7 +352,7 @@ fn interactive_mode(args: TopologyCheckerArgs) -> anyhow::Result<()> {
         };
         let mut args = std::collections::HashMap::new();
         // TODO: document what this regex does.
-        let re = Regex::new(r#"([-\w]+)=("[^"]+"|\S+)"#).unwrap();
+        let re = Regex::new(r#"([-\w]+)=("[^"]+"|\S+)"#)?;
         for captures in re.captures_iter(&input) {
             let mut subcaptures: std::iter::Skip<regex::SubCaptureMatches> =
                 captures.iter().skip(1);
@@ -410,7 +413,7 @@ fn interactive_mode(args: TopologyCheckerArgs) -> anyhow::Result<()> {
                     gdal_driver: args.gdal_driver.clone(),
                     command: command,
                 };
-                let rule_name = format!("{}-{}", index, rule_name(&args.command));
+                let rule_name = format!("{}-{}", index, rule_name(&args.command)?);
                 Ok((rule_name, parse_rules(args, false)?))
             },
         )
@@ -424,7 +427,7 @@ fn interactive_mode(args: TopologyCheckerArgs) -> anyhow::Result<()> {
 }
 
 fn parse_rules(args: TopologyCheckerArgs, summarize: bool) -> anyhow::Result<TopologyResult<f64>> {
-    let rule_name = rule_name(&args.command);
+    let rule_name = rule_name(&args.command)?;
     let options = LayerOptions {
         name: &rule_name.clone(),
         ..Default::default()
@@ -438,8 +441,8 @@ fn parse_rules(args: TopologyCheckerArgs, summarize: bool) -> anyhow::Result<Top
         Command::Point(ref command) => match &command.command {
             PointRules::MustNotOverlap { points, overlaps } => {
                 let vector_dataset = VectorDataset::new(&points)?;
-                let points = flatten_points(vector_dataset.to_geo().unwrap());
-                let srs = vector_dataset.srs();
+                let points = flatten_points(vector_dataset.to_geo()?);
+                let srs = vector_dataset.srs()?;
                 let result = points.must_not_overlap();
                 if overlaps.is_some() && !result.is_valid() {
                     config.output = overlaps.as_ref();
@@ -455,10 +458,10 @@ fn parse_rules(args: TopologyCheckerArgs, summarize: bool) -> anyhow::Result<Top
             } => {
                 let vector_dataset = VectorDataset::new(&points)?;
                 let other = VectorDataset::new(&other)?;
-                vector_dataset.validate_srs(&other);
-                let other = flatten_points(other.to_geo().unwrap());
-                let points = flatten_points(vector_dataset.to_geo().unwrap());
-                let srs = vector_dataset.srs();
+                vector_dataset.compare_srs(&other)?;
+                let other = flatten_points(other.to_geo()?);
+                let points = flatten_points(vector_dataset.to_geo()?);
+                let srs = vector_dataset.srs()?;
                 let result = points.must_not_overlap_with(other);
                 if overlaps.is_some() && !result.is_valid() {
                     config.output = overlaps.as_ref();
@@ -471,8 +474,8 @@ fn parse_rules(args: TopologyCheckerArgs, summarize: bool) -> anyhow::Result<Top
         Command::Line(command) => match command.command {
             LineRules::MustNotHaveDangles { lines, dangles } => {
                 let vector_dataset = VectorDataset::new(&lines)?;
-                let srs = vector_dataset.srs();
-                let lines = vector_dataset.to_geo().unwrap();
+                let srs = vector_dataset.srs()?;
+                let lines = vector_dataset.to_geo()?;
                 let lines = flatten_linestrings(lines);
                 let result = lines.must_not_have_dangles();
                 if dangles.is_some() && !result.is_valid() {
@@ -488,8 +491,8 @@ fn parse_rules(args: TopologyCheckerArgs, summarize: bool) -> anyhow::Result<Top
                 collinear_lines,
             } => {
                 let vector_dataset = VectorDataset::new(&lines)?;
-                let srs = vector_dataset.srs();
-                let lines = vector_dataset.to_geo().unwrap();
+                let srs = vector_dataset.srs()?;
+                let lines = vector_dataset.to_geo()?;
                 let lines = flatten_linestrings(lines);
                 let result = lines.must_not_intersect();
                 // Some workaround for the case where the rule can have
@@ -497,14 +500,14 @@ fn parse_rules(args: TopologyCheckerArgs, summarize: bool) -> anyhow::Result<Top
                 if (single_points.is_some() | collinear_lines.is_some()) && !result.is_valid() {
                     config.options.srs = srs.as_ref();
                     for error in result.unwrap_err() {
-                        if let GeometryError::Point(_) = error {
+                        if let TopologyError::Point(_) = error {
                             if let Some(ref single_points) = single_points {
                                 let mut config = config.clone();
                                 config.output = Some(single_points);
                                 error.export(config)?
                             }
                         }
-                        if let GeometryError::LineString(_) = error {
+                        if let TopologyError::LineString(_) = error {
                             if let Some(ref collinear_lines) = collinear_lines {
                                 let mut config = config.clone();
                                 config.output = Some(collinear_lines);
@@ -517,8 +520,8 @@ fn parse_rules(args: TopologyCheckerArgs, summarize: bool) -> anyhow::Result<Top
             }
             LineRules::MustNotOverlap { lines, overlaps } => {
                 let vector_dataset = VectorDataset::new(&lines)?;
-                let srs = vector_dataset.srs();
-                let lines = vector_dataset.to_geo().unwrap();
+                let srs = vector_dataset.srs()?;
+                let lines = vector_dataset.to_geo()?;
                 let lines = flatten_linestrings(lines);
                 let result = lines.must_not_overlap();
                 if overlaps.is_some() && !result.is_valid() {
@@ -535,11 +538,11 @@ fn parse_rules(args: TopologyCheckerArgs, summarize: bool) -> anyhow::Result<Top
             } => {
                 let vector_dataset = VectorDataset::new(&lines)?;
                 let other = VectorDataset::new(&other)?;
-                vector_dataset.validate_srs(&other);
-                let srs = vector_dataset.srs();
-                let lines = vector_dataset.to_geo().unwrap();
+                vector_dataset.compare_srs(&other)?;
+                let srs = vector_dataset.srs()?;
+                let lines = vector_dataset.to_geo()?;
                 let lines = flatten_linestrings(lines);
-                let other = flatten_linestrings(other.to_geo().unwrap());
+                let other = flatten_linestrings(other.to_geo()?);
                 let result = lines.must_not_overlap_with(other);
                 if overlaps.is_some() && !result.is_valid() {
                     config.options.srs = srs.as_ref();
@@ -550,8 +553,8 @@ fn parse_rules(args: TopologyCheckerArgs, summarize: bool) -> anyhow::Result<Top
             }
             LineRules::MustNotSelfOverlap { lines, overlaps } => {
                 let vector_dataset = VectorDataset::new(&lines)?;
-                let srs = vector_dataset.srs();
-                let lines = vector_dataset.to_geo().unwrap();
+                let srs = vector_dataset.srs()?;
+                let lines = vector_dataset.to_geo()?;
                 let lines = flatten_linestrings(lines);
                 let result = lines.must_not_self_overlap();
                 if overlaps.is_some() && !result.is_valid() {
@@ -565,8 +568,8 @@ fn parse_rules(args: TopologyCheckerArgs, summarize: bool) -> anyhow::Result<Top
         Command::Polygon(command) => match command.command {
             PolygonRules::MustNotOverlap { polygons, overlaps } => {
                 let vector_dataset = VectorDataset::new(&polygons)?;
-                let srs = vector_dataset.srs();
-                let polygons = vector_dataset.to_geo().unwrap();
+                let srs = vector_dataset.srs()?;
+                let polygons = vector_dataset.to_geo()?;
                 let polygons = flatten_polygons(polygons);
                 let result = polygons.must_not_overlap();
                 if overlaps.is_some() && !result.is_valid() {
@@ -583,11 +586,11 @@ fn parse_rules(args: TopologyCheckerArgs, summarize: bool) -> anyhow::Result<Top
             } => {
                 let vector_dataset = VectorDataset::new(&polygons)?;
                 let other = VectorDataset::new(&other)?;
-                vector_dataset.validate_srs(&other);
-                let srs = vector_dataset.srs();
-                let polygons = vector_dataset.to_geo().unwrap();
+                vector_dataset.compare_srs(&other)?;
+                let srs = vector_dataset.srs()?;
+                let polygons = vector_dataset.to_geo()?;
                 let polygons = flatten_polygons(polygons);
-                let other = flatten_polygons(other.to_geo().unwrap());
+                let other = flatten_polygons(other.to_geo()?);
                 let result = polygons.must_not_overlap_with(other);
                 if overlaps.is_some() {
                     config.output = overlaps.as_ref();
@@ -603,8 +606,8 @@ fn parse_rules(args: TopologyCheckerArgs, summarize: bool) -> anyhow::Result<Top
                 multiparts,
             } => {
                 let dataset = VectorDataset::new(&geometries)?;
-                let srs = dataset.srs();
-                let geometry = dataset.to_geo().unwrap();
+                let srs = dataset.srs()?;
+                let geometry = dataset.to_geo()?;
                 let result = geometry.must_not_be_multipart();
                 if multiparts.is_some() {
                     config.options.srs = srs.as_ref();
@@ -655,7 +658,7 @@ fn parse_utils(args: TopologyCheckerArgs) -> anyhow::Result<()> {
         Command::Utilities(command) => match command.command {
             Utilities::ExplodeLinestrings { linestrings, lines } => {
                 let dataset = VectorDataset::new(&linestrings)?;
-                let geometry = dataset.to_geo().unwrap();
+                let geometry = dataset.to_geo()?;
                 let linestrings = flatten_linestrings(geometry);
                 let exploded = explode_linestrings(&linestrings);
                 geometries_to_file(
@@ -667,7 +670,7 @@ fn parse_utils(args: TopologyCheckerArgs) -> anyhow::Result<()> {
                     args.gdal_driver,
                     Some(LayerOptions {
                         name: "merged_linestrings",
-                        srs: dataset.srs().as_ref(),
+                        srs: dataset.srs()?.as_ref(),
                         ..Default::default()
                     }),
                 )
@@ -677,7 +680,7 @@ fn parse_utils(args: TopologyCheckerArgs) -> anyhow::Result<()> {
                 merged,
             } => {
                 let dataset = VectorDataset::new(&linestrings)?;
-                let geometry = dataset.to_geo().unwrap();
+                let geometry = dataset.to_geo()?;
                 let linestrings = flatten_linestrings(geometry);
                 let merged_linestrings = merge_linestrings(linestrings);
                 geometries_to_file(
@@ -689,7 +692,7 @@ fn parse_utils(args: TopologyCheckerArgs) -> anyhow::Result<()> {
                     args.gdal_driver,
                     Some(LayerOptions {
                         name: "merged_linestrings",
-                        srs: dataset.srs().as_ref(),
+                        srs: dataset.srs()?.as_ref(),
                         ..Default::default()
                     }),
                 )

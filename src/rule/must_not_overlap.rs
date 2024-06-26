@@ -1,6 +1,6 @@
 use crate::{
     util::{explode_linestrings, intersections},
-    GeometryError, GeometryType, TopologyResult,
+    TopologyError, GeometryType, TopologyResult,
 };
 use geo::{
     sweep::SweepPoint, BooleanOps, Contains, GeoFloat, HasDimensions,
@@ -50,7 +50,7 @@ impl<T: GeoFloat + Send + Sync> MustNotOverlap<T, Polygon<T>, Polygon<T>> for Ve
         if geometry_errors.is_empty() {
             TopologyResult::Valid
         } else {
-            TopologyResult::Errors(vec![GeometryError::Polygon(geometry_errors)])
+            TopologyResult::Errors(vec![TopologyError::Polygon(geometry_errors)])
         }
     }
 
@@ -73,7 +73,7 @@ impl<T: GeoFloat + Send + Sync> MustNotOverlap<T, Polygon<T>, Polygon<T>> for Ve
         if geometry_errors.is_empty() {
             TopologyResult::Valid
         } else {
-            TopologyResult::Errors(vec![GeometryError::Polygon(geometry_errors)])
+            TopologyResult::Errors(vec![TopologyError::Polygon(geometry_errors)])
         }
     }
 }
@@ -85,7 +85,7 @@ impl<T: Send + Sync + GeoFloat> MustNotOverlap<T, LineString<T>, Line<T>> for Ve
         if geometry_errors.is_empty() {
             TopologyResult::Valid
         } else {
-            TopologyResult::Errors(vec![GeometryError::LineString(
+            TopologyResult::Errors(vec![TopologyError::LineString(
                 geometry_errors.into_iter().map_into().collect(),
             )])
         }
@@ -109,7 +109,7 @@ impl<T: Send + Sync + GeoFloat> MustNotOverlap<T, LineString<T>, Line<T>> for Ve
         if geometry_errors.is_empty() {
             TopologyResult::Valid
         } else {
-            TopologyResult::Errors(vec![GeometryError::LineString(
+            TopologyResult::Errors(vec![TopologyError::LineString(
                 geometry_errors.into_iter().map_into().collect(),
             )])
         }
@@ -143,7 +143,7 @@ impl<T: Send + Sync + GeoFloat> MustNotOverlap<T, Point<T>, Point<T>> for Vec<Po
         if geometry_errors.is_empty() {
             TopologyResult::Valid
         } else {
-            TopologyResult::Errors(vec![GeometryError::Point(
+            TopologyResult::Errors(vec![TopologyError::Point(
                 geometry_errors.into_iter().map_into().collect(),
             )])
         }
@@ -165,7 +165,7 @@ impl<T: Send + Sync + GeoFloat> MustNotOverlap<T, Point<T>, Point<T>> for Vec<Po
         if geometry_errors.is_empty() {
             TopologyResult::Valid
         } else {
-            TopologyResult::Errors(vec![GeometryError::Point(
+            TopologyResult::Errors(vec![TopologyError::Point(
                 geometry_errors.into_iter().map_into().collect(),
             )])
         }
@@ -192,121 +192,121 @@ impl<T: GeoFloat> MustNotSelfOverlap<T> for Vec<LineString<T>> {
         if geometry_errors.is_empty() {
             TopologyResult::Valid
         } else {
-            TopologyResult::Errors(vec![GeometryError::LineString(
+            TopologyResult::Errors(vec![TopologyError::LineString(
                 geometry_errors.into_iter().map_into().collect(),
             )])
         }
     }
 }
 
-// #[cfg(test)]
-// mod tests {
+#[cfg(test)]
+mod tests {
 
-//     use geo::line_string;
-//     use geo::polygon;
+    use geo::line_string;
+    use geo::polygon;
 
-//     use super::*;
+    use super::*;
 
-//     mod points {
-//         use super::*;
-//         use geo::point;
+    mod points {
+        use super::*;
+        use geo::point;
 
-//         #[test]
-//         fn overlap() {
-//             let input = vec![
-//                 point! { x: 181.2, y: 51.79 },
-//                 point! { x: 181.2, y: 51.79 },
-//                 point! { x: 184.0, y: 53.0 },
-//             ];
-//             let output = vec![point! { x: 181.2, y: 51.79 }];
-//             assert_eq!(
-//                 input.must_not_overlap().unwrap_err_point(),
-//                 GeometryError::Point(output)
-//             );
-//         }
+        #[test]
+        fn overlap() {
+            let input = vec![
+                point! { x: 181.2, y: 51.79 },
+                point! { x: 181.2, y: 51.79 },
+                point! { x: 184.0, y: 53.0 },
+            ];
+            let output = vec![point! { x: 181.2, y: 51.79 }];
+            assert_eq!(
+                input.must_not_overlap().unwrap_err_point(),
+                &TopologyError::Point(output)
+            );
+        }
 
-//         #[test]
-//         fn overlap_with() {
-//             let input1 = vec![point! { x: 181.2, y: 51.79 }, point! { x: 184.0, y: 53.0 }];
-//             let input2 = vec![point! { x: 181.2, y: 51.79 }];
-//             let output = vec![point! { x: 181.2, y: 51.79 }];
-//             assert_eq!(
-//                 input1.must_not_overlap_with(input2).unwrap_err_point(),
-//                 GeometryError::Point(output)
-//             );
-//         }
-//     }
+        #[test]
+        fn overlap_with() {
+            let input1 = vec![point! { x: 181.2, y: 51.79 }, point! { x: 184.0, y: 53.0 }];
+            let input2 = vec![point! { x: 181.2, y: 51.79 }];
+            let output = vec![point! { x: 181.2, y: 51.79 }];
+            assert_eq!(
+                input1.must_not_overlap_with(input2).unwrap_err_point(),
+                &TopologyError::Point(output)
+            );
+        }
+    }
 
-//     mod line_strings {
-//         use super::*;
-//         #[test]
-//         fn self_overlap() {
-//             let input = vec![line_string![(x: 1., y: 1.), (x: 4., y: 4.), (x: 2., y: 2.)]];
-//             let output = vec![line_string![(x: 4., y: 4.), (x: 2., y: 2.)]];
-//             assert_eq!(
-//                 input.must_not_self_overlap().unwrap_err_linestring(),
-//                 GeometryError::LineString(output)
-//             );
-//         }
+    mod line_strings {
+        use super::*;
+        #[test]
+        fn self_overlap() {
+            let input = vec![line_string![(x: 1., y: 1.), (x: 4., y: 4.), (x: 2., y: 2.)]];
+            let output = vec![line_string![(x: 4., y: 4.), (x: 2., y: 2.)]];
+            assert_eq!(
+                input.must_not_self_overlap().unwrap_err_linestring(),
+                &TopologyError::LineString(output)
+            );
+        }
 
-//         #[test]
-//         fn overlap() {
-//             let input = vec![
-//                 line_string![(x: 1., y: 1.), (x: 4., y: 4.)],
-//                 line_string![(x: 4., y: 4.), (x: 2., y: 2.)],
-//             ];
-//             let output = vec![line_string![(x: 2., y: 2.), (x: 4., y: 4.)]];
-//             assert_eq!(
-//                 input.must_not_overlap().unwrap_err_linestring(),
-//                 GeometryError::LineString(output)
-//             );
-//         }
+        #[test]
+        fn overlap() {
+            let input = vec![
+                line_string![(x: 1., y: 1.), (x: 4., y: 4.)],
+                line_string![(x: 4., y: 4.), (x: 2., y: 2.)],
+            ];
+            let output = vec![line_string![(x: 2., y: 2.), (x: 4., y: 4.)]];
+            assert_eq!(
+                input.must_not_overlap().unwrap_err_linestring(),
+                &TopologyError::LineString(output)
+            );
+        }
 
-//         #[test]
-//         fn overlap_with() {
-//             let input1 = vec![line_string![(x: 1., y: 1.), (x: 4., y: 4.)]];
-//             let input2 = vec![line_string![(x: 4., y: 4.), (x: 2., y: 2.)]];
-//             let output = vec![line_string![(x: 4., y: 4.), (x: 2., y: 2.)]];
-//             assert_eq!(
-//                 input1.must_not_overlap_with(input2).unwrap_err_linestring(),
-//                 GeometryError::LineString(output)
-//             );
-//         }
-//     }
+        #[test]
+        fn overlap_with() {
+            let input1 = vec![line_string![(x: 1., y: 1.), (x: 4., y: 4.)]];
+            let input2 = vec![line_string![(x: 4., y: 4.), (x: 2., y: 2.)]];
+            let output = vec![line_string![(x: 4., y: 4.), (x: 2., y: 2.)]];
+            assert_eq!(
+                input1.must_not_overlap_with(input2).unwrap_err_linestring(),
+                &TopologyError::LineString(output)
+            );
+        }
+    }
 
-//     mod polygons {
-//         use super::*;
+    mod polygons {
+        use super::*;
 
-//         #[test]
-//         fn overlap() {
-//             let input = vec![
-//                 polygon![(x: 0., y: 0.), (x: 1., y: 0.), (x: 1., y: 1.), (x: 0., y: 1.), (x: 0., y: 0.)],
-//                 polygon![(x: 0.25, y: 0.25), (x: 0.75, y: 0.25), (x: 0.75, y: 0.75), (x: 0.25, y: 0.75), (x: 0.25, y: 0.25)],
-//             ];
-//             let output = vec![input[0].intersection(&input[1]).into_iter().next().unwrap()];
-//             assert_eq!(
-//                 input.must_not_overlap().unwrap_err_polygon(),
-//                 GeometryError::Polygon(output)
-//             );
-//         }
+        #[test]
+        fn overlap() {
+            let input = vec![
+                polygon![(x: 0., y: 0.), (x: 1., y: 0.), (x: 1., y: 1.), (x: 0., y: 1.), (x: 0., y: 0.)],
+                polygon![(x: 0.25, y: 0.25), (x: 0.75, y: 0.25), (x: 0.75, y: 0.75), (x: 0.25, y: 0.75), (x: 0.25, y: 0.25)],
+            ];
+            let output = vec![input[0].intersection(&input[1]).into_iter().next().unwrap()];
+            assert_eq!(
+                input.must_not_overlap().unwrap_err_polygon(),
+                &TopologyError::Polygon(output)
+            );
+        }
 
-//         #[test]
-//         fn overlap_with() {
-//             let input1 = vec![
-//                 polygon![(x: 0., y: 0.), (x: 1., y: 0.), (x: 1., y: 1.), (x: 0., y: 1.), (x: 0., y: 0.)],
-//             ];
-//             let input2 = vec![
-//                 polygon![(x: 0.25, y: 0.25), (x: 0.75, y: 0.25), (x: 0.75, y: 0.75), (x: 0.25, y: 0.75), (x: 0.25, y: 0.25)],
-//             ];
-//             let output = vec![input1[0]
-//                 .intersection(&input2[0])
-//                 .into_iter()
-//                 .next()
-//                 .unwrap()];
-//             assert_eq!(
-//                 input1.must_not_overlap_with(input2).unwrap_err_polygon(),
-//                 GeometryError::Polygon(output)
-//             );
-//         }
-//     }
-// }
+        #[test]
+        fn overlap_with() {
+            let input1 = vec![
+                polygon![(x: 0., y: 0.), (x: 1., y: 0.), (x: 1., y: 1.), (x: 0., y: 1.), (x: 0., y: 0.)],
+            ];
+            let input2 = vec![
+                polygon![(x: 0.25, y: 0.25), (x: 0.75, y: 0.25), (x: 0.75, y: 0.75), (x: 0.25, y: 0.75), (x: 0.25, y: 0.25)],
+            ];
+            let output = vec![input1[0]
+                .intersection(&input2[0])
+                .into_iter()
+                .next()
+                .unwrap()];
+            assert_eq!(
+                input1.must_not_overlap_with(input2).unwrap_err_polygon(),
+                &TopologyError::Polygon(output)
+            );
+        }
+    }
+}

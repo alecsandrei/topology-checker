@@ -1,4 +1,4 @@
-use crate::{GeometryError, TopologyResult};
+use crate::{TopologyError, TopologyResult};
 use geo::{GeoFloat, Geometry};
 
 pub trait MustNotBeMultipart<T: GeoFloat> {
@@ -24,15 +24,14 @@ impl<T: GeoFloat> MustNotBeMultipart<T> for Vec<Geometry<T>> {
         });
         let mut geometry_errors = Vec::new();
         if !multipoints.is_empty() {
-            geometry_errors.push(GeometryError::MultiPoint(multipoints));
+            geometry_errors.push(TopologyError::MultiPoint(multipoints));
         }
         if !multilinestrings.is_empty() {
-            geometry_errors.push(GeometryError::MultiLineString(multilinestrings));
+            geometry_errors.push(TopologyError::MultiLineString(multilinestrings));
         }
         if !multipolygons.is_empty() {
-            geometry_errors.push(GeometryError::MultiPolygon(multipolygons));
+            geometry_errors.push(TopologyError::MultiPolygon(multipolygons));
         }
-
         if geometry_errors.is_empty() {
             TopologyResult::Valid
         } else {

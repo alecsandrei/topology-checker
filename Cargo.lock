@@ -635,7 +635,6 @@ dependencies = [
  "clap",
  "colored",
  "gdal",
- "gdal-sys",
  "geo",
  "geo-types",
  "geozero",
