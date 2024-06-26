@@ -39,6 +39,7 @@ Example on how to run:
 """
 from __future__ import annotations
 
+import functools
 import zipfile
 import tempfile
 import os
@@ -64,6 +65,7 @@ assert (
     '-'.join(COMPILED_GDAL_BINARIES_VERSION.split('.'))
     in COMPILED_GDAL_BINARIES
 )
+MZ = "MZ".encode(encoding='utf-8')
 
 
 class Bcolors(Enum):
@@ -325,16 +327,65 @@ def create_binary_wrapper(target_dir: Path):
     print('SUCCESS', color='cyan')
 
 
+# def make_zip(target_dir: Path, out_file: Path):
+#     exclude_dirs = [
+#         target_dir / 'gdal' / 'include',
+#         target_dir / 'gdal' / 'lib',
+#     ]
+#     exclude_patterns = [
+#         '*Zone.Identifier:$DATA',
+#         '__pycache__/*',
+#         '*/pkg-config-lite*/*',
+#         out_file.name
+#     ]
+
+#     def include_file(file: Path):
+#         if file.is_dir():
+#             return False
+#         if any(file.is_relative_to(dir) for dir in exclude_dirs):
+#             return False
+#         for path in [file, *file.parents]:
+#             if any(path.match(pat) for pat in exclude_patterns):
+#                 return False
+#         return True
+
+#     print(f'\rCreating zip at {out_file}.')
+#     files = tuple(filter(include_file, target_dir.rglob('*')))
+#     len_files = len(files)
+#     with zipfile.ZipFile(out_file, 'w', zipfile.ZIP_LZMA) as f:
+#         for i, file in enumerate(files, start=1):
+#             print(
+#                 f'Archiving {f"{i}/{len_files} files.":<15}',
+#                 end='\r'
+#             )
+#             f.write(file, file.relative_to(target_dir))
+
+
 def make_zip(target_dir: Path, out_file: Path):
     exclude_dirs = [
         target_dir / 'gdal' / 'include',
         target_dir / 'gdal' / 'lib',
+        target_dir / 'gdal' / 'doc',
     ]
     exclude_patterns = [
+        (target_dir / 'gdal' / '*.rtf').as_posix(),
+        (target_dir / 'gdal' / '*.bat').as_posix(),
+        (target_dir / 'gdal' / '*.pc').as_posix(),
         '*Zone.Identifier:$DATA',
         '__pycache__/*',
         '*/pkg-config-lite*/*',
         out_file.name
+    ]
+
+    def is_not_gdal_binary(file_path: Path):
+        if not file_path.is_relative_to(target_dir / 'gdal'):
+            return True
+        if not file_path.suffix == '.exe':
+            return True
+        return False
+
+    exclude_funcs = [
+        is_not_gdal_binary
     ]
 
     def include_file(file: Path):
@@ -344,6 +395,9 @@ def make_zip(target_dir: Path, out_file: Path):
             return False
         for path in [file, *file.parents]:
             if any(path.match(pat) for pat in exclude_patterns):
+                return False
+        for func in exclude_funcs:
+            if func(file) is False:
                 return False
         return True
 
@@ -362,11 +416,17 @@ def make_zip(target_dir: Path, out_file: Path):
 def main():
     args = parse_arguments()
     assert isinstance(args.target_dir, Path)
-
+    if not args.target_dir.exists():
+        raise NotADirectoryError(f'Could not find {args.target_dir}')
+    version = parse_version()
+    if not (version_dir := (args.target_dir / version)).exists():
+        version_dir.mkdir()
+    else:
+        shutil.rmtree(version_dir)
     try:
         os.environ['GDAL_HOME'], os.environ['PKG_CONFIG_PATH']
         print('Found GDAL_HOME and PKG_CONFIG_PATH environment variables.')
-        copy_gdal_to(args.target_dir)
+        copy_gdal_to(version_dir)
     except KeyError as e:
         while True:
             to_download = input(
@@ -374,7 +434,7 @@ def main():
                 + 'Download GDAL from gisinternals? (y/n): '
             )
             if to_download == 'y':
-                gdal = args.target_dir / 'gdal'
+                gdal = version_dir / 'gdal'
                 handle_remote_gdal(gdal)
                 break
             elif to_download == 'n':
@@ -387,7 +447,7 @@ def main():
                 + 'Download pkg-config-lite from sourceforge? (y/n): '
             )
             if to_download == 'y':
-                handle_remote_pkg_config(args.target_dir)
+                handle_remote_pkg_config(version_dir)
                 break
             elif to_download == 'n':
                 exit(1)
@@ -396,10 +456,10 @@ def main():
     build()
 
     # Create wrapper binary with pyinstaller
-    create_binary_wrapper(args.target_dir)
+    create_binary_wrapper(version_dir)
 
     # Create bin folder to store rust binary
-    bin = args.target_dir / 'bin'
+    bin = version_dir / 'bin'
     if not bin.exists():
         bin.mkdir()
 
@@ -414,15 +474,21 @@ def main():
 
     # Create zip file for release
     name = f'topology_checker_v{parse_version()}'
-    out_zip = (args.target_dir / name).with_suffix('.zip')
-    make_zip(args.target_dir, out_zip)
+    out_zip = version_dir / name
+    out_zip = (
+        out_zip
+        .with_name(out_zip.name.replace('.', '-'))
+        .with_suffix('.zip')
+    )
+    make_zip(version_dir, out_zip)
 
 
+@functools.cache
 def parse_version():
     with open(HERE / '../Cargo.toml', mode='r', encoding='utf-8') as f:
         for line in f.readlines():
             if line.startswith('version'):
-                return ''.join(filter(str.isdigit, line))
+                return line.rstrip(' ').split('"')[-2].strip()
 
 
 if __name__ == '__main__':
