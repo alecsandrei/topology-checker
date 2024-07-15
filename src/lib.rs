@@ -79,16 +79,34 @@ impl VectorDataset {
         Ok(layer.spatial_ref())
     }
 
-    pub fn compare_srs(&self, other: &VectorDataset) -> anyhow::Result<()> {
-        if self.srs()? != other.srs()? {
-            panic!(
-                "{} does not have the same spatial reference system as {}",
-                self.0.description().unwrap(),
-                other.0.description().unwrap()
-            )
+    pub fn compare_srs(&self, other: &VectorDataset) -> anyhow::Result<SRSComparison> {
+        let srs1 = self.srs()?;
+        let srs2 = other.srs()?;
+        if srs1.is_none() {
+            return Err(anyhow::anyhow!(
+                "Found missing srs for layer {}",
+                self.0.description()?
+            ))
         }
-        Ok(())
+        if srs2.is_none() {
+            return Err(anyhow::anyhow!(
+                "Found missing srs for layer {}",
+                other.0.description()?
+            ))
+        }
+        if srs1 != srs2 {
+            return Ok(SRSComparison::Different(
+                srs1.unwrap().name()?,
+                srs2.unwrap().name()?,
+            ));
+        }
+        Ok(SRSComparison::Same)
     }
+}
+
+pub enum SRSComparison {
+    Same,
+    Different(String, String),
 }
 
 pub trait GeometryType<T: GeoFloat> {}

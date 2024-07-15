@@ -113,7 +113,7 @@ mod args {
             polygons: PathBuf,
             /// The outside points
             outside: Option<PathBuf>,
-        }
+        },
     }
 
     #[derive(Debug, Subcommand, PartialEq, Serialize, Deserialize)]
@@ -267,14 +267,14 @@ use serde::Deserialize;
 use topology_checker::{
     algorithm::merge_linestrings,
     rule::{
-        MustNotBeMultipart, MustNotHaveDangles, MustNotIntersect, MustNotOverlap,
-        MustNotSelfOverlap, MustBeInside
+        MustBeInside, MustNotBeMultipart, MustNotHaveDangles, MustNotIntersect, MustNotOverlap,
+        MustNotSelfOverlap,
     },
     util::{
         explode_linestrings, flatten_linestrings, flatten_points, flatten_polygons,
         geometries_to_file, GdalDrivers,
     },
-    ExportConfig, TopologyError, TopologyResult, TopologyResults, VectorDataset,
+    ExportConfig, SRSComparison, TopologyError, TopologyResult, TopologyResults, VectorDataset,
 };
 #[cfg(windows)]
 fn enable_colors_for_windows() {
@@ -469,7 +469,13 @@ fn parse_rules(args: TopologyCheckerArgs, summarize: bool) -> anyhow::Result<Top
             } => {
                 let vector_dataset = VectorDataset::new(&points)?;
                 let other = VectorDataset::new(&other)?;
-                vector_dataset.compare_srs(&other)?;
+                if let SRSComparison::Different(crs1, crs2) = vector_dataset.compare_srs(&other)? {
+                    return Err(anyhow::anyhow!(
+                        "The crs of the input datasets is different. Found {} and {}",
+                        crs1,
+                        crs2
+                    ));
+                };
                 let other = flatten_points(other.to_geo()?);
                 let points = flatten_points(vector_dataset.to_geo()?);
                 let srs = vector_dataset.srs()?;
@@ -480,11 +486,21 @@ fn parse_rules(args: TopologyCheckerArgs, summarize: bool) -> anyhow::Result<Top
                     result.unwrap_err_point().export(config)?
                 }
                 result
-            },
-            PointRules::MustBeInside { points, polygons, outside } => {
+            }
+            PointRules::MustBeInside {
+                points,
+                polygons,
+                outside,
+            } => {
                 let vector_dataset = VectorDataset::new(&points)?;
                 let other = VectorDataset::new(&polygons)?;
-                vector_dataset.compare_srs(&other)?;
+                if let SRSComparison::Different(crs1, crs2) = vector_dataset.compare_srs(&other)? {
+                    return Err(anyhow::anyhow!(
+                        "The crs of the input datasets is different. Found {} and {}",
+                        crs1,
+                        crs2
+                    ));
+                };
                 let polygons = flatten_polygons(other.to_geo()?);
                 let points = flatten_points(vector_dataset.to_geo()?);
                 let srs = vector_dataset.srs()?;
@@ -564,7 +580,13 @@ fn parse_rules(args: TopologyCheckerArgs, summarize: bool) -> anyhow::Result<Top
             } => {
                 let vector_dataset = VectorDataset::new(&lines)?;
                 let other = VectorDataset::new(&other)?;
-                vector_dataset.compare_srs(&other)?;
+                if let SRSComparison::Different(crs1, crs2) = vector_dataset.compare_srs(&other)? {
+                    return Err(anyhow::anyhow!(
+                        "The crs of the input datasets is different. Found {} and {}",
+                        crs1,
+                        crs2
+                    ));
+                };
                 let srs = vector_dataset.srs()?;
                 let lines = vector_dataset.to_geo()?;
                 let lines = flatten_linestrings(lines);
@@ -612,7 +634,13 @@ fn parse_rules(args: TopologyCheckerArgs, summarize: bool) -> anyhow::Result<Top
             } => {
                 let vector_dataset = VectorDataset::new(&polygons)?;
                 let other = VectorDataset::new(&other)?;
-                vector_dataset.compare_srs(&other)?;
+                if let SRSComparison::Different(crs1, crs2) = vector_dataset.compare_srs(&other)? {
+                    return Err(anyhow::anyhow!(
+                        "The crs of the input datasets is different. Found {} and {}",
+                        crs1,
+                        crs2
+                    ));
+                };
                 let srs = vector_dataset.srs()?;
                 let polygons = vector_dataset.to_geo()?;
                 let polygons = flatten_polygons(polygons);
