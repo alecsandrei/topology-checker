@@ -170,6 +170,19 @@ mod args {
             /// Output line intersections
             collinear_lines: Option<PathBuf>,
         },
+        #[command(arg_required_else_help(true))]
+        MustBeInside {
+            #[arg(value_parser = parse_key_val::<String, PathBuf>)]
+            /// Input lines
+            lines: PathBuf,
+            #[arg(value_parser = parse_key_val::<String, PathBuf>)]
+            /// Input polygons
+            polygons: PathBuf,
+            #[arg(value_parser = parse_key_val::<String, PathBuf>)]
+            /// Output outside lines
+            outside_lines: Option<PathBuf>,
+        },
+
     }
 
     #[derive(Debug, Subcommand, PartialEq, Serialize, Deserialize)]
@@ -609,6 +622,28 @@ fn parse_rules(args: TopologyCheckerArgs, summarize: bool) -> anyhow::Result<Top
                     config.options.srs = srs.as_ref();
                     config.output = overlaps.as_ref();
                     result.unwrap_err_linestring().export(config)?
+                }
+                result
+            },
+            LineRules::MustBeInside { lines, polygons, outside_lines } => {
+                let vector_dataset = VectorDataset::new(&lines)?;
+                let polygons = VectorDataset::new(&polygons)?;
+                if let SRSComparison::Different(crs1, crs2) = vector_dataset.compare_srs(&polygons)? {
+                    return Err(anyhow::anyhow!(
+                        "The crs of the input datasets is different. Found {} and {}",
+                        crs1,
+                        crs2
+                    ));
+                };
+                let srs = vector_dataset.srs()?;
+                let lines = vector_dataset.to_geo()?;
+                let lines = flatten_linestrings(lines);
+                let polygons = flatten_polygons(polygons.to_geo()?);
+                let result = lines.must_be_inside(polygons);
+                if outside_lines.is_some() && !result.is_valid() {
+                    config.options.srs = srs.as_ref();
+                    config.output = outside_lines.as_ref();
+                    result.unwrap_err_linestring().export(config)?;
                 }
                 result
             }

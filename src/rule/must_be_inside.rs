@@ -1,11 +1,14 @@
 use crate::{TopologyError, TopologyResult};
-use geo::{Contains, GeoFloat, Point, Polygon};
+use geo::{Contains, GeoFloat, LineString, Point, Polygon};
 use itertools::Itertools;
 use rstar::RTree;
 
 pub trait MustBeInside<T: GeoFloat> {
     fn must_be_inside(self, other: Vec<Polygon<T>>) -> TopologyResult<T>;
 }
+
+// TODO for both point and linestring implementations:
+// try to eliminate the clone in Some(*point) and Some(linestring.clone())
 
 impl<T: GeoFloat> MustBeInside<T> for Vec<Point<T>> {
     fn must_be_inside(self, other: Vec<Polygon<T>>) -> TopologyResult<T> {
@@ -29,6 +32,32 @@ impl<T: GeoFloat> MustBeInside<T> for Vec<Point<T>> {
             TopologyResult::Valid
         } else {
             TopologyResult::Errors(vec![TopologyError::Point(outside_points)])
+        }
+    }
+}
+
+impl<T: GeoFloat> MustBeInside<T> for Vec<LineString<T>> {
+    fn must_be_inside(self, other: Vec<Polygon<T>>) -> TopologyResult<T> {
+        let linestrings = RTree::bulk_load(self);
+        let polygons = RTree::bulk_load(other);
+        let inside_linestrings = linestrings
+            .intersection_candidates_with_other_tree(&polygons)
+            .filter_map(|(linestring, polygon)| {
+                if polygon.contains(linestring) {
+                    Some(linestring.clone())
+                } else {
+                    None
+                }
+            })
+            .collect_vec();
+        let outside_linestrings = linestrings
+            .into_iter()
+            .filter(|line| !inside_linestrings.contains(&line))
+            .collect_vec();
+        if outside_linestrings.is_empty() {
+            TopologyResult::Valid
+        } else {
+            TopologyResult::Errors(vec![TopologyError::LineString(outside_linestrings)])
         }
     }
 }
@@ -79,6 +108,19 @@ mod tests {
                 *result.unwrap_err_point(),
                 TopologyError::Point(invalid_points)
             );
+        }
+    }
+
+    mod linestrings {
+
+        #[test]
+        fn valid() {
+            todo!()
+        }
+
+        #[test]
+        fn invalid() {
+            todo!()
         }
     }
 }
