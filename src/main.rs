@@ -94,7 +94,7 @@ mod args {
         #[command(arg_required_else_help(true))]
         MustNotOverlapWith {
             #[arg(value_parser = parse_key_val::<String, PathBuf>)]
-            /// Input lines
+            /// Input points
             points: PathBuf,
             #[arg(value_parser = parse_key_val::<String, PathBuf>)]
             /// Input points to check against
@@ -103,6 +103,17 @@ mod args {
             /// The output overlaps
             overlaps: Option<PathBuf>,
         },
+        #[command(arg_required_else_help(true))]
+        MustBeInside {
+            #[arg(value_parser = parse_key_val::<String, PathBuf>)]
+            /// Input points
+            points: PathBuf,
+            #[arg(value_parser = parse_key_val::<String, PathBuf>)]
+            /// Input polygons to check against
+            polygons: PathBuf,
+            /// The outside points
+            outside: Option<PathBuf>,
+        }
     }
 
     #[derive(Debug, Subcommand, PartialEq, Serialize, Deserialize)]
@@ -257,7 +268,7 @@ use topology_checker::{
     algorithm::merge_linestrings,
     rule::{
         MustNotBeMultipart, MustNotHaveDangles, MustNotIntersect, MustNotOverlap,
-        MustNotSelfOverlap,
+        MustNotSelfOverlap, MustBeInside
     },
     util::{
         explode_linestrings, flatten_linestrings, flatten_points, flatten_polygons,
@@ -465,6 +476,21 @@ fn parse_rules(args: TopologyCheckerArgs, summarize: bool) -> anyhow::Result<Top
                 let result = points.must_not_overlap_with(other);
                 if overlaps.is_some() && !result.is_valid() {
                     config.output = overlaps.as_ref();
+                    config.options.srs = srs.as_ref();
+                    result.unwrap_err_point().export(config)?
+                }
+                result
+            },
+            PointRules::MustBeInside { points, polygons, outside } => {
+                let vector_dataset = VectorDataset::new(&points)?;
+                let other = VectorDataset::new(&polygons)?;
+                vector_dataset.compare_srs(&other)?;
+                let polygons = flatten_polygons(other.to_geo()?);
+                let points = flatten_points(vector_dataset.to_geo()?);
+                let srs = vector_dataset.srs()?;
+                let result = points.must_be_inside(polygons);
+                if outside.is_some() && !result.is_valid() {
+                    config.output = outside.as_ref();
                     config.options.srs = srs.as_ref();
                     result.unwrap_err_point().export(config)?
                 }
