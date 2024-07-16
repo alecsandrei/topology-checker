@@ -33,7 +33,13 @@ These rules will now be implemented for vectors of certain geometries. For examp
 ```rust
 use geo::{line_string, Line, LineString, Point};
 use topology_checker::rule::MustNotHaveDangles;
-let lines: Vec<LineString> = vec![line_string![(x: 0., y: 0.), (x: 1., y: 1.)], line_string![(x: 1., y: 1.), (x: 2., y: 2.)]];
+let lines: Vec<LineString> = vec![
+    line_string![
+        (x: 0., y: 0.),
+        (x: 1., y: 1.)],
+    line_string![
+        (x: 1., y: 1.),
+        (x: 2., y: 2.)]];
 let dangles: Vec<Point> = lines.must_not_have_dangles();
 
 use topology_checker::rule::MustNotIntersect;
@@ -41,8 +47,32 @@ let intersections: (Vec<geo::Line>, Vec<geo::Point>) = lines.must_not_intersect(
 
 use topology_checker::rule::MustNotOverlap;
 use geo::{polygon, Polygon};
-let polygons: Vec<Polygon> = vec![polygon![(x: 0., y: 0.), (x: 1., y: 0.), (x: 1., y: 1.), (x: 0., y: 1.), (x: 0., y: 0.)], polygon![(x: 1., y: 1.), (x: 2., y: 1.), (x: 2., y: 2.), (x: 1., y: 2.), (x: 1., y: 1.)]];
+let polygons: Vec<Polygon> = vec![
+    polygon![
+        (x: 0., y: 0.),
+        (x: 1., y: 0.),
+        (x: 1., y: 1.),
+        (x: 0., y: 1.),
+        (x: 0., y: 0.)],
+    polygon![
+        (x: 1., y: 1.),
+        (x: 2., y: 1.),
+        (x: 2., y: 2.),
+        (x: 1., y: 2.),
+        (x: 1., y: 1.)]];
 let overlaps: Vec<Polygon> = polygons.clone().must_not_overlap();
-let others: Vec<Polygon> = vec![polygon![(x: 0., y: 0.), (x: 1., y: 0.), (x: 1., y: 1.), (x: 0., y: 1.), (x: 0., y: 0.)], polygon![(x: 1., y: 1.), (x: 2., y: 1.), (x: 2., y: 2.), (x: 1., y: 2.), (x: 1., y: 1.)]];
+let others: Vec<Polygon> = vec![
+    polygon![
+        (x: 0., y: 0.),
+        (x: 1., y: 0.),
+        (x: 1., y: 1.),
+        (x: 0., y: 1.),
+        (x: 0., y: 0.)],
+    polygon![
+        (x: 1., y: 1.),
+        (x: 2., y: 1.),
+        (x: 2., y: 2.),
+        (x: 1., y: 2.),
+        (x: 1., y: 1.)]];
 let overlaps: Vec<Polygon> = polygons.clone().must_not_overlap_with(others);
 ```
