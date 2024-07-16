@@ -23,6 +23,9 @@ mod args {
         #[clap(long, env)]
         /// GDAL driver to use for output files.
         pub gdal_driver: Option<String>,
+        #[clap(long, short, action)]
+        /// Print elapsed time.
+        pub elapsed: bool,
         #[clap(subcommand)]
         pub command: Command,
     }
@@ -302,12 +305,20 @@ fn enable_colors_for_windows() {}
 fn main() -> anyhow::Result<()> {
     enable_colors_for_windows();
     let args = TopologyCheckerArgs::parse();
+    let mut start = None;
+    if args.elapsed {
+        let time = std::time::Instant::now();
+        start.replace(time);
+    }
     match args.command {
         Command::Interactive { .. } => interactive_mode(args)?,
         Command::Geometry(_) | Command::Line(_) | Command::Point(_) | Command::Polygon(_) => {
             parse_rules(args, true)?;
         }
         Command::Utilities(_) | Command::GdalDrivers(_) => parse_utils(args)?,
+    }
+    if let Some(start) = start {
+        println!("Elapsed time: {:?}", start.elapsed());
     }
     Ok(())
 }
@@ -435,6 +446,7 @@ fn interactive_mode(args: TopologyCheckerArgs) -> anyhow::Result<()> {
                 index += 1;
                 let args = TopologyCheckerArgs {
                     gdal_driver: args.gdal_driver.clone(),
+                    elapsed: args.elapsed,
                     command: command,
                 };
                 let rule_name = format!("{}-{}", index, rule_name(&args.command)?);
