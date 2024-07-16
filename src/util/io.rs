@@ -1,6 +1,9 @@
+use crate::Dataset;
 use anyhow::Context;
-use gdal::{vector::LayerAccess, Dataset, DatasetOptions, GdalOpenFlags, LayerOptions, Metadata};
+use gdal::{vector::LayerAccess, DatasetOptions, GdalOpenFlags, LayerOptions, Metadata};
 use std::collections::HashMap;
+use std::fs::File;
+use std::io::BufReader;
 use std::path::PathBuf;
 
 pub fn open_dataset(path: &PathBuf) -> anyhow::Result<Dataset> {
@@ -10,17 +13,28 @@ pub fn open_dataset(path: &PathBuf) -> anyhow::Result<Dataset> {
             path
         ));
     }
-    let options = DatasetOptions {
-        open_flags: GdalOpenFlags::GDAL_OF_VECTOR,
-        ..Default::default()
+    let ext = if let Some(ext) = path.extension() {
+        ext.to_str().unwrap()
+    } else {
+        return Err(anyhow::anyhow!(
+            "The provided file name does not have a valid extension."
+        ));
     };
-
-    let dataset = Dataset::open_ex(path, options)?;
-
-    Ok(dataset)
+    match ext {
+        "json" | "geojson" => {
+            Ok(Dataset::GeoJson(BufReader::new(File::open(path)?)))
+        }
+        _ => {
+            let options = DatasetOptions {
+                open_flags: GdalOpenFlags::GDAL_OF_VECTOR,
+                ..Default::default()
+            };
+            Ok(Dataset::GDAL(gdal::Dataset::open_ex(path, options)?))
+        }
+    }
 }
 
-pub fn create_dataset(out_path: &PathBuf, driver: Option<String>) -> anyhow::Result<Dataset> {
+pub fn create_dataset(out_path: &PathBuf, driver: Option<String>) -> anyhow::Result<gdal::Dataset> {
     // If driver is not provided, attempt to infer it from the file extension.
     let driver_name = driver.unwrap_or_else(|| {
         let driver = GdalDrivers

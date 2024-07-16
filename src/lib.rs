@@ -1,15 +1,17 @@
 use crate::util::{create_dataset, open_dataset, GdalDrivers};
-use anyhow::Context;
+use anyhow::{anyhow, Context};
 use gdal::{
     errors::GdalError,
     spatial_ref::SpatialRef,
     vector::{LayerAccess, ToGdal},
-    Dataset, LayerOptions, Metadata,
+    LayerOptions, Metadata,
 };
 use geo::{
     GeoFloat, Geometry, Line, LineString, MultiLineString, MultiPoint, MultiPolygon, Point, Polygon,
 };
 use geozero::{gdal::process_geom, geo_types::GeoWriter};
+use std::fs::File;
+use std::io::BufReader;
 use std::{fmt::Display, path::PathBuf};
 
 pub mod algorithm;
@@ -17,31 +19,47 @@ pub mod prelude;
 pub mod rule;
 pub mod util;
 
-pub struct VectorDataset(Dataset);
+pub enum Dataset {
+    GeoJson(BufReader<File>),
+    GDAL(gdal::Dataset),
+}
+
+pub struct VectorDataset {
+    dataset: Dataset,
+}
 
 impl VectorDataset {
     pub fn new(path: &PathBuf) -> anyhow::Result<Self> {
-        Ok(VectorDataset(open_dataset(path)?))
+        Ok(VectorDataset {
+            dataset: open_dataset(path)?,
+        })
     }
 
-    pub fn to_geo(&self) -> anyhow::Result<Vec<Geometry<f64>>> {
-        let mut layer = self
-            .0
-            .layers()
-            .next()
-            .expect(format!("Dataset {} has no layers.", self.0.description()?).as_str());
+    pub fn to_geo(&mut self) -> anyhow::Result<Vec<Geometry<f64>>> {
         let mut writer = GeoWriter::new();
-        for feature in layer.features() {
-            let geom = feature.geometry().unwrap();
-            process_geom(geom, &mut writer).with_context(|| {
-                format!(
-                    "{} {}",
-                    "Failed to parse FID",
-                    feature
-                        .fid()
-                        .expect(format!("Failed to get FID of feature {:?}", feature).as_str()),
-                )
-            })?;
+        match &mut self.dataset {
+            Dataset::GeoJson(reader) => {
+                geozero::geojson::read_geojson_geom(reader, &mut writer)?;
+            }
+            Dataset::GDAL(dataset) => {
+                let mut layer = dataset
+                    .layers()
+                    .next()
+                    .expect(format!("Dataset {} has no layers.", dataset.description()?).as_str());
+
+                for feature in layer.features() {
+                    let geom = feature.geometry().unwrap();
+                    process_geom(geom, &mut writer).with_context(|| {
+                        format!(
+                            "{} {}",
+                            "Failed to parse FID",
+                            feature.fid().expect(
+                                format!("Failed to get FID of feature {:?}", feature).as_str()
+                            ),
+                        )
+                    })?;
+                }
+            }
         }
         let geometry = writer.take_geometry();
 
@@ -64,43 +82,52 @@ impl VectorDataset {
             }
         } else {
             Err(anyhow::anyhow!(
-                "Failed to retrieve geometry. Is the dataset {} empty?",
-                self.0.description()?
+                "Failed to retrieve geometry. Is the dataset empty?",
             ))
         }
     }
 
+    // Can only be used when Dataset::GDAL
     pub fn srs(&self) -> anyhow::Result<Option<SpatialRef>> {
-        let layer = self
-            .0
-            .layers()
-            .next()
-            .expect(format!("Dataset {} has no layers.", self.0.description()?).as_str());
-        Ok(layer.spatial_ref())
+        match &self.dataset {
+            Dataset::GDAL(dataset) => {
+                let layer = dataset
+                    .layers()
+                    .next()
+                    .expect(format!("Dataset {} has no layers.", dataset.description()?).as_str());
+                Ok(layer.spatial_ref())
+            }
+            _ => Err(anyhow!("Can not retrieve the srs from the input dataset.")),
+        }
     }
 
     pub fn compare_srs(&self, other: &VectorDataset) -> anyhow::Result<SRSComparison> {
-        let srs1 = self.srs()?;
-        let srs2 = other.srs()?;
-        if srs1.is_none() {
-            return Err(anyhow::anyhow!(
-                "Found missing srs for layer {}",
-                self.0.description()?
-            ))
+        match (&self.dataset, &other.dataset) {
+            (Dataset::GDAL(dataset1), Dataset::GDAL(dataset2)) => {
+                let srs1 = self.srs()?;
+                let srs2 = other.srs()?;
+                if srs1.is_none() {
+                    return Err(anyhow::anyhow!(
+                        "Found missing srs for layer {}",
+                        dataset1.description()?
+                    ));
+                }
+                if srs2.is_none() {
+                    return Err(anyhow::anyhow!(
+                        "Found missing srs for layer {}",
+                        dataset2.description()?
+                    ));
+                }
+                if srs1 != srs2 {
+                    return Ok(SRSComparison::Different(
+                        srs1.unwrap().name()?,
+                        srs2.unwrap().name()?,
+                    ));
+                }
+                Ok(SRSComparison::Same)
+            }
+            _ => Err(anyhow!("Can not compare srs if the datasets are not GDAL.")),
         }
-        if srs2.is_none() {
-            return Err(anyhow::anyhow!(
-                "Found missing srs for layer {}",
-                other.0.description()?
-            ))
-        }
-        if srs1 != srs2 {
-            return Ok(SRSComparison::Different(
-                srs1.unwrap().name()?,
-                srs2.unwrap().name()?,
-            ));
-        }
-        Ok(SRSComparison::Same)
     }
 }
 
@@ -267,7 +294,7 @@ pub struct ExportConfig<'a> {
     pub rule_name: String,
     pub output: Option<&'a PathBuf>,
     pub options: LayerOptions<'a>,
-    pub dataset: Option<&'a mut Dataset>,
+    pub dataset: Option<&'a mut gdal::Dataset>,
 }
 
 impl<'a> Default for ExportConfig<'a> {
@@ -414,7 +441,7 @@ impl<T: GeoFloat> TopologyResults<T> {
 }
 
 impl<T: GeoFloat> TopologyResults<T> {
-    pub fn export(self, output: &PathBuf) -> anyhow::Result<()> {
+    pub fn export(self, output: &PathBuf, epsg: Option<u32>) -> anyhow::Result<()> {
         let driver = gdal::DriverManager::get_driver_by_name(
             &GdalDrivers.infer_driver_name("gpkg").unwrap().0,
         )
@@ -426,16 +453,21 @@ impl<T: GeoFloat> TopologyResults<T> {
             .start_transaction()
             .with_context(|| "Failed to start transaction (writing into the geopackage).")?;
         for result in self.0 {
+            let mut config = ExportConfig {
+                rule_name: result.0.clone(),
+                dataset: Some(&mut txn),
+                ..Default::default()
+            };
+            let mut srs = None;
+            if let Some(epsg_code) = epsg {
+                srs.replace(SpatialRef::from_epsg(epsg_code)?);
+                config.options.srs = srs.as_ref();
+            };
             result.1.summary(Some(result.0.clone()));
             if !result.1.is_valid() {
                 // Iterate and export all of the errors
                 for error in result.1.unwrap_err() {
-                    let config = ExportConfig {
-                        rule_name: result.0.clone(),
-                        dataset: Some(&mut txn),
-                        ..Default::default()
-                    };
-                    error.export(config)?
+                    error.export(config.clone())?
                 }
             }
         }

@@ -23,6 +23,9 @@ mod args {
         #[clap(long, env)]
         /// GDAL driver to use for output files.
         pub gdal_driver: Option<String>,
+        #[clap(long, env)]
+        /// EPSG code
+        pub epsg: Option<u32>,
         #[clap(long, short, action)]
         /// Print elapsed time.
         pub elapsed: bool,
@@ -185,7 +188,6 @@ mod args {
             /// Output outside lines
             outside_lines: Option<PathBuf>,
         },
-
     }
 
     #[derive(Debug, Subcommand, PartialEq, Serialize, Deserialize)]
@@ -446,6 +448,7 @@ fn interactive_mode(args: TopologyCheckerArgs) -> anyhow::Result<()> {
                 index += 1;
                 let args = TopologyCheckerArgs {
                     gdal_driver: args.gdal_driver.clone(),
+                    epsg: args.epsg,
                     elapsed: args.elapsed,
                     command: command,
                 };
@@ -456,7 +459,7 @@ fn interactive_mode(args: TopologyCheckerArgs) -> anyhow::Result<()> {
         .collect();
     let topology_results = TopologyResults::new(results?);
     match args.command {
-        Command::Interactive { output } => topology_results.export(&output)?,
+        Command::Interactive { output } => topology_results.export(&output, args.epsg)?,
         _ => unreachable!(),
     }
     Ok(())
@@ -476,7 +479,7 @@ fn parse_rules(args: TopologyCheckerArgs, summarize: bool) -> anyhow::Result<Top
     let result = match args.command {
         Command::Point(ref command) => match &command.command {
             PointRules::MustNotOverlap { points, overlaps } => {
-                let vector_dataset = VectorDataset::new(&points)?;
+                let mut vector_dataset = VectorDataset::new(&points)?;
                 let points = flatten_points(vector_dataset.to_geo()?);
                 let srs = vector_dataset.srs()?;
                 let result = points.must_not_overlap();
@@ -492,8 +495,8 @@ fn parse_rules(args: TopologyCheckerArgs, summarize: bool) -> anyhow::Result<Top
                 other,
                 overlaps,
             } => {
-                let vector_dataset = VectorDataset::new(&points)?;
-                let other = VectorDataset::new(&other)?;
+                let mut vector_dataset = VectorDataset::new(&points)?;
+                let mut other = VectorDataset::new(&other)?;
                 if let SRSComparison::Different(crs1, crs2) = vector_dataset.compare_srs(&other)? {
                     return Err(anyhow::anyhow!(
                         "The crs of the input datasets is different. Found {} and {}",
@@ -517,30 +520,49 @@ fn parse_rules(args: TopologyCheckerArgs, summarize: bool) -> anyhow::Result<Top
                 polygons,
                 outside,
             } => {
-                let vector_dataset = VectorDataset::new(&points)?;
-                let other = VectorDataset::new(&polygons)?;
-                if let SRSComparison::Different(crs1, crs2) = vector_dataset.compare_srs(&other)? {
-                    return Err(anyhow::anyhow!(
-                        "The crs of the input datasets is different. Found {} and {}",
-                        crs1,
-                        crs2
-                    ));
+                let mut start = Some(std::time::Instant::now());
+                let mut vector_dataset = VectorDataset::new(&points)?;
+                println!("Read points {:?}", start.unwrap().elapsed());
+                start.replace(std::time::Instant::now());
+                let mut other = VectorDataset::new(&polygons)?;
+                println!("Read polygons {:?}", start.unwrap().elapsed());
+                start.replace(std::time::Instant::now());
+                match vector_dataset.compare_srs(&other) {
+                    Ok(comparison) => {
+                        if let SRSComparison::Different(crs1, crs2) = comparison {
+                            return Err(anyhow::anyhow!(
+                                "The crs of the input datasets is different. Found {} and {}",
+                                crs1,
+                                crs2
+                            ));
+                        };
+                    },
+                    _ => ()
                 };
-                let polygons = flatten_polygons(other.to_geo()?);
+                let geometries = flatten_polygons(other.to_geo()?);
+                println!("Flattened polygons {:?}", start.unwrap().elapsed());
+                start.replace(std::time::Instant::now());
                 let points = flatten_points(vector_dataset.to_geo()?);
+                println!("Flattened points {:?}", start.unwrap().elapsed());
+                start.replace(std::time::Instant::now());
                 let srs = vector_dataset.srs()?;
-                let result = points.must_be_inside(polygons);
+                let result =
+                    points.must_be_inside(geometries);
+                println!("Checked logic {:?}", start.unwrap().elapsed());
+                start.replace(std::time::Instant::now());
                 if outside.is_some() && !result.is_valid() {
                     config.output = outside.as_ref();
                     config.options.srs = srs.as_ref();
                     result.unwrap_err_point().export(config)?
                 }
+                println!("Exported {:?}", start.unwrap().elapsed());
+                start.replace(std::time::Instant::now());
                 result
             }
         },
         Command::Line(command) => match command.command {
             LineRules::MustNotHaveDangles { lines, dangles } => {
-                let vector_dataset = VectorDataset::new(&lines)?;
+                let mut vector_dataset = VectorDataset::new(&lines)?;
                 let srs = vector_dataset.srs()?;
                 let lines = vector_dataset.to_geo()?;
                 let lines = flatten_linestrings(lines);
@@ -557,7 +579,7 @@ fn parse_rules(args: TopologyCheckerArgs, summarize: bool) -> anyhow::Result<Top
                 single_points,
                 collinear_lines,
             } => {
-                let vector_dataset = VectorDataset::new(&lines)?;
+                let mut vector_dataset = VectorDataset::new(&lines)?;
                 let srs = vector_dataset.srs()?;
                 let lines = vector_dataset.to_geo()?;
                 let lines = flatten_linestrings(lines);
@@ -586,7 +608,7 @@ fn parse_rules(args: TopologyCheckerArgs, summarize: bool) -> anyhow::Result<Top
                 result
             }
             LineRules::MustNotOverlap { lines, overlaps } => {
-                let vector_dataset = VectorDataset::new(&lines)?;
+                let mut vector_dataset = VectorDataset::new(&lines)?;
                 let srs = vector_dataset.srs()?;
                 let lines = vector_dataset.to_geo()?;
                 let lines = flatten_linestrings(lines);
@@ -603,8 +625,8 @@ fn parse_rules(args: TopologyCheckerArgs, summarize: bool) -> anyhow::Result<Top
                 other,
                 overlaps,
             } => {
-                let vector_dataset = VectorDataset::new(&lines)?;
-                let other = VectorDataset::new(&other)?;
+                let mut vector_dataset = VectorDataset::new(&lines)?;
+                let mut other = VectorDataset::new(&other)?;
                 if let SRSComparison::Different(crs1, crs2) = vector_dataset.compare_srs(&other)? {
                     return Err(anyhow::anyhow!(
                         "The crs of the input datasets is different. Found {} and {}",
@@ -625,7 +647,7 @@ fn parse_rules(args: TopologyCheckerArgs, summarize: bool) -> anyhow::Result<Top
                 result
             }
             LineRules::MustNotSelfOverlap { lines, overlaps } => {
-                let vector_dataset = VectorDataset::new(&lines)?;
+                let mut vector_dataset = VectorDataset::new(&lines)?;
                 let srs = vector_dataset.srs()?;
                 let lines = vector_dataset.to_geo()?;
                 let lines = flatten_linestrings(lines);
@@ -636,11 +658,17 @@ fn parse_rules(args: TopologyCheckerArgs, summarize: bool) -> anyhow::Result<Top
                     result.unwrap_err_linestring().export(config)?
                 }
                 result
-            },
-            LineRules::MustBeInside { lines, polygons, outside_lines } => {
-                let vector_dataset = VectorDataset::new(&lines)?;
-                let polygons = VectorDataset::new(&polygons)?;
-                if let SRSComparison::Different(crs1, crs2) = vector_dataset.compare_srs(&polygons)? {
+            }
+            LineRules::MustBeInside {
+                lines,
+                polygons,
+                outside_lines,
+            } => {
+                let mut vector_dataset = VectorDataset::new(&lines)?;
+                let mut polygons = VectorDataset::new(&polygons)?;
+                if let SRSComparison::Different(crs1, crs2) =
+                    vector_dataset.compare_srs(&polygons)?
+                {
                     return Err(anyhow::anyhow!(
                         "The crs of the input datasets is different. Found {} and {}",
                         crs1,
@@ -662,7 +690,7 @@ fn parse_rules(args: TopologyCheckerArgs, summarize: bool) -> anyhow::Result<Top
         },
         Command::Polygon(command) => match command.command {
             PolygonRules::MustNotOverlap { polygons, overlaps } => {
-                let vector_dataset = VectorDataset::new(&polygons)?;
+                let mut vector_dataset = VectorDataset::new(&polygons)?;
                 let srs = vector_dataset.srs()?;
                 let polygons = vector_dataset.to_geo()?;
                 let polygons = flatten_polygons(polygons);
@@ -679,8 +707,8 @@ fn parse_rules(args: TopologyCheckerArgs, summarize: bool) -> anyhow::Result<Top
                 other,
                 overlaps,
             } => {
-                let vector_dataset = VectorDataset::new(&polygons)?;
-                let other = VectorDataset::new(&other)?;
+                let mut vector_dataset = VectorDataset::new(&polygons)?;
+                let mut other = VectorDataset::new(&other)?;
                 if let SRSComparison::Different(crs1, crs2) = vector_dataset.compare_srs(&other)? {
                     return Err(anyhow::anyhow!(
                         "The crs of the input datasets is different. Found {} and {}",
@@ -706,7 +734,7 @@ fn parse_rules(args: TopologyCheckerArgs, summarize: bool) -> anyhow::Result<Top
                 geometries,
                 multiparts,
             } => {
-                let dataset = VectorDataset::new(&geometries)?;
+                let mut dataset = VectorDataset::new(&geometries)?;
                 let srs = dataset.srs()?;
                 let geometry = dataset.to_geo()?;
                 let result = geometry.must_not_be_multipart();
@@ -758,7 +786,7 @@ fn parse_utils(args: TopologyCheckerArgs) -> anyhow::Result<()> {
         },
         Command::Utilities(command) => match command.command {
             Utilities::ExplodeLinestrings { linestrings, lines } => {
-                let dataset = VectorDataset::new(&linestrings)?;
+                let mut dataset = VectorDataset::new(&linestrings)?;
                 let geometry = dataset.to_geo()?;
                 let linestrings = flatten_linestrings(geometry);
                 let exploded = explode_linestrings(&linestrings);
@@ -780,7 +808,7 @@ fn parse_utils(args: TopologyCheckerArgs) -> anyhow::Result<()> {
                 linestrings,
                 merged,
             } => {
-                let dataset = VectorDataset::new(&linestrings)?;
+                let mut dataset = VectorDataset::new(&linestrings)?;
                 let geometry = dataset.to_geo()?;
                 let linestrings = flatten_linestrings(geometry);
                 let merged_linestrings = merge_linestrings(linestrings);

@@ -1,21 +1,23 @@
 use crate::{TopologyError, TopologyResult};
 use geo::{Contains, GeoFloat, LineString, Point, Polygon};
-use itertools::Itertools;
+use rayon::iter::ParallelBridge;
+use rayon::iter::ParallelIterator;
 use rstar::RTree;
 
-pub trait MustBeInside<T: GeoFloat> {
+pub trait MustBeInside<T: GeoFloat + Send + Sync> {
     fn must_be_inside(self, other: Vec<Polygon<T>>) -> TopologyResult<T>;
 }
 
 // TODO for both point and linestring implementations:
 // try to eliminate the clone in Some(*point) and Some(linestring.clone())
 
-impl<T: GeoFloat> MustBeInside<T> for Vec<Point<T>> {
+impl<T: GeoFloat + Send + Sync> MustBeInside<T> for Vec<Point<T>> {
     fn must_be_inside(self, other: Vec<Polygon<T>>) -> TopologyResult<T> {
         let points = RTree::bulk_load(self);
-        let polygons = RTree::bulk_load(other);
-        let inside_points = points
+        let polygons: RTree<Polygon<T>> = RTree::bulk_load(other.into_iter().collect());
+        let inside_points: Vec<Point<T>> = points
             .intersection_candidates_with_other_tree(&polygons)
+            .par_bridge()
             .filter_map(|(point, polygon)| {
                 if polygon.contains(point) {
                     Some(*point)
@@ -23,11 +25,12 @@ impl<T: GeoFloat> MustBeInside<T> for Vec<Point<T>> {
                     None
                 }
             })
-            .collect_vec();
-        let outside_points = points
+            .collect();
+        let outside_points: Vec<Point<T>> = points
             .into_iter()
+            .par_bridge()
             .filter(|point| !inside_points.contains(&point))
-            .collect_vec();
+            .collect();
         if outside_points.is_empty() {
             TopologyResult::Valid
         } else {
@@ -36,12 +39,13 @@ impl<T: GeoFloat> MustBeInside<T> for Vec<Point<T>> {
     }
 }
 
-impl<T: GeoFloat> MustBeInside<T> for Vec<LineString<T>> {
+impl<T: GeoFloat + Send + Sync> MustBeInside<T> for Vec<LineString<T>> {
     fn must_be_inside(self, other: Vec<Polygon<T>>) -> TopologyResult<T> {
         let linestrings = RTree::bulk_load(self);
-        let polygons = RTree::bulk_load(other);
-        let inside_linestrings = linestrings
+        let polygons = RTree::bulk_load(other.into_iter().collect());
+        let inside_linestrings: Vec<LineString<T>> = linestrings
             .intersection_candidates_with_other_tree(&polygons)
+            .par_bridge()
             .filter_map(|(linestring, polygon)| {
                 if polygon.contains(linestring) {
                     Some(linestring.clone())
@@ -49,11 +53,12 @@ impl<T: GeoFloat> MustBeInside<T> for Vec<LineString<T>> {
                     None
                 }
             })
-            .collect_vec();
-        let outside_linestrings = linestrings
+            .collect();
+        let outside_linestrings: Vec<LineString<T>> = linestrings
             .into_iter()
+            .par_bridge()
             .filter(|line| !inside_linestrings.contains(&line))
-            .collect_vec();
+            .collect();
         if outside_linestrings.is_empty() {
             TopologyResult::Valid
         } else {
