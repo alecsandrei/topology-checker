@@ -1,7 +1,7 @@
 use geo::{
     algorithm::LineIntersection,
     sweep::{Intersections, SweepPoint},
-    Coord, GeoFloat, Geometry, Line, LineString, LinesIter, MultiPolygon, Point, Polygon,
+    Coord, GeoFloat, Geometry, Line, LineString, LinesIter, Point, Polygon,
 };
 use itertools::{Either, Itertools};
 use rayon::{iter::ParallelIterator, prelude::*};
@@ -91,41 +91,6 @@ pub fn flatten_polygons(geometries: Vec<Geometry>) -> Vec<Polygon> {
             _ => panic!("Unallowed geometries found."),
         })
         .collect()
-}
-
-pub struct PartitionedPolygons<T: GeoFloat + Send + Sync>(pub Vec<Polygon<T>>, pub Vec<MultiPolygon<T>>);
-
-impl<T> PartitionedPolygons<T>
-where
-    T: GeoFloat + Send + Sync,
-{
-    fn from_tuple(polygons: (Vec<Polygon<T>>, Vec<MultiPolygon<T>>)) -> Self {
-        PartitionedPolygons(polygons.0, polygons.1)
-    }
-    pub fn from_geometries(geometries: Vec<Geometry<T>>) -> PartitionedPolygons<T> {
-        PartitionedPolygons::from_tuple(geometries.into_iter().partition_map(|geometry| {
-            match geometry {
-                Geometry::Polygon(polygon) => Either::Left(polygon),
-                Geometry::MultiPolygon(multipolygon) => Either::Right(multipolygon),
-                _ => panic!("Unallowed geometries found."),
-            }
-        }))
-    }
-}
-
-impl<T> IntoIterator for PartitionedPolygons<T>
-where
-    T: GeoFloat + Send + Sync,
-{
-    type Item = Polygon<T>;
-    type IntoIter = std::iter::Chain<
-        std::vec::IntoIter<Self::Item>,
-        std::iter::Flatten<std::vec::IntoIter<geo::MultiPolygon<T>>>,
-    >;
-
-    fn into_iter(self) -> Self::IntoIter {
-        self.0.into_iter().chain(self.1.into_iter().flatten())
-    }
 }
 
 /// Converts Linestring to Line.

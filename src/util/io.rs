@@ -1,4 +1,4 @@
-use crate::Dataset;
+use crate::{Dataset, SRSComparison, VectorDataset};
 use anyhow::Context;
 use gdal::{vector::LayerAccess, DatasetOptions, GdalOpenFlags, LayerOptions, Metadata};
 use std::collections::HashMap;
@@ -6,12 +6,23 @@ use std::fs::File;
 use std::io::BufReader;
 use std::path::PathBuf;
 
-pub fn open_dataset(path: &PathBuf) -> anyhow::Result<Dataset> {
+pub fn open_dataset_gdal(path: &PathBuf) -> anyhow::Result<gdal::Dataset> {
+    let options = DatasetOptions {
+        open_flags: GdalOpenFlags::GDAL_OF_VECTOR,
+        ..Default::default()
+    };
+    Ok(gdal::Dataset::open_ex(path, options)?)
+}
+
+pub fn open_dataset(path: &PathBuf, use_gdal: bool) -> anyhow::Result<Dataset> {
     if !path.exists() {
         return Err(anyhow::anyhow!(
             "The provided path {:?} does not exist",
             path
         ));
+    }
+    if use_gdal {
+        return Ok(Dataset::GDAL(open_dataset_gdal(path)?))
     }
     let ext = if let Some(ext) = path.extension() {
         ext.to_str().unwrap()
@@ -20,16 +31,13 @@ pub fn open_dataset(path: &PathBuf) -> anyhow::Result<Dataset> {
             "The provided file name does not have a valid extension."
         ));
     };
+
     match ext {
         "json" | "geojson" => {
             Ok(Dataset::GeoJson(BufReader::new(File::open(path)?)))
         }
         _ => {
-            let options = DatasetOptions {
-                open_flags: GdalOpenFlags::GDAL_OF_VECTOR,
-                ..Default::default()
-            };
-            Ok(Dataset::GDAL(gdal::Dataset::open_ex(path, options)?))
+            Ok(Dataset::GDAL(open_dataset_gdal(path)?))
         }
     }
 }
@@ -76,6 +84,20 @@ pub fn geometries_to_file(
     geometries.into_iter().for_each(|geom| {
         lyr.create_feature(geom).expect("Couldn't write geometry");
     });
+}
+
+pub fn validate_srs(dataset1: &VectorDataset, dataset2: &VectorDataset) -> anyhow::Result<()> {
+    let comparison = dataset1.compare_srs(dataset2).unwrap();
+    match comparison {
+        SRSComparison::Different(crs1, crs2) => {
+            return Err(anyhow::anyhow!(
+                "The crs of the input datasets is different. Found {} and {}",
+                crs1,
+                crs2
+            ));
+        },
+        SRSComparison::Missing | SRSComparison::Same => Ok(())
+    }
 }
 
 pub struct GdalDrivers;

@@ -1,5 +1,5 @@
 use crate::util::{create_dataset, open_dataset, GdalDrivers};
-use anyhow::{anyhow, Context};
+use anyhow::Context;
 use gdal::{
     errors::GdalError,
     spatial_ref::SpatialRef,
@@ -9,7 +9,7 @@ use gdal::{
 use geo::{
     GeoFloat, Geometry, Line, LineString, MultiLineString, MultiPoint, MultiPolygon, Point, Polygon,
 };
-use geozero::{gdal::process_geom, geo_types::GeoWriter};
+use geozero::geo_types::GeoWriter;
 use std::fs::File;
 use std::io::BufReader;
 use std::{fmt::Display, path::PathBuf};
@@ -29,12 +29,14 @@ pub struct VectorDataset {
 }
 
 impl VectorDataset {
-    pub fn new(path: &PathBuf) -> anyhow::Result<Self> {
+    pub fn new(path: &PathBuf, use_gdal: bool) -> anyhow::Result<Self> {
         Ok(VectorDataset {
-            dataset: open_dataset(path)?,
+            dataset: open_dataset(path, use_gdal)?,
         })
     }
 
+    // TODO: This function is extremly slow to run.
+    // Is there any better way to convert to geo_types?
     pub fn to_geo(&mut self) -> anyhow::Result<Vec<Geometry<f64>>> {
         let mut writer = GeoWriter::new();
         match &mut self.dataset {
@@ -49,7 +51,7 @@ impl VectorDataset {
 
                 for feature in layer.features() {
                     let geom = feature.geometry().unwrap();
-                    process_geom(geom, &mut writer).with_context(|| {
+                    geozero::gdal::process_geom(geom, &mut writer).with_context(|| {
                         format!(
                             "{} {}",
                             "Failed to parse FID",
@@ -97,43 +99,30 @@ impl VectorDataset {
                     .expect(format!("Dataset {} has no layers.", dataset.description()?).as_str());
                 Ok(layer.spatial_ref())
             }
-            _ => Err(anyhow!("Can not retrieve the srs from the input dataset.")),
+            _ => Ok(None),
         }
     }
 
     pub fn compare_srs(&self, other: &VectorDataset) -> anyhow::Result<SRSComparison> {
-        match (&self.dataset, &other.dataset) {
-            (Dataset::GDAL(dataset1), Dataset::GDAL(dataset2)) => {
-                let srs1 = self.srs()?;
-                let srs2 = other.srs()?;
-                if srs1.is_none() {
-                    return Err(anyhow::anyhow!(
-                        "Found missing srs for layer {}",
-                        dataset1.description()?
-                    ));
-                }
-                if srs2.is_none() {
-                    return Err(anyhow::anyhow!(
-                        "Found missing srs for layer {}",
-                        dataset2.description()?
-                    ));
-                }
-                if srs1 != srs2 {
-                    return Ok(SRSComparison::Different(
-                        srs1.unwrap().name()?,
-                        srs2.unwrap().name()?,
-                    ));
-                }
-                Ok(SRSComparison::Same)
-            }
-            _ => Err(anyhow!("Can not compare srs if the datasets are not GDAL.")),
+        let srs1 = self.srs()?;
+        let srs2 = other.srs()?;
+        if srs1.is_none() | srs2.is_none() {
+            return Ok(SRSComparison::Missing)
         }
+        if srs1 != srs2 {
+            return Ok(SRSComparison::Different(
+                srs1.unwrap().name()?,
+                srs2.unwrap().name()?,
+            ));
+        }
+        Ok(SRSComparison::Same)
     }
 }
 
 pub enum SRSComparison {
     Same,
     Different(String, String),
+    Missing
 }
 
 pub trait GeometryType<T: GeoFloat> {}
