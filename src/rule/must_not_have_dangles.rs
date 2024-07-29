@@ -25,14 +25,15 @@ impl<T: GeoFloat + Send + Sync> MustNotHaveDangles<T> for Vec<LineString<T>> {
                 None
             })
             .collect_vec();
-        let geometry_errors = vec![TopologyError::Point(
-            sweep_points_to_points(endpoints).into_iter().collect(),
-        )];
+        let geometry_errors: Vec<_> = sweep_points_to_points(endpoints).into_iter().collect();
         // REcheck logic
         if geometry_errors.is_empty() {
             TopologyResult::Valid
         } else {
-            TopologyResult::Errors(geometry_errors)
+            TopologyResult::Errors(vec![TopologyError::Point(geometry_errors)])
         }
     }
 }
+
+
+// TODO: add tests
