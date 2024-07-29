@@ -217,6 +217,15 @@ mod args {
             /// The output overlaps
             overlaps: Option<PathBuf>,
         },
+        #[command(arg_required_else_help(true))]
+        MustNotHaveGaps {
+            #[arg(value_parser = parse_key_val::<String, PathBuf>)]
+            /// Input polygons
+            polygons: PathBuf,
+            #[arg(value_parser = parse_key_val::<String, PathBuf>)]
+            /// Output gaps
+            gaps: Option<PathBuf>,
+        },
     }
 
     #[derive(Debug, Subcommand, PartialEq, Serialize, Deserialize)]
@@ -288,8 +297,8 @@ use serde::Deserialize;
 use topology_checker::{
     algorithm::merge_linestrings,
     rule::{
-        MustBeInside, MustNotBeMultipart, MustNotHaveDangles, MustNotIntersect, MustNotOverlap,
-        MustNotSelfOverlap,
+        MustBeInside, MustNotBeMultipart, MustNotHaveDangles, MustNotHaveGaps, MustNotIntersect,
+        MustNotOverlap, MustNotSelfOverlap,
     },
     util::{
         explode_linestrings, flatten_linestrings, flatten_points, flatten_polygons,
@@ -679,6 +688,19 @@ fn parse_rules(args: TopologyCheckerArgs, summarize: bool) -> anyhow::Result<Top
                     config.output = overlaps.as_ref();
                     config.options.srs = srs.as_ref();
                     result.unwrap_err_polygon().export(config)?;
+                }
+                result
+            }
+            PolygonRules::MustNotHaveGaps { polygons, gaps } => {
+                let mut vector_dataset = VectorDataset::new(&polygons, args.use_gdal)?;
+                let srs = vector_dataset.srs()?;
+                let polygons = vector_dataset.to_geo()?;
+                let polygons = flatten_polygons(polygons);
+                let result = polygons.must_not_have_gaps();
+                if gaps.is_some() {
+                    config.output = gaps.as_ref();
+                    config.options.srs = srs.as_ref();
+                    result.unwrap_err_linestring().export(config)?;
                 }
                 result
             }
