@@ -1,6 +1,7 @@
-use geo::{Contains, Coord, CoordsIter, GeoFloat, Intersects, LineString, Point};
+use geo::{Contains, Coord, CoordsIter, GeoFloat, Intersects, LineString};
+use itertools::Itertools;
 use rayon::iter::{ParallelBridge, ParallelIterator};
-use std::cell::RefCell;
+use rstar::RTreeObject;
 
 // Used to merge two linestrings that intersect on either endpoint.
 fn merge_two<T: GeoFloat>(a: &LineString<T>, b: &LineString<T>) -> Option<LineString<T>> {
@@ -152,7 +153,7 @@ fn compute_linestring<T: GeoFloat + Send + Sync>(
     (result, to_remove)
 }
 
-fn dedup_linestrings<T: GeoFloat + Send + Sync>(
+fn _dedup_linestrings<T: GeoFloat + Send + Sync>(
     lines: Vec<LineString<T>>,
 ) -> Vec<geo::LineString<T>> {
     let mut lines_dedup = Vec::new();
@@ -167,42 +168,44 @@ fn dedup_linestrings<T: GeoFloat + Send + Sync>(
 pub fn merge_linestrings<T: GeoFloat + Send + Sync>(
     lines: Vec<LineString<T>>,
 ) -> Vec<LineString<T>> {
-
     // Is it okay to dedup the linestrings in a tool like this?
-    // let lines = dedup_linestrings(lines);
+    // let lines = _dedup_linestrings(lines);
 
     let mut linestrings: Vec<Option<LineString<T>>> =
         lines.into_iter().map(|line| Some(line.into())).collect();
-    let mut some_count = 0;
+    let mut prev_count = 0;
+    let mut iter = 1;
     loop {
         for i in 0..linestrings.len() {
             let linestring = &mut linestrings[i];
-            if let Some(_) = linestring {
-                let linestring_ref = RefCell::new(linestring.take().unwrap());
-                let computed = compute_linestring(&linestrings, &linestring_ref.borrow());
+            if linestring.is_some() {
+                let linestring_ref = linestring.take().unwrap();
+                let computed = compute_linestring(&linestrings, &linestring_ref);
                 if let Some(computed_linestring) = computed.0 {
                     linestrings.get_mut(i).unwrap().replace(computed_linestring);
                     for index in computed.1.into_iter() {
                         linestrings.get_mut(index).unwrap().take();
                     }
                 } else {
-                    linestrings
-                        .get_mut(i)
-                        .unwrap()
-                        .replace(linestring_ref.into_inner());
+                    linestrings.get_mut(i).unwrap().replace(linestring_ref);
                 }
             }
         }
-        let some_count_new = linestrings.iter().filter(|line| line.is_some()).count();
-        if some_count == some_count_new {
+        let count = linestrings.iter().filter(|line| line.is_some()).count();
+        println!(
+            "Iteration {} completed. Prev. count: {}, Current count: {}",
+            iter, prev_count, count
+        );
+        if prev_count == count {
             // Stop when it converges.
             return linestrings
                 .into_iter()
                 .filter_map(|linestring| linestring)
                 .collect();
         } else {
-            some_count = some_count_new;
+            prev_count = count;
         }
+        iter += 1;
     }
 }
 

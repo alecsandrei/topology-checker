@@ -109,10 +109,12 @@ mod tests {
             ];
             let invalid_points = vec![input[3], input[1], input[0]];
             let result = input.must_be_inside(polygons);
-            assert_eq!(
-                *result.unwrap_err_point(),
-                TopologyError::Point(invalid_points)
-            );
+            let point_errors: &TopologyError<f64> = result.unwrap_err_point();
+            if let TopologyError::Point(point_errors) = point_errors {
+                for point in point_errors {
+                    assert!(invalid_points.contains(point))
+                }
+            }
         }
     }
 

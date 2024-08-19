@@ -1,7 +1,7 @@
 use geo::{
     algorithm::LineIntersection,
     sweep::{Intersections, SweepPoint},
-    Coord, GeoFloat, Geometry, Line, LineString, LinesIter, Point, Polygon,
+    Coord, GeoFloat, Geometry, HasDimensions, Line, LineString, LinesIter, Point, Polygon,
 };
 use itertools::{Either, Itertools};
 use rayon::{iter::ParallelIterator, prelude::*};
@@ -135,6 +135,18 @@ where
     vec
 }
 
+fn dedup_lines<T: GeoFloat>(
+    lines: Vec<Line<T>>,
+) -> Vec<geo::Line<T>> {
+    let mut lines_dedup = Vec::new();
+    for line in lines {
+        if !lines_dedup.contains(&line) {
+            lines_dedup.push(line);
+        }
+    }
+    lines_dedup
+}
+
 // Extract single point and line intersections from lines.
 // Returns a tuple containing collinear lines and a tuple of
 // unique proper single points and unique improper single points.
@@ -151,6 +163,8 @@ where
     BTreeSet<SweepPoint<T>>: Extend<R>,
     BTreeSet<SweepPoint<T>>: Extend<L>,
 {
+    let lines: Vec<_> = dedup_lines(lines.into_iter().collect());
+    let lines = lines.into_iter().filter(|line| !line.is_empty());
     let intersections = Intersections::from_iter(lines).collect::<Vec<_>>();
     let (lines, points): (Vec<_>, Vec<_>) = intersections
         .into_iter()
