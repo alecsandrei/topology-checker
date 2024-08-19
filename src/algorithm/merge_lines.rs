@@ -1,4 +1,4 @@
-use geo::{Contains, Coord, CoordsIter, GeoFloat, Intersects, LineString};
+use geo::{Contains, Coord, CoordsIter, GeoFloat, Intersects, LineString, Point};
 use rayon::iter::{ParallelBridge, ParallelIterator};
 use std::cell::RefCell;
 
@@ -32,6 +32,7 @@ fn rotate_start_point<T: GeoFloat>(linestring: &LineString<T>, at: Coord<T>) -> 
     let mut repeated = std::iter::repeat(coords).flatten();
     loop {
         if let Some(coord) = repeated.next() {
+            // println!("{:?}, {:?}", coord, at);
             if coord.intersects(&at) {
                 return LineString::from_iter(std::iter::once(coord).chain(repeated.take(count)));
             }
@@ -125,11 +126,17 @@ fn compute_linestring<T: GeoFloat + Send + Sync>(
                         if let Some(linestring) = linestring {
                             if result.contains(linestring) || std::ptr::addr_eq(linestring, other) {
                                 return None;
-                            } else if linestring.0[0].intersects(result) {
-                                return Some(linestring.0[0]);
-                            } else if linestring.0[linestring.coords_count() - 1].intersects(result)
-                            {
-                                return Some(linestring.0[linestring.coords_count() - 1]);
+                            } else {
+                                for coord in result.coords_iter() {
+                                    if linestring.0[0].intersects(&coord) {
+                                        return Some(linestring.0[0]);
+                                    }
+                                    if linestring.0[linestring.coords_count() - 1]
+                                        .intersects(&coord)
+                                    {
+                                        return Some(linestring.0[linestring.coords_count() - 1]);
+                                    }
+                                }
                             }
                         }
                         None
@@ -145,9 +152,25 @@ fn compute_linestring<T: GeoFloat + Send + Sync>(
     (result, to_remove)
 }
 
+fn dedup_linestrings<T: GeoFloat + Send + Sync>(
+    lines: Vec<LineString<T>>,
+) -> Vec<geo::LineString<T>> {
+    let mut lines_dedup = Vec::new();
+    for line in lines {
+        if !lines_dedup.contains(&line) {
+            lines_dedup.push(line);
+        }
+    }
+    lines_dedup
+}
+
 pub fn merge_linestrings<T: GeoFloat + Send + Sync>(
     lines: Vec<LineString<T>>,
 ) -> Vec<LineString<T>> {
+
+    // Is it okay to dedup the linestrings in a tool like this?
+    // let lines = dedup_linestrings(lines);
+
     let mut linestrings: Vec<Option<LineString<T>>> =
         lines.into_iter().map(|line| Some(line.into())).collect();
     let mut some_count = 0;
