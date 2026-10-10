@@ -1,3 +1,4 @@
+use crate::engine::line_graph::LineGraph;
 use crate::{
     Error, ErrorType, FeatureRef, Layer, LayerId, Rule, RuleSpec, TopologyError, model::Parts,
     rules,
@@ -5,7 +6,11 @@ use crate::{
 use geo::{Geometry, MultiLineString, MultiPoint, MultiPolygon};
 use rayon::prelude::*;
 use serde::Serialize;
-use std::collections::BTreeMap;
+use std::{
+    collections::BTreeMap,
+    sync::{Arc, Mutex, OnceLock},
+};
+type GraphSlot = Arc<OnceLock<Result<Arc<LineGraph>, Error>>>;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct RuleReport {
@@ -37,6 +42,7 @@ pub struct Topology {
     tolerance: f64,
     layers: Vec<Layer>,
     specs: Vec<RuleSpec>,
+    graphs: Mutex<BTreeMap<Vec<LayerId>, GraphSlot>>,
 }
 impl Topology {
     pub fn new(tolerance: f64) -> Result<Self, Error> {
@@ -47,6 +53,7 @@ impl Topology {
             tolerance,
             layers: Vec::new(),
             specs: Vec::new(),
+            graphs: Mutex::new(BTreeMap::new()),
         })
     }
     pub fn tolerance(&self) -> f64 {
@@ -65,6 +72,19 @@ impl Topology {
     }
     pub(crate) fn parts(&self, id: LayerId) -> Result<&Parts, Error> {
         self.layer(id)?.parts(id)
+    }
+    pub(crate) fn graph(&self, mut layers: Vec<LayerId>) -> Result<Arc<LineGraph>, Error> {
+        layers.sort_unstable();
+        layers.dedup();
+        let slot = self
+            .graphs
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .entry(layers.clone())
+            .or_default()
+            .clone();
+        slot.get_or_init(|| LineGraph::build(self, &layers).map(Arc::new))
+            .clone()
     }
     pub fn add_rule(
         &mut self,

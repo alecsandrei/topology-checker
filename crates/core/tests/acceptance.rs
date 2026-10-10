@@ -187,3 +187,238 @@ fn opposite_winding_polygons_union_correctly() {
     );
     assert!(r.is_valid());
 }
+
+#[test]
+fn identical_and_reversed_lines_overlap_once() {
+    use geo::{Euclidean, Length, line_string};
+    let line = line_string![(x:0.,y:0.),(x:2.,y:0.)];
+    for other in [line.clone(), line_string![(x:2.,y:0.),(x:0.,y:0.)]] {
+        let r = run(
+            Rule::LineMustNotOverlap,
+            vec![line.clone().into(), other.into()],
+            None,
+            0.,
+        );
+        assert_eq!(r.error_count(), 1);
+        let Geometry::LineString(l) = &r.errors().next().unwrap().geometry else {
+            panic!("line");
+        };
+        assert_eq!(Euclidean.length(l), 2.);
+    }
+}
+#[test]
+fn partial_line_overlap_reports_only_shared_piece() {
+    use geo::line_string;
+    let a = line_string![(x:0.,y:0.),(x:2.,y:0.)];
+    let b = line_string![(x:1.,y:0.),(x:3.,y:0.)];
+    let r = run(
+        Rule::LineMustNotOverlapWith,
+        vec![a.into()],
+        Some(vec![b.into()]),
+        0.,
+    );
+    assert_eq!(r.error_count(), 1);
+    assert_eq!(
+        r.errors().next().unwrap().geometry,
+        Geometry::LineString(line_string![(x:1.,y:0.),(x:2.,y:0.)])
+    );
+}
+#[test]
+fn partial_self_overlap_is_separate_from_other_feature_rules() {
+    use geo::line_string;
+    let line =
+        line_string![(x:0.,y:0.),(x:2.,y:0.),(x:2.,y:1.),(x:1.,y:1.),(x:1.,y:0.),(x:3.,y:0.)];
+    let r = run(
+        Rule::LineMustNotSelfOverlap,
+        vec![line.clone().into()],
+        None,
+        0.,
+    );
+    assert_eq!(r.error_count(), 1);
+    assert_eq!(
+        r.errors().next().unwrap().geometry,
+        Geometry::LineString(line_string![(x:1.,y:0.),(x:2.,y:0.)])
+    );
+    for rule in [Rule::LineMustNotOverlap, Rule::LineMustNotIntersect] {
+        assert!(run(rule, vec![line.clone().into()], None, 0.).is_valid());
+    }
+}
+#[test]
+fn tolerance_connects_endpoints_and_cracks_t_junctions() {
+    use geo::line_string;
+    let lines = vec![
+        line_string![(x:0.,y:0.),(x:1.,y:0.)].into(),
+        line_string![(x:1.000000001,y:0.),(x:2.,y:0.)].into(),
+    ];
+    assert_eq!(
+        run(Rule::LineMustNotHaveDangles, lines.clone(), None, 0.).error_count(),
+        4
+    );
+    assert_eq!(
+        run(Rule::LineMustNotHaveDangles, lines, None, 0.001).error_count(),
+        2
+    );
+    let lines = vec![
+        line_string![(x:0.,y:0.),(x:2.,y:0.)].into(),
+        line_string![(x:1.,y:0.0001),(x:1.,y:1.)].into(),
+    ];
+    assert_eq!(
+        run(Rule::LineMustNotHaveDangles, lines, None, 0.001).error_count(),
+        3
+    );
+}
+#[test]
+fn self_crossings_closed_loops_and_self_touches_have_distinct_semantics() {
+    use geo::line_string;
+    let crossing = line_string![(x:0.,y:0.),(x:2.,y:2.),(x:0.,y:2.),(x:2.,y:0.)];
+    let r = run(
+        Rule::LineMustNotSelfIntersect,
+        vec![crossing.into()],
+        None,
+        0.,
+    );
+    assert_eq!(r.error_count(), 1);
+    assert_eq!(
+        r.errors().next().unwrap().error_type,
+        ErrorType::SelfCrossing
+    );
+    let closed = line_string![(x:0.,y:0.),(x:1.,y:0.),(x:1.,y:1.),(x:0.,y:1.),(x:0.,y:0.)];
+    for rule in [
+        Rule::LineMustNotSelfIntersect,
+        Rule::LineMustNotHavePseudoNodes,
+        Rule::LineMustNotHaveDangles,
+    ] {
+        assert!(run(rule, vec![closed.clone().into()], None, 0.).is_valid());
+    }
+    let vertex_crossing = line_string![(x:0.,y:0.),(x:-1.,y:1.),(x:-2.,y:0.),(x:-1.,y:-1.),(x:0.,y:0.),(x:1.,y:1.),(x:2.,y:0.),(x:1.,y:-1.),(x:0.,y:0.)];
+    assert_eq!(
+        run(
+            Rule::LineMustNotSelfIntersect,
+            vec![vertex_crossing.into()],
+            None,
+            0.
+        )
+        .error_count(),
+        1
+    );
+    let touch = line_string![(x:0.,y:0.),(x:-1.,y:1.),(x:-2.,y:0.),(x:-1.,y:-1.),(x:0.,y:0.),(x:1.,y:-1.),(x:2.,y:0.),(x:1.,y:1.),(x:0.,y:0.)];
+    assert!(run(Rule::LineMustNotSelfIntersect, vec![touch.into()], None, 0.).is_valid());
+}
+#[test]
+fn crossing_and_endpoint_interior_touch_are_separate() {
+    use geo::line_string;
+    let a = line_string![(x:0.,y:0.),(x:2.,y:0.)];
+    let touch = line_string![(x:1.,y:0.),(x:1.,y:1.)];
+    assert!(
+        run(
+            Rule::LineMustNotIntersect,
+            vec![a.clone().into(), touch.clone().into()],
+            None,
+            0.
+        )
+        .is_valid()
+    );
+    let r = run(
+        Rule::LineMustNotIntersectOrTouchInterior,
+        vec![a.clone().into(), touch.into()],
+        None,
+        0.,
+    );
+    assert_eq!(r.error_count(), 1);
+    assert_eq!(
+        r.errors().next().unwrap().error_type,
+        ErrorType::TouchInterior
+    );
+    let cross = line_string![(x:1.,y:-1.),(x:1.,y:1.)];
+    let r = run(
+        Rule::LineMustNotIntersectWith,
+        vec![a.into()],
+        Some(vec![cross.into()]),
+        0.,
+    );
+    assert_eq!(r.error_count(), 1);
+    assert_eq!(r.errors().next().unwrap().error_type, ErrorType::Crossing);
+}
+#[test]
+fn pseudo_nodes_require_distinct_features() {
+    use geo::{MultiLineString, line_string};
+    let a = line_string![(x:0.,y:0.),(x:1.,y:0.)];
+    let b = line_string![(x:1.,y:0.),(x:2.,y:0.)];
+    assert_eq!(
+        run(
+            Rule::LineMustNotHavePseudoNodes,
+            vec![a.clone().into(), b.clone().into()],
+            None,
+            0.
+        )
+        .error_count(),
+        1
+    );
+    assert!(
+        run(
+            Rule::LineMustNotHavePseudoNodes,
+            vec![MultiLineString(vec![a, b]).into()],
+            None,
+            0.
+        )
+        .is_valid()
+    );
+}
+#[test]
+fn unrelated_layers_do_not_change_single_layer_graph_results() {
+    use geo::line_string;
+    let mut t = Topology::new(0.).unwrap();
+    let a = t.add_layer(Layer::from_geometries(
+        "a",
+        [line_string![(x:0.,y:0.),(x:1.,y:0.)].into()],
+    ));
+    let b = t.add_layer(Layer::from_geometries(
+        "b",
+        [line_string![(x:0.,y:0.),(x:0.,y:1.)].into()],
+    ));
+    t.add_rule(Rule::LineMustNotHaveDangles, a, None).unwrap();
+    t.add_rule(Rule::LineMustNotIntersectWith, a, Some(b))
+        .unwrap();
+    let r = t.validate().unwrap();
+    assert_eq!(r.rules[0].errors.len(), 2);
+    assert_eq!(
+        serde_free_signature(&r),
+        serde_free_signature(&t.validate().unwrap())
+    );
+}
+fn serde_free_signature(r: &topology_checker_core::Report) -> String {
+    format!("{r:?}")
+}
+#[test]
+fn empty_and_collapsed_lines_are_skipped_without_panics() {
+    use geo::{LineString, line_string};
+    let r = run(
+        Rule::LineMustNotHaveDangles,
+        vec![
+            LineString::empty().into(),
+            line_string![(x:0.,y:0.),(x:0.,y:0.)].into(),
+        ],
+        None,
+        0.,
+    );
+    assert!(r.is_valid());
+    assert_eq!(r.warnings.len(), 1);
+}
+#[test]
+fn multipart_line_overlap_aggregates_disconnected_pieces() {
+    use geo::{MultiLineString, line_string};
+    let multi = MultiLineString(vec![
+        line_string![(x:0.,y:0.),(x:1.,y:0.)],
+        line_string![(x:2.,y:0.),(x:3.,y:0.)],
+    ]);
+    let r = run(
+        Rule::LineMustNotOverlap,
+        vec![multi.clone().into(), multi.into()],
+        None,
+        0.,
+    );
+    assert_eq!(r.error_count(), 1);
+    let e = r.errors().next().unwrap();
+    assert_eq!(e.origin.unwrap().part, None);
+    assert!(matches!(e.geometry, Geometry::MultiLineString(_)));
+}

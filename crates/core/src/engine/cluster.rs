@@ -9,14 +9,12 @@ pub(crate) fn distance(a: Coord, b: Coord) -> f64 {
 }
 
 /// Stable representative clustering, with a fixed input order and no transitive snapping.
-#[allow(dead_code)] // Used by the line graph in the next milestone.
 pub(crate) struct Cluster {
     tolerance: f64,
     exact: HashMap<(u64, u64), usize>,
     cells: HashMap<(i64, i64), Vec<usize>>,
     pub(crate) coords: Vec<Coord>,
 }
-#[allow(dead_code)]
 impl Cluster {
     pub(crate) fn new(tolerance: f64) -> Self {
         Self {

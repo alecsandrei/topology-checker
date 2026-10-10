@@ -22,8 +22,6 @@ pub enum Error {
     DuplicateFid { layer: String, fid: i64 },
     #[error("{rule} requires {expected} input layer(s)")]
     Inputs { rule: Rule, expected: usize },
-    #[error("rule {0} is not implemented yet")]
-    Unavailable(Rule),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]

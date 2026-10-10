@@ -165,3 +165,81 @@ fn null_empty_and_z_geometries_are_handled() {
     assert!(warnings.contains("empty"));
     assert!(warnings.contains("Z/M"));
 }
+
+#[test]
+fn merge_and_explode_utilities_write_expected_features() {
+    let temp = TempDir::new().unwrap();
+    for (utility, count, layer) in [
+        ("merge-lines", 1, "merged_line"),
+        ("explode-lines", 2, "exploded_line"),
+    ] {
+        let path = temp.path().join(format!("{utility}.gpkg"));
+        cli()
+            .args(["utilities", utility, &fixture("lines.geojson"), "-o"])
+            .arg(&path)
+            .assert()
+            .success();
+        let ds = Dataset::open(path).unwrap();
+        assert_eq!(ds.layer_by_name(layer).unwrap().feature_count(), count);
+    }
+}
+#[test]
+fn line_errors_include_feature_pairs_and_mixed_output_files() {
+    let temp = TempDir::new().unwrap();
+    let input = temp.path().join("mixed.geojson");
+    std::fs::write(&input,r#"{"type":"FeatureCollection","features":[{"type":"Feature","id":1,"properties":{},"geometry":{"type":"LineString","coordinates":[[0,0],[2,0]]}},{"type":"Feature","id":2,"properties":{},"geometry":{"type":"LineString","coordinates":[[1,0],[3,0],[3,-1],[0.5,-1],[0.5,1]]}}]}"#).unwrap();
+    let path = temp.path().join("errors.geojson");
+    cli()
+        .args(["line", "must-not-intersect"])
+        .arg(&input)
+        .arg("-o")
+        .arg(&path)
+        .assert()
+        .code(1);
+    assert!(!path.exists());
+    for kind in ["line", "point"] {
+        let ds = Dataset::open(temp.path().join(format!("errors_{kind}.geojson"))).unwrap();
+        assert_eq!(ds.driver().short_name(), "GeoJSON");
+    }
+    let gpkg = temp.path().join("errors.gpkg");
+    cli()
+        .args(["line", "must-not-intersect"])
+        .arg(&input)
+        .arg("-o")
+        .arg(&gpkg)
+        .assert()
+        .code(1);
+    let ds = Dataset::open(gpkg).unwrap();
+    assert!(ds.layer_by_name("errors_line").is_ok());
+    assert!(ds.layer_by_name("errors_point").is_ok());
+}
+#[test]
+fn explicit_driver_is_honored_and_invalid_tolerances_fail_cleanly() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("output.json");
+    cli()
+        .args([
+            "--driver",
+            "GPKG",
+            "point",
+            "must-not-overlap",
+            &fixture("points.geojson"),
+            "-o",
+        ])
+        .arg(&path)
+        .assert()
+        .code(1);
+    assert_eq!(Dataset::open(path).unwrap().driver().short_name(), "GPKG");
+    for tolerance in ["-1", "NaN", "inf"] {
+        cli()
+            .args([
+                "--tolerance",
+                tolerance,
+                "point",
+                "must-not-overlap",
+                &fixture("points.geojson"),
+            ])
+            .assert()
+            .code(2);
+    }
+}

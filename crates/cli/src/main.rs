@@ -3,7 +3,7 @@ mod config;
 mod read;
 mod report;
 mod write;
-use anyhow::{Result, bail};
+use anyhow::Result;
 use clap::ArgMatches;
 use serde::Serialize;
 use std::{collections::BTreeMap, path::PathBuf, process::ExitCode};
@@ -211,9 +211,6 @@ fn finish(
 
 fn utility(matches: &ArgMatches, args: &ArgMatches) -> Result<u8> {
     let (name, args) = args.subcommand().expect("required utility");
-    if name == "merge-lines" {
-        bail!("merge-lines is not implemented yet");
-    }
     let input = args.get_one::<PathBuf>("input").expect("required input");
     let layers = read::read(
         input,
@@ -226,7 +223,7 @@ fn utility(matches: &ArgMatches, args: &ArgMatches) -> Result<u8> {
         .copied()
         .unwrap_or_else(|| read::default_tolerance(srs.as_ref()));
     let (mut t, ids, warnings) = collect(layers, tolerance)?;
-    let mut lines = Vec::new();
+    let mut geometries = Vec::new();
     fn extract(g: &geo::Geometry, lines: &mut Vec<geo::LineString>) {
         match g {
             geo::Geometry::Line(l) => lines.push((*l).into()),
@@ -242,16 +239,17 @@ fn utility(matches: &ArgMatches, args: &ArgMatches) -> Result<u8> {
     }
     for id in ids {
         t.add_rule(Rule::LineMustNotHaveDangles, id, None)?;
+        let mut lines = Vec::new();
         for (_, g) in t.layer(id)?.features() {
             extract(g, &mut lines);
         }
+        let output = if name == "merge-lines" {
+            topology_checker_core::merge_lines(lines, tolerance)?
+        } else {
+            topology_checker_core::explode_lines(lines)?
+        };
+        geometries.extend(output.into_iter().map(geo::Geometry::LineString));
     }
-    let geometries = lines
-        .iter()
-        .flat_map(|l| l.lines())
-        .filter(|l| l.start != l.end)
-        .map(|l| geo::Geometry::LineString(l.into()))
-        .collect::<Vec<_>>();
     let output = args.get_one::<PathBuf>("output").expect("required output");
     let paths = write::geometries(
         output,
@@ -259,7 +257,11 @@ fn utility(matches: &ArgMatches, args: &ArgMatches) -> Result<u8> {
         matches.get_flag("overwrite"),
         srs.as_ref(),
         &geometries,
-        "exploded",
+        if name == "merge-lines" {
+            "merged"
+        } else {
+            "exploded"
+        },
     )?;
     if matches.get_flag("json") {
         println!(

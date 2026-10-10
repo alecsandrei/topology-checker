@@ -1,4 +1,5 @@
 mod geometry;
+mod line;
 mod point;
 mod polygon;
 use crate::{Error, Rule, RuleSpec, Topology, TopologyError};
@@ -13,6 +14,15 @@ pub(crate) fn run(topology: &Topology, spec: RuleSpec) -> Result<Vec<TopologyErr
         }
         Rule::PolygonMustNotHaveGaps => polygon::gaps(topology, spec),
         Rule::LineMustBeInside => polygon::line_inside(topology, spec),
-        _ => Err(Error::Unavailable(spec.rule)),
+        Rule::LineMustNotHaveDangles
+        | Rule::LineMustNotHavePseudoNodes
+        | Rule::LineMustNotOverlap
+        | Rule::LineMustNotOverlapWith
+        | Rule::LineMustNotSelfOverlap
+        | Rule::LineMustNotIntersect
+        | Rule::LineMustNotIntersectWith
+        | Rule::LineMustNotIntersectOrTouchInterior
+        | Rule::LineMustNotIntersectOrTouchInteriorWith
+        | Rule::LineMustNotSelfIntersect => line::run(topology, spec),
     }
 }
