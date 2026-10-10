@@ -55,6 +55,12 @@ pub(crate) struct Segment {
     pub part: usize,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum InputMode {
+    Linework,
+    PolygonBoundary,
+}
+
 /// Project onto a segment without squaring its unscaled length.
 pub(crate) fn projection(line: Line, point: Coord) -> (f64, Coord) {
     let dx = line.end.x - line.start.x;
@@ -90,7 +96,7 @@ fn parameter(line: Line, point: Coord) -> f64 {
 /// formulas can otherwise round a concurrent crossing differently for each segment pair,
 /// creating spurious tiny edges even at zero user tolerance. Endpoint contacts retain their
 /// original coordinates and do not pay for rational arithmetic.
-fn proper_intersection(a: Line, b: Line) -> Option<Coord> {
+pub(crate) fn proper_intersection(a: Line, b: Line) -> Option<Coord> {
     let [ax, ay, bx, by, cx, cy, dx, dy] = [
         a.start.x, a.start.y, a.end.x, a.end.y, b.start.x, b.start.y, b.end.x, b.end.y,
     ]
@@ -111,12 +117,17 @@ fn proper_intersection(a: Line, b: Line) -> Option<Coord> {
     })
 }
 impl LineGraph {
-    pub fn build(t: &Topology, layers: &[LayerId]) -> Result<Self, Error> {
+    pub fn build(t: &Topology, layers: &[(LayerId, InputMode)]) -> Result<Self, Error> {
         let mut parts = Vec::new();
         let mut segments = Vec::new();
         let mut endpoints = Vec::new();
-        for &layer in layers {
-            for p in &t.parts(layer)?.lines {
+        for &(layer, mode) in layers {
+            let input = t.parts(layer)?;
+            let lines = match mode {
+                InputMode::Linework => &input.lines,
+                InputMode::PolygonBoundary => &crate::engine::cross::views(input).boundaries,
+            };
+            for p in lines {
                 let id = parts.len();
                 parts.push(GraphPart {
                     reference: p.reference,

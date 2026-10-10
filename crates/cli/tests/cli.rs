@@ -2,6 +2,7 @@ use assert_cmd::{Command, cargo::cargo_bin_cmd};
 use gdal::{Dataset, vector::LayerAccess};
 use std::path::Path;
 use tempfile::TempDir;
+use topology_checker_core::{GeometryKind, Rule};
 
 fn cli() -> Command {
     cargo_bin_cmd!("topology-checker")
@@ -23,11 +24,105 @@ fn registry_and_driver_commands_work() {
         .stdout
         .clone();
     let rules: serde_json::Value = serde_json::from_slice(&output).unwrap();
-    assert_eq!(rules.as_array().unwrap().len(), 18);
+    assert_eq!(rules.as_array().unwrap().len(), 38);
+    let expected = Rule::ALL
+        .iter()
+        .map(|rule| {
+            format!(
+                "{{\"name\":{},\"description\":{},\"arcgis\":{},\"qgis\":{}}}",
+                serde_json::to_string(rule.name()).unwrap(),
+                serde_json::to_string(rule.description()).unwrap(),
+                serde_json::to_string(&rule.arcgis()).unwrap(),
+                serde_json::to_string(&rule.qgis()).unwrap(),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    assert_eq!(output, format!("[{expected}]\n").as_bytes());
     cli()
         .args(["drivers", "--read", "--write"])
         .assert()
         .success();
+}
+
+#[test]
+fn rules_catalog_groups_every_rule_with_its_required_inputs() {
+    let output = cli()
+        .arg("rules")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8(output).unwrap();
+    assert!(text.is_ascii());
+    assert!(text.ends_with('\n'));
+    assert!(text.lines().all(|line| line.len() <= 80));
+    let mut blocks = text.split("\n\n");
+    assert_eq!(blocks.next(), Some("Available topology rules (38)"));
+    let mut names = Vec::new();
+    for (kind, heading) in [
+        (GeometryKind::Point, "Points (10)"),
+        (GeometryKind::Line, "Lines (19)"),
+        (GeometryKind::Polygon, "Polygons (7)"),
+        (GeometryKind::Any, "All geometries (2)"),
+    ] {
+        assert_eq!(blocks.next(), Some(heading));
+        for &rule in Rule::ALL.iter().filter(|rule| rule.inputs().0 == kind) {
+            let block = blocks.next().unwrap();
+            let lines = block.lines().collect::<Vec<_>>();
+            assert_eq!(lines[0], format!("  {}", rule.name()));
+            names.push(lines[0].trim());
+            assert!(lines.len() >= 3);
+            assert!(
+                lines[1..lines.len() - 1]
+                    .iter()
+                    .all(|line| { line.starts_with("    ") && !line.trim().is_empty() })
+            );
+            let needs = match rule.inputs() {
+                (GeometryKind::Point, None) => "one point layer",
+                (GeometryKind::Point, Some(GeometryKind::Line)) => "point layer + line layer",
+                (GeometryKind::Point, Some(GeometryKind::Point)) => "two point layers",
+                (GeometryKind::Point, Some(GeometryKind::Polygon)) => "point layer + polygon layer",
+                (GeometryKind::Line, Some(GeometryKind::Point)) => "line layer + point layer",
+                (GeometryKind::Line, None) => "one line layer",
+                (GeometryKind::Line, Some(GeometryKind::Line)) => "two line layers",
+                (GeometryKind::Line, Some(GeometryKind::Polygon)) => "line layer + polygon layer",
+                (GeometryKind::Polygon, Some(GeometryKind::Line)) => "polygon layer + line layer",
+                (GeometryKind::Polygon, Some(GeometryKind::Point)) => "polygon layer + point layer",
+                (GeometryKind::Polygon, None) => "one polygon layer",
+                (GeometryKind::Polygon, Some(GeometryKind::Polygon)) => "two polygon layers",
+                (GeometryKind::Any, Some(GeometryKind::Any)) => "two layers of any geometry type",
+                (GeometryKind::Any, None) => "one layer of any geometry type",
+                inputs => panic!("unexpected registry inputs: {inputs:?}"),
+            };
+            assert_eq!(*lines.last().unwrap(), format!("    Needs: {needs}"));
+        }
+    }
+    assert_eq!(
+        names,
+        [
+            GeometryKind::Point,
+            GeometryKind::Line,
+            GeometryKind::Polygon,
+            GeometryKind::Any
+        ]
+        .into_iter()
+        .flat_map(|kind| Rule::ALL
+            .iter()
+            .filter(move |rule| rule.inputs().0 == kind)
+            .map(|rule| rule.name()))
+        .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        blocks.next(),
+        Some(concat!(
+            "Usage: topology-checker <group> <rule> <input>\n",
+            "For two layers, add: --other <input>\n",
+            "Rule help: topology-checker <group> <rule> --help\n"
+        ))
+    );
+    assert!(blocks.next().is_none());
 }
 
 #[test]
@@ -821,4 +916,126 @@ fn generated_ids_do_not_collide_with_real_negative_ids() {
             .to_string()
             .contains("assigned negative FIDs")
     );
+}
+
+#[test]
+fn every_new_rule_executes_through_cli_and_toml_with_identical_json() {
+    let temp = TempDir::new().unwrap();
+    let input = temp.path().join("inputs.gpkg");
+    gpkg(
+        &input,
+        &[
+            ("points", "POINT (1 1)"),
+            ("points_other", "POINT (1 1)"),
+            ("lines", "LINESTRING (-1 1, 11 1)"),
+            ("lines_other", "LINESTRING (0 0, 10 0)"),
+            ("polygons", "POLYGON ((0 0, 10 0, 10 10, 0 10, 0 0))"),
+            ("polygons_other", "POLYGON ((0 0, 10 0, 10 10, 0 10, 0 0))"),
+        ],
+        3857,
+    );
+    let name = |kind| match kind {
+        GeometryKind::Point => "points",
+        GeometryKind::Line => "lines",
+        _ => "polygons",
+    };
+    for &rule in &Rule::ALL[18..] {
+        let (group, command) = rule.name().split_once('/').unwrap();
+        let (a, b) = rule.inputs();
+        let origin = name(a);
+        let destination = format!("{}_other", name(b.unwrap()));
+        let direct = cli()
+            .args(["--json", "--tolerance", "0", group, command])
+            .arg(&input)
+            .args(["--layer", origin, "--other"])
+            .arg(&input)
+            .args(["--other-layer", &destination])
+            .output()
+            .unwrap();
+        assert!(
+            matches!(direct.status.code(), Some(0 | 1)),
+            "{rule}: {}",
+            String::from_utf8_lossy(&direct.stderr)
+        );
+        let direct: serde_json::Value = serde_json::from_slice(&direct.stdout).unwrap();
+        let config = temp.path().join("check.toml");
+        std::fs::write(&config,format!("tolerance = 0\n[layers]\n{origin} = {{ path = 'inputs.gpkg', layer = '{origin}' }}\n{destination} = {{ path = 'inputs.gpkg', layer = '{destination}' }}\n[[rules]]\nrule = '{rule}'\nlayer = '{origin}'\nother = '{destination}'\n")).unwrap();
+        let configured = cli()
+            .args(["--json", "validate"])
+            .arg(config)
+            .output()
+            .unwrap();
+        assert!(
+            matches!(configured.status.code(), Some(0 | 1)),
+            "{rule}: {}",
+            String::from_utf8_lossy(&configured.stderr)
+        );
+        let mut configured: serde_json::Value = serde_json::from_slice(&configured.stdout).unwrap();
+        for error in configured["rules"][0]["errors"].as_array_mut().unwrap() {
+            for (role, input) in [("origin", "layer"), ("destination", "other")] {
+                if !error[role].is_null() {
+                    error[role]["layer"] = direct["rules"][0]["spec"][input].clone();
+                }
+            }
+        }
+        assert_eq!(
+            direct["rules"][0]["errors"], configured["rules"][0]["errors"],
+            "{rule}"
+        );
+        assert_eq!(direct["rules"][0]["spec"]["rule"], rule.name());
+    }
+}
+
+#[test]
+fn new_rule_exports_keep_mixed_contacts_and_secondary_point_provenance() {
+    let temp = TempDir::new().unwrap();
+    gpkg(
+        &temp.path().join("inputs.gpkg"),
+        &[
+            ("lines", "MULTILINESTRING ((1 1, 2 1), (-1 1, 0 0, 1 -1))"),
+            ("polygons", "POLYGON ((0 0, 10 0, 10 10, 0 10, 0 0))"),
+            ("points", "POINT (20 20)"),
+        ],
+        3857,
+    );
+    let config = temp.path().join("check.toml");
+    std::fs::write(&config,"tolerance = 0\n[layers]\nlines = { path = 'inputs.gpkg', layer = 'lines' }\npolygons = { path = 'inputs.gpkg', layer = 'polygons' }\npoints = { path = 'inputs.gpkg', layer = 'points' }\n[[rules]]\nrule = 'line/must-not-intersect-polygons'\nlayer = 'lines'\nother = 'polygons'\n[[rules]]\nrule = 'polygon/must-contain-one-point'\nlayer = 'polygons'\nother = 'points'\n").unwrap();
+    let output = temp.path().join("errors.gpkg");
+    let report = json_report(
+        cli()
+            .args(["--json", "validate"])
+            .arg(&config)
+            .arg("-o")
+            .arg(&output)
+            .assert()
+            .code(1),
+    );
+    assert_eq!(
+        report["rules"][0]["errors"][0]["error_type"],
+        "intersection"
+    );
+    assert!(
+        report["rules"][0]["errors"][0]["geometry"]
+            .get("GeometryCollection")
+            .is_some()
+    );
+    assert_eq!(report["rules"][1]["errors"].as_array().unwrap().len(), 2);
+    let ds = Dataset::open(output).unwrap();
+    for (name, count) in [
+        ("errors_line", 1),
+        ("errors_point", 2),
+        ("errors_polygon", 1),
+    ] {
+        assert_eq!(ds.layer_by_name(name).unwrap().feature_count(), count);
+    }
+    let mut points = ds.layer_by_name("errors_point").unwrap();
+    let kind = points.defn().field_index("error_type").unwrap();
+    let origin = points.defn().field_index("origin_fid").unwrap();
+    let destination = points.defn().field_index("destination_fid").unwrap();
+    let orphan = points
+        .features()
+        .find(|f| f.field_as_string(kind).unwrap().as_deref() == Some("point-count"))
+        .unwrap();
+    assert!(orphan.field(origin).unwrap().is_none());
+    assert_eq!(orphan.field_as_integer64(destination).unwrap(), Some(1));
 }

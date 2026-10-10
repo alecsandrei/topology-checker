@@ -75,6 +75,16 @@ pub enum ErrorType {
     OuterBoundary,
     /// A feature containing multiple parts.
     Multipart,
+    /// A point, endpoint or line piece without required coverage.
+    NotCovered,
+    /// A polygon feature without a qualifying point feature.
+    MissingPoint,
+    /// A polygon or point feature failing a one-to-one assignment.
+    PointCount,
+    /// A strictly contained point or whole feature.
+    Contained,
+    /// Any prohibited contact, including isolated points.
+    Intersection,
 }
 
 impl ErrorType {
@@ -93,6 +103,11 @@ impl ErrorType {
             Self::Gap => "gap",
             Self::OuterBoundary => "outer-boundary",
             Self::Multipart => "multipart",
+            Self::NotCovered => "not-covered",
+            Self::MissingPoint => "missing-point",
+            Self::PointCount => "point-count",
+            Self::Contained => "contained",
+            Self::Intersection => "intersection",
         }
     }
 }

@@ -1,6 +1,6 @@
 # topology-checker: architecture, rules and migration
 
-The `redesign` branch replaces the `294ea80` implementation at version `0.1.0-alpha`. It implements 18 rules in a GDAL-free core and a separate GDAL CLI. The [README](../README.md) describes building and commands; [performance notes](performance.md) document measurements.
+The `redesign` branch replaces the `294ea80` implementation at version `0.1.0-alpha`. It implements 38 rules in a GDAL-free core and a separate GDAL CLI. The [README](../README.md) describes building and commands; [performance notes](performance.md) document measurements.
 
 ## Architecture
 
@@ -8,7 +8,7 @@ The `redesign` branch replaces the `294ea80` implementation at version `0.1.0-al
 GDAL reader: all physical layers or named selectors, FIDs, CRS, XY coordinates
     -> immutable core Layers
     -> cached single-part views and R-trees
-    -> shared line graphs or polygon unions
+    -> shared line graphs, feature/endpoint/boundary views or polygon unions
     -> registered rules in parallel
     -> Report with typed errors and feature provenance
     -> human/JSON summary, optional GDAL error datasets
@@ -20,15 +20,15 @@ GDAL reader: all physical layers or named selectors, FIDs, CRS, XY coordinates
 | [`crates/core/src/rule.rs`](../crates/core/src/rule.rs) | Registry used by the library, CLI, TOML and rule listing |
 | [`crates/core/src/topology.rs`](../crates/core/src/topology.rs) | Rule registration, scoped graph caches, validation and reports |
 | [`crates/core/src/engine`](../crates/core/src/engine) | Indexed candidate joins, endpoint clustering, noding and polygon unions |
-| [`crates/core/src/rules`](../crates/core/src/rules) | Point, line, polygon and multipart checks |
+| [`crates/core/src/rules`](../crates/core/src/rules) | Point, line, polygon, multipart and cross-geometry checks |
 | [`crates/core/src/merge.rs`](../crates/core/src/merge.rs) | Independent Rust chain/cycle merger and segment explosion |
 | [`crates/cli/src`](../crates/cli/src) | Argument/config parsing, GDAL I/O and summaries |
 
 The core uses geo 0.33, rstar, rayon, serde and thiserror. Exact rational arithmetic stabilizes proper line intersections, preventing distinct pairwise roundings of one concurrent crossing from creating a false edge. The CLI uses GDAL 0.19 and bundles GDAL/PROJ by default. There is no GEOS or GDAL dependency in the core.
 
-Features retain their layer and signed 64-bit FID. Single-part views retain stable part indices. Pair errors aggregate by feature identity and error type, using multipart geometry and an absent part index where necessary. Geometry never becomes an identity key. Duplicate line uses remain in the graph.
+Features retain their layer and signed 64-bit FID. Single-part views retain stable part indices. Pair errors aggregate by feature identity and error type, using multipart geometry and an absent part index where necessary. Geometry never becomes an identity key. Duplicate line uses remain in the graph. New cross-geometry rules preserve mixed geometry collections when points and lines contribute to the same violation; existing rules retain their aggregation behavior. Whole cleaned feature, endpoint and boundary-segment views with spatial indexes are cached per immutable layer.
 
-Line graphs are built separately for each participating layer set, so unrelated layers cannot change a rule's results. R-tree segment candidates are noded at crossings and overlap endpoints. A positive tolerance cracks nearby endpoints onto segments, then clusters nodes using a deterministic grid search with stable representatives. Input geometry remains immutable. Edge uses and node incidence drive the line rules. Proper intersections share one consistently rounded coordinate even at zero tolerance.
+Line graphs are built separately for each participating layer set and input mode (linework or polygon boundaries), so unrelated layers cannot change a rule's results. R-tree segment candidates are noded at crossings and overlap endpoints. A positive tolerance cracks nearby endpoints onto segments, then clusters nodes using a deterministic grid search with stable representatives. Input geometry remains immutable. Edge uses and node incidence drive the line rules. Proper intersections share one consistently rounded coordinate even at zero tolerance.
 
 Polygon overlaps use intersection areas. Gaps use interior and exterior rings of the layer union. Line containment clips against the polygon union. Polygon windings are normalized before union, and overlap pieces and hole rings narrower than tolerance (`2 * area / perimeter`) are removed.
 
@@ -57,9 +57,34 @@ Names follow [ArcGIS polygon rules](https://doc.esri.com/en/arcgis-pro/latest/he
 | `polygon/must-not-have-gaps` | Union holes excluding slivers, plus exterior rings | Line, `gap` or `outer-boundary` |
 | `geometry/must-not-be-multipart` | Features with more than one part | Original geometry, `multipart` |
 
-A one-part Multi geometry is valid for the multipart rule. Pair overlaps are reported once per feature pair/type; crossing locations remain separate errors. Closed loops do not produce dangles or pseudo nodes. Multipart line interior classification uses endpoint parity. Self-crossings require alternating passages through a node, rather than any repeated visit.
+| `point/must-be-covered-by-lines` | Points away from linework, including endpoints | Point(s), `not-covered` |
+| `point/must-be-covered-by-line-endpoints` | Points away from open line endpoints | Point(s), `not-covered` |
+| `point/must-be-covered-by-polygon-boundaries` | Points away from individual exterior or hole rings | Point(s), `not-covered` |
+| `line/endpoints-must-be-covered-by-points` | Open endpoints without covering points | Point(s), `not-covered` |
+| `line/must-be-covered-by-polygon-boundaries` | Line pieces without boundary coverage, longer than tolerance | Line(s), `not-covered` |
+| `polygon/boundaries-must-be-covered-by-lines` | Exterior or hole pieces without line coverage, longer than tolerance | Line(s), `not-covered` |
+| `polygon/must-contain-point` | Polygon features without a qualifying point feature | Whole geometry, `missing-point` |
+| `polygon/must-contain-one-point` | Polygon and point features without exactly one assignment | Whole geometry, `point-count` |
+| `line/must-not-cross-polygon-boundaries` | Entry and exit crossings, including vertices | Point(s), `crossing` |
+| `geometry/must-not-be-contained-by` | Whole cleaned features contained by individual targets, excluding equality | Whole geometry, `contained` |
+| `point/must-be-covered-by-polygons` | Points outside areas and beyond boundary tolerance | Point(s), `not-covered` |
+| `point/must-not-be-inside-polygons` | Strictly interior points | Point(s), `contained` |
+| `point/must-not-intersect-lines` | Any point contact with linework | Point(s), `intersection` |
+| `point/must-not-intersect-polygons` | Interior points and boundary contacts | Point(s), `intersection` |
+| `line/must-be-properly-inside-polygons` | Parts outside coverage or within boundary tolerance | Whole failing part(s), `outside` |
+| `line/must-not-overlap-with-polygons` | Interior or shared boundary pieces longer than tolerance | Line(s), `overlap` |
+| `line/must-not-overlap-polygon-boundaries` | Shared boundary pieces longer than tolerance | Line(s), `overlap` |
+| `line/must-not-intersect-polygons` | Interior pieces, shared edges and isolated contacts | Line(s), point(s), collections, `intersection` |
+| `line/endpoints-must-be-covered-by-polygon-boundaries` | Open endpoints away from individual rings | Point(s), `not-covered` |
+| `polygon/must-not-contain-points` | Strictly contained point parts, polygon as origin | Point(s), `contained` |
+
+A one-part Multi geometry is valid for the multipart rule. Pair overlaps are reported once per feature pair/type; existing line rules keep crossing locations as separate errors. Closed loops do not produce dangles or pseudo nodes. Multipart line interior classification uses endpoint parity. Self-crossings require alternating passages through a node, rather than any repeated visit.
 
 `utilities merge-lines` follows degree-two endpoint chains and then isolated cycles, using the strategy documented by [GEOS LineMerger](https://libgeos.org/doxygen/classgeos_1_1operation_1_1linemerge_1_1LineMerger.html). It preserves original parts at interior junctions. Traversal is linear after indexed contact discovery; index building and queries have separate costs. It is implemented independently in Rust, with no copied GEOS source or GEOS dependency. `utilities explode-lines` writes every nondegenerate segment, preserving repeated uses.
+
+The 20 cross-geometry additions and their precise tolerance, cardinality and vendor differences are documented in [Cross-geometry topology checks](cross-geometry-checks.md), including an acceptance-test traceability matrix. Required line containment uses layer unions, while boundary rules retain individual feature exteriors, holes and shared parcel edges. Pair prohibitions use individual target features.
+
+The new public `Rule` and `ErrorType` variants require downstream exhaustive Rust matches to be updated. The original registry prefix, commands, serialization names and JSON fields remain unchanged.
 
 ## Fixed historical problems
 
@@ -98,4 +123,4 @@ The historical timings were 3.77 seconds for 160k line dangles, 6.45 seconds for
 
 Acceptance tests cover overlaps, boundaries, slivers, tolerance, multipart identity, graph isolation, closed loops, self-touch and concurrent crossing precision. Property tests compare random integer-grid datasets with brute-force DE-9IM, distance and containment references. CLI tests cover exit codes, overwrite behavior, exact driver selection, warnings, selectors, Cartesian layer pairs, CRS defaults and mismatch, TOML, utilities, nullable identity and mixed error families. CI configures release builds, tests, formatting, Clippy and artifacts on Ubuntu, Windows and macOS, plus Rust 1.88.
 
-Invalid and duplicate geometry rules, exceptions, fixes, tiling, incremental validation, reprojection, the covered-by family and contains-point remain out of scope. The current error identity supports future exceptions and fixes. Dense datasets can generate quadratically many genuine intersections or error pairs; indexed candidate discovery cannot avoid the output cost. Geometry and graph structures remain in memory. Overwriting an output is not an atomic replacement of the old dataset.
+Invalid and duplicate geometry rules, exceptions, fixes, tiling, incremental validation and reprojection remain out of scope. The current error identity supports future exceptions and fixes. Dense datasets can generate quadratically many genuine intersections or error pairs; indexed candidate discovery cannot avoid the output cost. Geometry and graph structures remain in memory. Overwriting an output is not an atomic replacement of the old dataset.

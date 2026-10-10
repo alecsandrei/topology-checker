@@ -2,6 +2,7 @@ mod cli;
 mod config;
 mod read;
 mod report;
+mod rules;
 mod write;
 use anyhow::Result;
 use clap::ArgMatches;
@@ -124,9 +125,7 @@ fn run_command(
             if matches.get_flag("json") {
                 report::json(output, &rules)?;
             } else {
-                for r in rules {
-                    writeln!(output, "{:<55} {}", r.name, r.description)?;
-                }
+                rules::render(output)?;
             }
             Ok(0)
         }

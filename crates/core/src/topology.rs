@@ -1,4 +1,4 @@
-use crate::engine::line_graph::LineGraph;
+use crate::engine::line_graph::{InputMode, LineGraph};
 use crate::{
     Error, ErrorType, FeatureRef, Layer, LayerId, Rule, RuleSpec, TopologyError, model::Parts,
     rules,
@@ -58,7 +58,7 @@ pub struct Topology {
     tolerance: f64,
     layers: Vec<Layer>,
     specs: Vec<RuleSpec>,
-    graphs: Mutex<BTreeMap<Vec<LayerId>, GraphSlot>>,
+    graphs: Mutex<BTreeMap<Vec<(LayerId, InputMode)>, GraphSlot>>,
 }
 impl Topology {
     /// Create an empty topology with tolerance in input coordinate units.
@@ -102,7 +102,18 @@ impl Topology {
     pub(crate) fn parts(&self, id: LayerId) -> Result<&Parts, Error> {
         self.layer(id)?.parts(id)
     }
-    pub(crate) fn graph(&self, mut layers: Vec<LayerId>) -> Result<Arc<LineGraph>, Error> {
+    pub(crate) fn graph(&self, layers: Vec<LayerId>) -> Result<Arc<LineGraph>, Error> {
+        self.graph_inputs(
+            layers
+                .into_iter()
+                .map(|id| (id, InputMode::Linework))
+                .collect(),
+        )
+    }
+    pub(crate) fn graph_inputs(
+        &self,
+        mut layers: Vec<(LayerId, InputMode)>,
+    ) -> Result<Arc<LineGraph>, Error> {
         layers.sort_unstable();
         layers.dedup();
         // A poisoned map still contains valid Arc/OnceLock entries: initialization

@@ -1,0 +1,941 @@
+use topology_checker_core::{
+    ErrorType, Layer, Rule, Topology, TopologyError,
+    geo::{
+        Geometry, GeometryCollection, LineString, MultiLineString, MultiPoint, MultiPolygon, Point,
+        Polygon, Rect, coord,
+    },
+};
+fn point(x: f64, y: f64) -> Geometry {
+    Point::new(x, y).into()
+}
+fn line(coords: &[(f64, f64)]) -> Geometry {
+    LineString::from(coords.to_vec()).into()
+}
+fn polygon(x: f64, y: f64, size: f64) -> Polygon {
+    Rect::new(coord! {x:x,y:y}, coord! {x:x+size,y:y+size}).to_polygon()
+}
+fn square() -> Geometry {
+    polygon(0., 0., 10.).into()
+}
+fn hole() -> Geometry {
+    Polygon::new(
+        polygon(0., 0., 10.).exterior().clone(),
+        vec![polygon(3., 3., 4.).exterior().clone()],
+    )
+    .into()
+}
+fn run(rule: Rule, a: Vec<Geometry>, b: Vec<Geometry>, tolerance: f64) -> Vec<TopologyError> {
+    let mut t = Topology::new(tolerance).unwrap();
+    let a = t.add_layer(Layer::from_features(
+        "origin",
+        a.into_iter().enumerate().map(|(i, g)| (i as i64 - 20, g)),
+    ));
+    let b = t.add_layer(Layer::from_features(
+        "destination",
+        b.into_iter().enumerate().map(|(i, g)| (i as i64 - 40, g)),
+    ));
+    t.add_rule(rule, a, Some(b)).unwrap();
+    t.validate().unwrap().rules.remove(0).errors
+}
+#[test]
+fn every_new_rule_has_valid_and_invalid_examples() {
+    let edge = line(&[(0., 0.), (10., 0.)]);
+    let interior = line(&[(1., 1.), (2., 1.)]);
+    let outside = line(&[(-2., -1.), (-1., -1.)]);
+    let perimeter: Geometry = polygon(0., 0., 10.).exterior().clone().into();
+    let cases = vec![
+        (
+            Rule::PointMustBeCoveredByLines,
+            point(5., 0.),
+            point(5., 1.),
+            edge.clone(),
+            edge.clone(),
+        ),
+        (
+            Rule::PointMustBeCoveredByLineEndpoints,
+            point(0., 0.),
+            point(5., 0.),
+            edge.clone(),
+            edge.clone(),
+        ),
+        (
+            Rule::PointMustBeCoveredByPolygonBoundaries,
+            point(0., 5.),
+            point(5., 5.),
+            square(),
+            square(),
+        ),
+        (
+            Rule::LineEndpointsMustBeCoveredByPoints,
+            edge.clone(),
+            edge.clone(),
+            MultiPoint(vec![Point::new(0., 0.), Point::new(10., 0.)]).into(),
+            point(0., 0.),
+        ),
+        (
+            Rule::LineMustBeCoveredByPolygonBoundaries,
+            edge.clone(),
+            interior.clone(),
+            square(),
+            square(),
+        ),
+        (
+            Rule::PolygonBoundariesMustBeCoveredByLines,
+            square(),
+            square(),
+            perimeter,
+            edge.clone(),
+        ),
+        (
+            Rule::PolygonMustContainPoint,
+            square(),
+            square(),
+            point(1., 1.),
+            point(0., 0.),
+        ),
+        (
+            Rule::PolygonMustContainOnePoint,
+            square(),
+            square(),
+            point(1., 1.),
+            MultiPoint(vec![Point::new(1., 1.), Point::new(20., 20.)]).into(),
+        ),
+        (
+            Rule::LineMustNotCrossPolygonBoundaries,
+            edge.clone(),
+            line(&[(-1., 5.), (11., 5.)]),
+            square(),
+            square(),
+        ),
+        (
+            Rule::GeometryMustNotBeContainedBy,
+            point(20., 20.),
+            point(1., 1.),
+            square(),
+            square(),
+        ),
+        (
+            Rule::PointMustBeCoveredByPolygons,
+            point(0., 5.),
+            point(20., 20.),
+            square(),
+            square(),
+        ),
+        (
+            Rule::PointMustNotBeInsidePolygons,
+            point(0., 5.),
+            point(5., 5.),
+            square(),
+            square(),
+        ),
+        (
+            Rule::PointMustNotIntersectLines,
+            point(1., 1.),
+            point(0., 0.),
+            edge.clone(),
+            edge.clone(),
+        ),
+        (
+            Rule::PointMustNotIntersectPolygons,
+            point(20., 20.),
+            point(0., 0.),
+            square(),
+            square(),
+        ),
+        (
+            Rule::LineMustBeProperlyInsidePolygons,
+            interior.clone(),
+            edge.clone(),
+            square(),
+            square(),
+        ),
+        (
+            Rule::LineMustNotOverlapWithPolygons,
+            outside.clone(),
+            interior.clone(),
+            square(),
+            square(),
+        ),
+        (
+            Rule::LineMustNotOverlapPolygonBoundaries,
+            interior.clone(),
+            edge.clone(),
+            square(),
+            square(),
+        ),
+        (
+            Rule::LineMustNotIntersectPolygons,
+            outside.clone(),
+            interior.clone(),
+            square(),
+            square(),
+        ),
+        (
+            Rule::LineEndpointsMustBeCoveredByPolygonBoundaries,
+            edge,
+            interior,
+            square(),
+            square(),
+        ),
+        (
+            Rule::PolygonMustNotContainPoints,
+            square(),
+            square(),
+            point(0., 0.),
+            point(5., 5.),
+        ),
+    ];
+    assert_eq!(cases.len(), 20);
+    for (rule, valid, invalid, target_valid, target_invalid) in cases {
+        assert!(
+            run(rule, vec![valid], vec![target_valid], 0.).is_empty(),
+            "valid {rule}"
+        );
+        assert!(
+            !run(rule, vec![invalid], vec![target_invalid], 0.).is_empty(),
+            "invalid {rule}"
+        );
+    }
+}
+#[test]
+fn point_and_endpoint_coverage_use_inclusive_distance_thresholds() {
+    for rule in [
+        Rule::PointMustBeCoveredByLines,
+        Rule::PointMustBeCoveredByLineEndpoints,
+    ] {
+        for (offset, errors) in [(0., 0), (0.25, 0), (0.250000001, 1)] {
+            assert_eq!(
+                run(
+                    rule,
+                    vec![point(0., offset)],
+                    vec![line(&[(0., 0.), (10., 0.)])],
+                    0.25
+                )
+                .len(),
+                errors,
+                "{rule}"
+            );
+        }
+    }
+    for rule in [
+        Rule::PointMustBeCoveredByPolygonBoundaries,
+        Rule::PointMustBeCoveredByPolygons,
+    ] {
+        assert!(run(rule, vec![point(-0.25, 5.)], vec![square()], 0.25).is_empty());
+        assert_eq!(
+            run(rule, vec![point(-0.250000001, 5.)], vec![square()], 0.25).len(),
+            1
+        );
+    }
+    for rule in [
+        Rule::PointMustNotBeInsidePolygons,
+        Rule::PolygonMustNotContainPoints,
+    ] {
+        let (a, b) = if rule == Rule::PolygonMustNotContainPoints {
+            (
+                vec![square()],
+                vec![point(0.25, 5.), point(0.250000001, 5.)],
+            )
+        } else {
+            (
+                vec![point(0.25, 5.), point(0.250000001, 5.)],
+                vec![square()],
+            )
+        };
+        assert_eq!(run(rule, a, b, 0.25).len(), 1);
+    }
+    assert_eq!(
+        run(
+            Rule::PointMustNotIntersectLines,
+            vec![point(5., 0.25)],
+            vec![line(&[(0., 0.), (10., 0.)])],
+            0.25
+        )
+        .len(),
+        1
+    );
+    assert_eq!(
+        run(
+            Rule::PointMustNotIntersectPolygons,
+            vec![point(-0.25, 5.)],
+            vec![square()],
+            0.25
+        )
+        .len(),
+        1
+    );
+}
+#[test]
+fn boundaries_keep_holes_and_shared_edges() {
+    let shared = line(&[(10., 1.), (10., 9.)]);
+    let parcels = vec![square(), polygon(10., 0., 10.).into()];
+    assert!(
+        run(
+            Rule::LineMustBeCoveredByPolygonBoundaries,
+            vec![shared.clone()],
+            parcels.clone(),
+            0.
+        )
+        .is_empty()
+    );
+    assert_eq!(
+        run(
+            Rule::LineMustNotOverlapPolygonBoundaries,
+            vec![shared],
+            parcels,
+            0.
+        )
+        .len(),
+        2
+    );
+    assert!(
+        run(
+            Rule::PointMustBeCoveredByPolygonBoundaries,
+            vec![point(3., 5.)],
+            vec![hole()],
+            0.
+        )
+        .is_empty()
+    );
+    assert_eq!(
+        run(
+            Rule::PointMustBeCoveredByPolygons,
+            vec![point(5., 5.)],
+            vec![hole()],
+            0.
+        )
+        .len(),
+        1
+    );
+    assert_eq!(
+        run(
+            Rule::LineMustNotCrossPolygonBoundaries,
+            vec![line(&[(1., 5.), (9., 5.)])],
+            vec![hole()],
+            0.
+        )
+        .len(),
+        1
+    );
+    let edges = Geometry::MultiLineString(MultiLineString(vec![
+        polygon(0., 0., 10.).exterior().clone(),
+        polygon(3., 3., 4.).exterior().clone(),
+    ]));
+    assert!(
+        run(
+            Rule::PolygonBoundariesMustBeCoveredByLines,
+            vec![hole()],
+            vec![edges],
+            0.
+        )
+        .is_empty()
+    );
+}
+#[test]
+fn crossings_distinguish_vertices_tangencies_endpoint_touches_and_shared_paths() {
+    for (coords, expected) in [
+        (vec![(-1., -1.), (1., 1.)], 1),
+        (vec![(-1., -1.), (0., 0.), (1., 1.)], 1),
+        (vec![(-1., 1.), (0., 0.), (1., -1.)], 0),
+        (vec![(-1., 5.), (0., 5.)], 0),
+        (vec![(0., 5.), (5., 5.)], 0),
+        (vec![(-1., 0.), (5., 0.), (5., 5.)], 0),
+        (vec![(1., 1.), (2., 2.)], 0),
+    ] {
+        let errors = run(
+            Rule::LineMustNotCrossPolygonBoundaries,
+            vec![line(&coords)],
+            vec![square()],
+            0.,
+        );
+        assert_eq!(errors.len(), expected, "{coords:?}");
+        if expected > 0 {
+            assert_eq!(errors[0].geometry, point(0., 0.));
+        }
+    }
+    let errors = run(
+        Rule::LineMustNotCrossPolygonBoundaries,
+        vec![line(&[(-1., 5.), (11., 5.)])],
+        vec![square()],
+        0.,
+    );
+    assert_eq!(errors.len(), 1);
+    assert_eq!(
+        errors[0].geometry,
+        Geometry::MultiPoint(MultiPoint(vec![Point::new(0., 5.), Point::new(10., 5.)]))
+    );
+}
+#[test]
+fn strict_line_containment_uses_union_and_reports_whole_parts() {
+    let adjacent = vec![polygon(0., 0., 5.).into(), polygon(5., 0., 5.).into()];
+    assert!(
+        run(
+            Rule::LineMustBeProperlyInsidePolygons,
+            vec![line(&[(1., 2.), (9., 2.)])],
+            adjacent,
+            0.
+        )
+        .is_empty()
+    );
+    let touching = line(&[(1., 1.), (0., 5.), (1., 9.)]);
+    let errors = run(
+        Rule::LineMustBeProperlyInsidePolygons,
+        vec![touching.clone()],
+        vec![square()],
+        0.,
+    );
+    assert_eq!(errors[0].geometry, touching);
+    assert_eq!(
+        run(
+            Rule::LineMustBeProperlyInsidePolygons,
+            vec![line(&[(0.25, 1.), (0.25, 9.)])],
+            vec![square()],
+            0.25
+        )
+        .len(),
+        1
+    );
+    assert!(
+        run(
+            Rule::LineMustBeProperlyInsidePolygons,
+            vec![line(&[(0.250000001, 1.), (0.250000001, 9.)])],
+            vec![square()],
+            0.25
+        )
+        .is_empty()
+    );
+    assert_eq!(
+        run(
+            Rule::LineMustBeProperlyInsidePolygons,
+            vec![line(&[(1., 5.), (9., 5.)])],
+            vec![hole()],
+            0.
+        )
+        .len(),
+        1
+    );
+}
+#[test]
+fn line_overlap_and_contact_have_distinct_geometries_and_length_thresholds() {
+    let crossing = line(&[(-1., 5.), (11., 5.)]);
+    let errors = run(
+        Rule::LineMustNotOverlapWithPolygons,
+        vec![crossing],
+        vec![square()],
+        0.,
+    );
+    assert_eq!(errors[0].geometry, line(&[(0., 5.), (10., 5.)]));
+    let tangent = line(&[(-1., 1.), (0., 0.), (1., -1.)]);
+    assert!(
+        run(
+            Rule::LineMustNotOverlapWithPolygons,
+            vec![tangent.clone()],
+            vec![square()],
+            0.
+        )
+        .is_empty()
+    );
+    assert_eq!(
+        run(
+            Rule::LineMustNotIntersectPolygons,
+            vec![tangent],
+            vec![square()],
+            0.
+        )[0]
+        .geometry,
+        point(0., 0.)
+    );
+    for length in [0.1, 0.25] {
+        let short = line(&[(1., 1.), (1. + length, 1.)]);
+        assert!(
+            run(
+                Rule::LineMustNotOverlapWithPolygons,
+                vec![short.clone()],
+                vec![square()],
+                0.25
+            )
+            .is_empty()
+        );
+        assert_eq!(
+            run(
+                Rule::LineMustNotIntersectPolygons,
+                vec![short],
+                vec![square()],
+                0.25
+            )
+            .len(),
+            1
+        );
+    }
+    assert_eq!(
+        run(
+            Rule::LineMustNotOverlapWithPolygons,
+            vec![line(&[(1., 1.), (1.250000001, 1.)])],
+            vec![square()],
+            0.25
+        )
+        .len(),
+        1
+    );
+    assert_eq!(
+        run(
+            Rule::LineMustNotIntersectPolygons,
+            vec![line(&[(-0.25, 1.), (-0.25, 9.)])],
+            vec![square()],
+            0.25
+        )
+        .len(),
+        1
+    );
+    assert!(
+        run(
+            Rule::LineMustNotIntersectPolygons,
+            vec![line(&[(-0.250000001, 1.), (-0.250000001, 9.)])],
+            vec![square()],
+            0.25
+        )
+        .is_empty()
+    );
+}
+#[test]
+fn mixed_contacts_are_preserved_during_feature_aggregation() {
+    let input = Geometry::MultiLineString(MultiLineString(vec![
+        LineString::from(vec![(1., 1.), (2., 1.)]),
+        LineString::from(vec![(-1., 1.), (0., 0.), (1., -1.)]),
+    ]));
+    let errors = run(
+        Rule::LineMustNotIntersectPolygons,
+        vec![input],
+        vec![square()],
+        0.,
+    );
+    assert_eq!(errors.len(), 1);
+    let Geometry::GeometryCollection(c) = &errors[0].geometry else {
+        panic!("mixed contact lost: {:?}", errors[0]);
+    };
+    assert_eq!(c.0, vec![point(0., 0.), line(&[(1., 1.), (2., 1.)])]);
+    assert_eq!(errors[0].origin.unwrap().part, None);
+}
+#[test]
+fn cardinality_counts_features_and_preserves_input_roles() {
+    let points = vec![point(1., 1.), point(2., 2.)];
+    assert!(
+        run(
+            Rule::PolygonMustContainPoint,
+            vec![square()],
+            points.clone(),
+            0.
+        )
+        .is_empty()
+    );
+    let errors = run(Rule::PolygonMustContainOnePoint, vec![square()], points, 0.);
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].origin.unwrap().fid, -20);
+    assert!(errors[0].destination.is_none());
+    assert_eq!(errors[0].error_type, ErrorType::PointCount);
+    let multi = Geometry::MultiPoint(MultiPoint(vec![Point::new(1., 1.), Point::new(2., 2.)]));
+    assert!(
+        run(
+            Rule::PolygonMustContainOnePoint,
+            vec![square()],
+            vec![multi],
+            0.
+        )
+        .is_empty()
+    );
+    let multi = Geometry::MultiPoint(MultiPoint(vec![Point::new(1., 1.), Point::new(20., 20.)]));
+    let errors = run(
+        Rule::PolygonMustContainOnePoint,
+        vec![square()],
+        vec![multi],
+        0.,
+    );
+    assert_eq!(errors.len(), 2);
+    let point_error = errors.iter().find(|e| e.origin.is_none()).unwrap();
+    assert_eq!(point_error.destination.unwrap().fid, -40);
+    let errors = run(
+        Rule::PolygonMustContainOnePoint,
+        vec![square(), polygon(1., 1., 10.).into()],
+        vec![point(5., 5.)],
+        0.,
+    );
+    assert_eq!(errors.len(), 1);
+    assert!(errors[0].origin.is_none());
+    let multi = Geometry::MultiPolygon(MultiPolygon(vec![
+        polygon(0., 0., 10.),
+        polygon(20., 0., 10.),
+    ]));
+    let points = Geometry::MultiPoint(MultiPoint(vec![Point::new(5., 5.), Point::new(25., 5.)]));
+    assert!(
+        run(
+            Rule::PolygonMustContainOnePoint,
+            vec![multi],
+            vec![points],
+            0.
+        )
+        .is_empty()
+    );
+    assert_eq!(
+        run(Rule::PolygonMustContainPoint, vec![square()], vec![], 0.)[0].error_type,
+        ErrorType::MissingPoint
+    );
+    assert_eq!(
+        run(
+            Rule::PolygonMustContainOnePoint,
+            vec![],
+            vec![point(1., 1.)],
+            0.
+        )
+        .len(),
+        1
+    );
+}
+#[test]
+fn closed_parts_have_no_endpoints_and_cleaning_keeps_original_part_indices() {
+    let closed: Geometry = polygon(0., 0., 10.).exterior().clone().into();
+    for rule in [
+        Rule::LineEndpointsMustBeCoveredByPoints,
+        Rule::LineEndpointsMustBeCoveredByPolygonBoundaries,
+    ] {
+        assert!(run(rule, vec![closed.clone()], vec![], 0.).is_empty());
+    }
+    assert_eq!(
+        run(
+            Rule::PointMustBeCoveredByLineEndpoints,
+            vec![point(0., 0.)],
+            vec![closed],
+            0.
+        )
+        .len(),
+        1
+    );
+    let parts = Geometry::MultiLineString(MultiLineString(vec![
+        LineString::empty(),
+        LineString::from(vec![(0., 0.), (0., 0.), (1., 0.)]),
+    ]));
+    let errors = run(
+        Rule::LineEndpointsMustBeCoveredByPoints,
+        vec![parts],
+        vec![point(0., 0.)],
+        0.,
+    );
+    assert_eq!(errors[0].origin.unwrap().part, Some(1));
+    assert_eq!(errors[0].geometry, point(1., 0.));
+}
+#[test]
+fn whole_feature_containment_excludes_equality_and_never_uses_target_union_or_buffer() {
+    assert!(
+        run(
+            Rule::GeometryMustNotBeContainedBy,
+            vec![square()],
+            vec![square()],
+            5.
+        )
+        .is_empty()
+    );
+    assert!(
+        run(
+            Rule::GeometryMustNotBeContainedBy,
+            vec![line(&[(-1., 5.), (11., 5.)])],
+            vec![square()],
+            5.
+        )
+        .is_empty()
+    );
+    assert_eq!(
+        run(
+            Rule::GeometryMustNotBeContainedBy,
+            vec![line(&[(0., 5.), (5., 5.)])],
+            vec![square()],
+            0.
+        )
+        .len(),
+        1
+    );
+    let multipoint =
+        Geometry::MultiPoint(MultiPoint(vec![Point::new(1., 1.), Point::new(11., 1.)]));
+    assert!(
+        run(
+            Rule::GeometryMustNotBeContainedBy,
+            vec![multipoint],
+            vec![square(), polygon(10., 0., 10.).into()],
+            0.
+        )
+        .is_empty()
+    );
+    let mixed = Geometry::GeometryCollection(GeometryCollection(vec![
+        point(1., 1.),
+        line(&[(2., 2.), (3., 3.)]),
+        polygon(4., 4., 1.).into(),
+    ]));
+    let errors = run(
+        Rule::GeometryMustNotBeContainedBy,
+        vec![mixed.clone()],
+        vec![square()],
+        0.,
+    );
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].geometry, mixed);
+    assert!(errors[0].origin.unwrap().part.is_none());
+    assert_eq!(
+        run(
+            Rule::GeometryMustNotBeContainedBy,
+            vec![point(5., 0.)],
+            vec![line(&[(0., 0.), (10., 0.)])],
+            0.
+        )
+        .len(),
+        1
+    );
+    assert!(
+        run(
+            Rule::GeometryMustNotBeContainedBy,
+            vec![point(0., 0.)],
+            vec![line(&[(0., 0.), (10., 0.)])],
+            0.
+        )
+        .is_empty()
+    );
+}
+#[test]
+fn empty_targets_fail_requirements_and_pass_prohibitions() {
+    for &rule in &Rule::ALL[18..] {
+        let geometry = match rule.inputs().0 {
+            topology_checker_core::GeometryKind::Point => point(1., 1.),
+            topology_checker_core::GeometryKind::Line => line(&[(1., 1.), (2., 2.)]),
+            _ => square(),
+        };
+        let required = rule.name().contains("must-be-") || rule.name().contains("must-contain-");
+        let errors = run(rule, vec![geometry], vec![], 0.);
+        assert_eq!(!errors.is_empty(), required, "{rule}");
+        assert!(run(rule, vec![], vec![], 0.).is_empty());
+    }
+}
+#[test]
+fn graph_modes_and_unrelated_layers_do_not_change_results() {
+    let mut topology = Topology::new(0.01).unwrap();
+    let a = topology.add_layer(Layer::from_geometries(
+        "lines",
+        [line(&[(0., 0.), (10., 0.)])],
+    ));
+    let b = topology.add_layer(Layer::from_geometries("polygon", [square()]));
+    topology
+        .add_rule(Rule::LineMustBeCoveredByPolygonBoundaries, a, Some(b))
+        .unwrap();
+    topology
+        .add_rule(Rule::LineMustNotOverlapPolygonBoundaries, a, Some(b))
+        .unwrap();
+    let first = topology.validate().unwrap();
+    let c = topology.add_layer(Layer::from_geometries(
+        "unrelated",
+        [line(&[(5., -5.), (5., 5.)])],
+    ));
+    topology
+        .add_rule(Rule::LineMustNotIntersectWith, a, Some(c))
+        .unwrap();
+    topology
+        .add_rule(Rule::GeometryMustNotBeContainedBy, a, Some(b))
+        .unwrap();
+    for _ in 0..4 {
+        let report = topology.validate().unwrap();
+        assert_eq!(first.rules[0].errors, report.rules[0].errors);
+        assert_eq!(first.rules[1].errors, report.rules[1].errors);
+    }
+}
+
+#[test]
+fn closed_overlap_pieces_join_across_the_traversal_seam_before_length_filtering() {
+    let input = line(&[
+        (0.5, 1.),
+        (2., 1.),
+        (2., -1.),
+        (-1., -1.),
+        (-1., 1.),
+        (0.5, 1.),
+    ]);
+    let target: Geometry = polygon(0., 0., 1.).into();
+    let errors = run(
+        Rule::LineMustNotOverlapWithPolygons,
+        vec![input],
+        vec![target],
+        0.75,
+    );
+    assert_eq!(errors.len(), 1);
+    assert_eq!(errors[0].geometry, line(&[(0., 1.), (0.5, 1.), (1., 1.)]));
+}
+
+#[test]
+fn feature_point_counts_use_combined_parts_and_ignore_skipped_parts() {
+    let polygons =
+        Geometry::MultiPolygon(MultiPolygon(vec![polygon(0., 0., 5.), polygon(5., 0., 5.)]));
+    assert!(
+        run(
+            Rule::PolygonMustContainOnePoint,
+            vec![polygons],
+            vec![point(5., 2.)],
+            0.
+        )
+        .is_empty()
+    );
+    let skipped = Geometry::GeometryCollection(GeometryCollection(vec![
+        LineString::empty().into(),
+        Point::new(2., 2.).into(),
+    ]));
+    assert_eq!(
+        run(
+            Rule::GeometryMustNotBeContainedBy,
+            vec![skipped],
+            vec![square()],
+            0.
+        )[0]
+        .geometry,
+        point(2., 2.)
+    );
+    for rule in [
+        Rule::GeometryMustNotBeContainedBy,
+        Rule::LineMustNotIntersectPolygons,
+        Rule::LineMustBeProperlyInsidePolygons,
+    ] {
+        assert!(run(rule, vec![LineString::empty().into()], vec![square()], 0.).is_empty());
+    }
+}
+
+#[test]
+fn coverage_returns_only_uncovered_runs_and_tolerance_noding_accepts_near_edges() {
+    let errors = run(
+        Rule::LineMustBeCoveredByPolygonBoundaries,
+        vec![line(&[(-2., 0.), (5., 0.), (5., 2.)])],
+        vec![square()],
+        0.,
+    );
+    assert_eq!(errors.len(), 1);
+    assert_eq!(
+        errors[0].geometry,
+        Geometry::MultiLineString(MultiLineString(vec![
+            LineString::from(vec![(-2., 0.), (0., 0.)]),
+            LineString::from(vec![(5., 0.), (5., 2.)])
+        ]))
+    );
+    assert!(
+        run(
+            Rule::LineMustBeCoveredByPolygonBoundaries,
+            vec![line(&[(1., 0.25), (9., 0.25)])],
+            vec![square()],
+            0.25
+        )
+        .is_empty()
+    );
+    assert_eq!(
+        run(
+            Rule::LineMustBeCoveredByPolygonBoundaries,
+            vec![line(&[(1., 0.250000001), (9., 0.250000001)])],
+            vec![square()],
+            0.25
+        )
+        .len(),
+        1
+    );
+    assert_eq!(
+        run(
+            Rule::LineMustNotOverlapPolygonBoundaries,
+            vec![line(&[(1., 0.25), (9., 0.25)])],
+            vec![square()],
+            0.25
+        )
+        .len(),
+        1
+    );
+    assert_eq!(
+        run(
+            Rule::LineEndpointsMustBeCoveredByPolygonBoundaries,
+            vec![line(&[(0.25, 1.), (9.75, 1.)])],
+            vec![square()],
+            0.25
+        )
+        .len(),
+        0
+    );
+}
+
+#[test]
+fn contained_features_support_all_target_families_and_topological_equality() {
+    let long = line(&[(0., 0.), (10., 0.)]);
+    let reversed = line(&[(10., 0.), (5., 0.), (0., 0.)]);
+    assert!(
+        run(
+            Rule::GeometryMustNotBeContainedBy,
+            vec![long.clone()],
+            vec![reversed],
+            0.
+        )
+        .is_empty()
+    );
+    let shorter = line(&[(1., 0.), (9., 0.)]);
+    assert_eq!(
+        run(
+            Rule::GeometryMustNotBeContainedBy,
+            vec![shorter],
+            vec![long],
+            0.
+        )
+        .len(),
+        1
+    );
+    let target = Geometry::MultiPoint(MultiPoint(vec![Point::new(1., 1.), Point::new(2., 2.)]));
+    assert_eq!(
+        run(
+            Rule::GeometryMustNotBeContainedBy,
+            vec![point(1., 1.)],
+            vec![target],
+            0.
+        )
+        .len(),
+        1
+    );
+    assert!(
+        run(
+            Rule::GeometryMustNotBeContainedBy,
+            vec![point(1., 1.)],
+            vec![point(1., 1.)],
+            0.
+        )
+        .is_empty()
+    );
+    let small: Geometry = polygon(1., 1., 2.).into();
+    assert_eq!(
+        run(
+            Rule::GeometryMustNotBeContainedBy,
+            vec![small],
+            vec![square()],
+            100.
+        )
+        .len(),
+        1
+    );
+    let target = Geometry::GeometryCollection(GeometryCollection(vec![
+        square(),
+        line(&[(20., 0.), (30., 0.)]),
+        point(40., 0.),
+    ]));
+    let input =
+        Geometry::GeometryCollection(GeometryCollection(vec![point(1., 1.), point(25., 0.)]));
+    assert_eq!(
+        run(
+            Rule::GeometryMustNotBeContainedBy,
+            vec![input],
+            vec![target],
+            0.
+        )
+        .len(),
+        1
+    );
+    let points = Geometry::MultiPoint(MultiPoint(vec![Point::new(1., 1.), Point::new(20., 20.)]));
+    let errors = run(
+        Rule::PolygonMustNotContainPoints,
+        vec![square()],
+        vec![points],
+        0.,
+    );
+    assert_eq!(errors[0].geometry, point(1., 1.));
+    assert_eq!(errors[0].destination.unwrap().part, Some(0));
+}

@@ -115,3 +115,83 @@ proptest! {
         prop_assert_eq!(pairs(&check(lines.into_iter().map(Geometry::LineString).collect(),None,Rule::LineMustNotIntersectOrTouchInterior,0.)),expected);
     }
 }
+
+fn polygon_strategy() -> impl Strategy<Value = geo::Polygon> {
+    (-5i32..5, -5i32..5, 1i32..6, 1i32..6).prop_map(|(x, y, w, h)| {
+        Rect::new(
+            coord! {x:x as f64,y:y as f64},
+            coord! {x:(x+w) as f64,y:(y+h) as f64},
+        )
+        .to_polygon()
+    })
+}
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(256))]
+    #[test]
+    fn cross_geometry_point_coverage_matches_brute_force(
+        points in prop::collection::vec((-6i32..6,-6i32..6),0..15),
+        lines in prop::collection::vec(line(),0..10),
+        tolerance in prop_oneof![Just(0.),Just(0.25),Just(1.)]) {
+        use geo::{Distance,Euclidean};
+        let points = points.into_iter().map(|(x,y)| Point::new(x as f64,y as f64)).collect::<Vec<_>>();
+        for rule in [Rule::PointMustBeCoveredByLines,Rule::PointMustBeCoveredByLineEndpoints] {
+            let expected = points.iter().enumerate().filter(|(_,p)| !lines.iter().any(|l| if rule == Rule::PointMustBeCoveredByLines { Euclidean.distance(l,*p) <= tolerance } else { l.0.iter().any(|c| Euclidean.distance(&Point(*c),*p) <= tolerance) })).map(|(i,_)| i as i64).collect::<BTreeSet<_>>();
+            let r = check(points.iter().copied().map(Geometry::Point).collect(),Some(lines.iter().cloned().map(Geometry::LineString).collect()),rule,tolerance);
+            prop_assert_eq!(r.errors().map(|e| e.origin.unwrap().fid).collect::<BTreeSet<_>>(),expected);
+        }
+        let mut expected = Pairs::new();
+        for (i,p) in points.iter().enumerate() { for (j,l) in lines.iter().enumerate() { if Euclidean.distance(l,p) <= tolerance { expected.insert((i as i64,j as i64,ErrorType::Intersection)); } } }
+        prop_assert_eq!(pairs(&check(points.into_iter().map(Geometry::Point).collect(),Some(lines.into_iter().map(Geometry::LineString).collect()),Rule::PointMustNotIntersectLines,tolerance)),expected);
+    }
+    #[test]
+    fn cross_geometry_polygon_contacts_match_de9im(
+        lines in prop::collection::vec(line(),0..10), polygons in prop::collection::vec(polygon_strategy(),0..8)) {
+        use geo::{Distance,Euclidean};
+        let mut expected = Pairs::new();
+        let mut overlap = Pairs::new();
+        let mut boundary_overlap = Pairs::new();
+        let mut crossings = Pairs::new();
+        for (i,l) in lines.iter().enumerate() { for (j,p) in polygons.iter().enumerate() {
+            let matrix = l.relate(p);
+            if matrix.is_intersects() { expected.insert((i as i64,j as i64,ErrorType::Intersection)); }
+            if matrix.is_crosses() { crossings.insert((i as i64,j as i64,ErrorType::Crossing)); }
+            if matrix.get(CoordPos::Inside,CoordPos::OnBoundary) == Dimensions::OneDimensional { boundary_overlap.insert((i as i64,j as i64,ErrorType::Overlap)); }
+            if matrix.get(CoordPos::Inside,CoordPos::Inside) == Dimensions::OneDimensional || matrix.get(CoordPos::Inside,CoordPos::OnBoundary) == Dimensions::OneDimensional { overlap.insert((i as i64,j as i64,ErrorType::Overlap)); }
+        } }
+        let input = lines.iter().cloned().map(Geometry::LineString).collect::<Vec<_>>();
+        let target = polygons.iter().cloned().map(Geometry::Polygon).collect::<Vec<_>>();
+        prop_assert_eq!(pairs(&check(input.clone(),Some(target.clone()),Rule::LineMustNotIntersectPolygons,0.)),expected);
+        prop_assert_eq!(pairs(&check(input.clone(),Some(target.clone()),Rule::LineMustNotOverlapWithPolygons,0.)),overlap);
+        prop_assert_eq!(pairs(&check(input.clone(),Some(target.clone()),Rule::LineMustNotOverlapPolygonBoundaries,0.)),boundary_overlap);
+        prop_assert_eq!(pairs(&check(input.clone(),Some(target.clone()),Rule::LineMustNotCrossPolygonBoundaries,0.)),crossings);
+        // Test strict containment against a single polygon using the independent
+        // topological relationship and the minimum whole-line boundary distance.
+        if let Some(p) = polygons.first() {
+            let expected = lines.iter().enumerate().filter(|(_,l)| !(p.contains(*l) && Euclidean.distance(p.exterior(),*l) > 0.)).map(|(i,_)| i as i64).collect::<BTreeSet<_>>();
+            let r = check(input,Some(vec![p.clone().into()]),Rule::LineMustBeProperlyInsidePolygons,0.);
+            prop_assert_eq!(r.errors().map(|e| e.origin.unwrap().fid).collect::<BTreeSet<_>>(),expected);
+        }
+    }
+    #[test]
+    fn cross_geometry_feature_containment_matches_brute_force(
+        lines in prop::collection::vec(line(),0..10), polygons in prop::collection::vec(polygon_strategy(),0..8)) {
+        let mut expected = Pairs::new();
+        for (i,l) in lines.iter().enumerate() { for (j,p) in polygons.iter().enumerate() { if p.contains(l) && !l.relate(p).is_contains() { expected.insert((i as i64,j as i64,ErrorType::Contained)); } } }
+        prop_assert_eq!(pairs(&check(lines.into_iter().map(Geometry::LineString).collect(),Some(polygons.into_iter().map(Geometry::Polygon).collect()),Rule::GeometryMustNotBeContainedBy,1.)),expected);
+    }
+    #[test]
+    fn cross_geometry_point_counts_match_brute_force(
+        points in prop::collection::vec((-6i32..6,-6i32..6),0..15), polygons in prop::collection::vec(polygon_strategy(),0..8)) {
+        let points = points.into_iter().map(|(x,y)| Point::new(x as f64,y as f64)).collect::<Vec<_>>();
+        for rule in [Rule::PolygonMustContainPoint,Rule::PolygonMustContainOnePoint] {
+            let expected_polygons = polygons.iter().enumerate().filter(|(_,p)| {
+                let count = points.iter().filter(|q| p.contains(*q)).count();
+                if rule == Rule::PolygonMustContainPoint { count == 0 } else { count != 1 }
+            }).map(|(i,_)| i as i64).collect::<BTreeSet<_>>();
+            let expected_points = if rule == Rule::PolygonMustContainPoint { BTreeSet::new() } else { points.iter().enumerate().filter(|(_,q)| polygons.iter().filter(|p| p.contains(*q)).count() != 1).map(|(i,_)| i as i64).collect() };
+            let r = check(polygons.iter().cloned().map(Geometry::Polygon).collect(),Some(points.iter().copied().map(Geometry::Point).collect()),rule,0.);
+            prop_assert_eq!(r.errors().filter_map(|e| e.origin.map(|r| r.fid)).collect::<BTreeSet<_>>(),expected_polygons);
+            prop_assert_eq!(r.errors().filter(|e| e.origin.is_none()).map(|e| e.destination.unwrap().fid).collect::<BTreeSet<_>>(),expected_points);
+        }
+    }
+}

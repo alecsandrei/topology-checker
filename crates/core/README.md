@@ -25,8 +25,13 @@ Each error carries a rule, error type, geometry and optional origin/destination 
 
 Part views and R-trees are cached. Polygon unions are cached per layer; line graphs are cached per participating layer set. Rules run in parallel and reports retain registration order. Repeated validation reuses these structures. Layers expose only immutable geometry, so the caches cannot become stale. The tolerance is explicit, finite and nonnegative, in coordinate units; the core performs no CRS lookup or reprojection.
 
-`Rule::ALL` supplies names, input kinds, semantics and ArcGIS/QGIS equivalents. The CLI and TOML definitions use the same registry. See the repository's `docs/overview.md` for all 18 rules.
+`Rule::ALL` supplies names, input kinds, semantics and ArcGIS/QGIS equivalents. The CLI and TOML definitions use the same registry. See the repository's `docs/overview.md` for all 38 rules.
 
 `merge_lines(lines, tolerance)` merges original parts through eligible degree-two endpoint joins and handles isolated cycles. Interior contacts stop joins. Duplicate uses are retained; direction follows the majority of input parts, with the earliest part breaking a tie. `explode_lines(lines)` emits every nondegenerate segment independently. Both functions return `Result` and are implemented in Rust without GEOS.
 
 Exact tolerance preserves distinct input coordinates. Proper line intersections are computed with exact rational arithmetic from their binary floating point inputs, then rounded once, so concurrent crossings share a coordinate. Polygon BooleanOps use geo's geometry engine. These are planar topology checks; polygon validity and geometry repair are outside the current API.
+
+Binary cross-geometry rules use `Topology::add_rule(rule, layer, Some(other))`.
+New public enum variants require downstream exhaustive `Rule` and `ErrorType`
+matches to be updated. The original 18 rules remain the registry prefix.
+The core keeps its existing dependencies and planar tolerance model.

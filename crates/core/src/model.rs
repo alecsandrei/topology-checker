@@ -56,7 +56,7 @@ pub enum GeometryKind {
     Polygon,
     /// Geometry collections, whose children are checked recursively for rules.
     Collection,
-    /// Any geometry family, accepted by the multipart rule.
+    /// Any geometry family, accepted by the multipart and containment rules.
     Any,
 }
 impl GeometryKind {
@@ -233,6 +233,7 @@ pub(crate) struct Parts {
     pub line_index: Index,
     pub polygon_index: Index,
     pub union: OnceLock<crate::engine::polygons::Union>,
+    pub cross: OnceLock<crate::engine::cross::Views>,
     pub skipped: usize,
 }
 fn clean_line(line: &LineString) -> LineString {

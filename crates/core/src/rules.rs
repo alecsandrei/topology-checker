@@ -1,3 +1,4 @@
+mod cross;
 mod geometry;
 mod line;
 mod point;
@@ -24,5 +25,25 @@ pub(crate) fn run(topology: &Topology, spec: RuleSpec) -> Result<Vec<TopologyErr
         | Rule::LineMustNotIntersectOrTouchInterior
         | Rule::LineMustNotIntersectOrTouchInteriorWith
         | Rule::LineMustNotSelfIntersect => line::run(topology, spec),
+        Rule::PointMustBeCoveredByLines
+        | Rule::PointMustBeCoveredByLineEndpoints
+        | Rule::PointMustBeCoveredByPolygonBoundaries
+        | Rule::LineEndpointsMustBeCoveredByPoints
+        | Rule::LineMustBeCoveredByPolygonBoundaries
+        | Rule::PolygonBoundariesMustBeCoveredByLines
+        | Rule::PolygonMustContainPoint
+        | Rule::PolygonMustContainOnePoint
+        | Rule::LineMustNotCrossPolygonBoundaries
+        | Rule::GeometryMustNotBeContainedBy
+        | Rule::PointMustBeCoveredByPolygons
+        | Rule::PointMustNotBeInsidePolygons
+        | Rule::PointMustNotIntersectLines
+        | Rule::PointMustNotIntersectPolygons
+        | Rule::LineMustBeProperlyInsidePolygons
+        | Rule::LineMustNotOverlapWithPolygons
+        | Rule::LineMustNotOverlapPolygonBoundaries
+        | Rule::LineMustNotIntersectPolygons
+        | Rule::LineEndpointsMustBeCoveredByPolygonBoundaries
+        | Rule::PolygonMustNotContainPoints => cross::run(topology, spec),
     }
 }
