@@ -196,6 +196,7 @@ pub(crate) struct Parts {
     pub point_index: Index,
     pub line_index: Index,
     pub polygon_index: Index,
+    pub union: OnceLock<crate::engine::polygons::Union>,
     pub skipped: usize,
 }
 fn clean_line(line: &LineString) -> LineString {
