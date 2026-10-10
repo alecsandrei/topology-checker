@@ -5,6 +5,9 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 geo.workspace = true
 rstar.workspace = true
@@ -20,4 +23,12 @@ criterion = "0.7"
 
 [[bench]]
 name = "rules"
+harness = false
+
+[[bench]]
+name = "patterns"
+harness = false
+
+[[bench]]
+name = "allocations"
 harness = false

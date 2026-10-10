@@ -9,8 +9,18 @@ rust-version = "1.88"
 license = "MIT"
 
 [workspace.dependencies]
-geo = { version = "0.33", features = ["serde"] }
+geo = { version = "0.33", default-features = false, features = ["serde", "multithreading"] }
 rstar = "0.12"
 rayon = "1.10"
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
+
+[workspace.lints.rust]
+missing_debug_implementations = "warn"
+unsafe_op_in_unsafe_fn = "deny"
+
+[workspace.lints.clippy]
+undocumented_unsafe_blocks = "deny"
+missing_errors_doc = "warn"
+clone_on_ref_ptr = "warn"
+dbg_macro = "deny"

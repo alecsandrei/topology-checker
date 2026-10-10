@@ -14,6 +14,14 @@ use std::collections::BTreeMap;
 /// This independent Rust implementation uses a chain pass followed by a cycle pass.
 /// Each original part is visited once. Index construction and contact queries are separate
 /// from the linear traversal. The input coordinates are never modified in place.
+/// Tolerance uses planar input coordinate units. Consecutive duplicate coordinates
+/// are removed; degenerate parts are skipped. Output order follows the earliest
+/// contributing part. Direction follows the majority of original part directions,
+/// with ties resolved by the earliest part. Output carries no feature provenance.
+///
+/// # Errors
+/// Returns [`Error::Tolerance`] for negative or non-finite tolerance and
+/// [`Error::NonFinite`] for non-finite input coordinates.
 pub fn merge_lines(
     lines: impl IntoIterator<Item = LineString>,
     tolerance: f64,
@@ -93,19 +101,21 @@ pub fn merge_lines(
             } else {
                 backwards += 1;
             }
-            let mut part = lines[id].0.clone();
-            if !direction {
-                part.reverse();
-            }
             let first = edges[id][usize::from(!direction)];
             let last = edges[id][usize::from(direction)];
-            part[0] = cluster.coords[first];
-            let length = part.len();
-            part[length - 1] = cluster.coords[last];
-            if !coords.is_empty() {
-                part.remove(0);
+            let part = &lines[id].0;
+            // Reserve the whole append so endpoint pushes cannot trigger a second growth.
+            coords.reserve(part.len() - usize::from(!coords.is_empty()));
+            if coords.is_empty() {
+                coords.push(cluster.coords[first]);
             }
-            coords.extend(part);
+            let interior = &part[1..part.len() - 1];
+            if direction {
+                coords.extend(interior.iter().copied());
+            } else {
+                coords.extend(interior.iter().rev().copied());
+            }
+            coords.push(cluster.coords[last]);
             if blocked[last] || incident[last].len() != 2 {
                 break;
             }
@@ -144,6 +154,12 @@ pub fn merge_lines(
 }
 
 /// Explode nondegenerate parts into individual segments, preserving duplicate uses.
+/// Consecutive duplicate coordinates are removed; remaining segments retain input
+/// part order and direction. Output coordinates use the original planar units and
+/// carry no feature provenance.
+///
+/// # Errors
+/// Returns [`Error::NonFinite`] for non-finite input coordinates.
 pub fn explode_lines(
     lines: impl IntoIterator<Item = LineString>,
 ) -> Result<Vec<LineString>, Error> {

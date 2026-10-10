@@ -11,6 +11,7 @@ use geo::{
 use std::{collections::HashSet, path::Path};
 use topology_checker_core::Layer;
 
+#[derive(Debug)]
 pub struct ReadLayer {
     pub layer: Layer,
     pub srs: Option<SpatialRef>,
@@ -153,25 +154,24 @@ fn convert(g: &gdal::vector::Geometry) -> Result<Geometry> {
             if g.geometry_count() == 0 {
                 Polygon::empty().into()
             } else {
-                let rings = (0..g.geometry_count())
-                    .map(|i| {
-                        let ring = g.get_geometry(i);
-                        if !matches!(
-                            geometry_type_flatten(ring.geometry_type()),
-                            wkbLineString | wkbLinearRing
-                        ) {
-                            bail!("polygon contains a non-linear ring");
-                        }
-                        let coords = (0..ring.point_count())
-                            .map(|j| {
-                                let (x, y, _) = ring.get_point(j as i32);
-                                Coord { x, y }
-                            })
-                            .collect();
-                        Ok(LineString(coords))
-                    })
-                    .collect::<Result<Vec<_>>>()?;
-                Polygon::new(rings[0].clone(), rings[1..].to_vec()).into()
+                let mut rings = (0..g.geometry_count()).map(|i| {
+                    let ring = g.get_geometry(i);
+                    if !matches!(
+                        geometry_type_flatten(ring.geometry_type()),
+                        wkbLineString | wkbLinearRing
+                    ) {
+                        bail!("polygon contains a non-linear ring");
+                    }
+                    let coords = (0..ring.point_count())
+                        .map(|j| {
+                            let (x, y, _) = ring.get_point(j as i32);
+                            Coord { x, y }
+                        })
+                        .collect();
+                    Ok(LineString(coords))
+                });
+                let exterior = rings.next().expect("nonempty polygon")?;
+                Polygon::new(exterior, rings.collect::<Result<Vec<_>>>()?).into()
             }
         }
         wkbMultiPoint => {
@@ -224,22 +224,22 @@ fn convert(g: &gdal::vector::Geometry) -> Result<Geometry> {
 }
 
 pub fn common_crs(layers: &[ReadLayer]) -> Result<Option<SpatialRef>> {
-    let known = layers
-        .iter()
-        .filter_map(|l| l.srs.as_ref())
-        .collect::<Vec<_>>();
-    if let Some(first) = known.first() {
-        for srs in &known[1..] {
-            if *first != *srs {
-                bail!("input layers have different CRSs; reprojection is required");
+    let mut first = None;
+    let mut missing = false;
+    for layer in layers {
+        if let Some(srs) = layer.srs.as_ref() {
+            if let Some(known) = first {
+                if known != srs {
+                    bail!("input layers have different CRSs; reprojection is required");
+                }
+            } else {
+                first = Some(srs);
             }
+        } else {
+            missing = true;
         }
     }
-    Ok(if known.len() == layers.len() {
-        known.first().map(|s| (*s).clone())
-    } else {
-        None
-    })
+    Ok(if missing { None } else { first.cloned() })
 }
 pub fn default_tolerance(srs: Option<&SpatialRef>) -> f64 {
     match srs {
@@ -248,5 +248,46 @@ pub fn default_tolerance(srs: Option<&SpatialRef>) -> f64 {
             0.001 / s.linear_units()
         }
         _ => 0.,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn layer(epsg: Option<u32>) -> ReadLayer {
+        ReadLayer {
+            layer: Layer::from_geometries("empty", []),
+            srs: epsg.map(|code| SpatialRef::from_epsg(code).unwrap()),
+            warnings: Vec::new(),
+        }
+    }
+    #[test]
+    fn missing_crs_does_not_hide_mismatches_between_known_layers() {
+        for layers in [
+            [layer(None), layer(Some(4326)), layer(Some(3857))],
+            [layer(Some(4326)), layer(None), layer(Some(3857))],
+            [layer(Some(4326)), layer(Some(3857)), layer(None)],
+        ] {
+            assert!(
+                common_crs(&layers)
+                    .unwrap_err()
+                    .to_string()
+                    .contains("different CRSs")
+            );
+        }
+        assert!(
+            common_crs(&[layer(None), layer(Some(4326)), layer(Some(4326))])
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(
+            common_crs(&[layer(Some(3857)), layer(Some(3857))])
+                .unwrap()
+                .unwrap()
+                .auth_code()
+                .unwrap(),
+            3857
+        );
+        assert!(common_crs(&[]).unwrap().is_none());
     }
 }

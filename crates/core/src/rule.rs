@@ -4,14 +4,26 @@ use std::{fmt, str::FromStr};
 
 macro_rules! registry {
     ($(($variant:ident, $name:literal, $a:ident, $b:expr, $description:literal, $arcgis:expr, $qgis:expr)),* $(,)?) => {
+        /// A supported topology rule with its canonical CLI and serialization name.
         #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
         pub enum Rule { $( #[doc = $description] #[serde(rename = $name)] $variant, )* }
         impl Rule {
+            /// All 18 rules in registry order.
             pub const ALL: &'static [Self] = &[$(Self::$variant),*];
+            /// Return the canonical slash-separated rule name.
+            #[must_use]
             pub const fn name(self) -> &'static str { match self { $(Self::$variant => $name),* } }
+            /// Return the primary family and optional secondary input family.
+            #[must_use]
             pub const fn inputs(self) -> (GeometryKind, Option<GeometryKind>) { match self { $(Self::$variant => (GeometryKind::$a, $b)),* } }
+            /// Describe the rule's violation semantics and tolerance behavior.
+            #[must_use]
             pub const fn description(self) -> &'static str { match self { $(Self::$variant => $description),* } }
+            /// Return the corresponding ArcGIS name, when available.
+            #[must_use]
             pub const fn arcgis(self) -> Option<&'static str> { match self { $(Self::$variant => $arcgis),* } }
+            /// Return the corresponding QGIS name, when available.
+            #[must_use]
             pub const fn qgis(self) -> Option<&'static str> { match self { $(Self::$variant => $qgis),* } }
         }
     }
@@ -43,19 +55,42 @@ impl fmt::Display for Rule {
     }
 }
 impl FromStr for Rule {
-    type Err = String;
+    type Err = ParseRuleError;
+    /// Parse an exact, case-sensitive canonical rule name.
+    ///
+    /// # Errors
+    /// Returns [`ParseRuleError`] containing the unrecognized input name.
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         Self::ALL
             .iter()
             .copied()
             .find(|r| r.name() == value)
-            .ok_or_else(|| format!("unknown rule {value}"))
+            .ok_or_else(|| ParseRuleError { name: value.into() })
     }
 }
 
+/// An unknown canonical rule name encountered during parsing.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("unknown rule {name}")]
+pub struct ParseRuleError {
+    name: String,
+}
+impl ParseRuleError {
+    /// Return the original unrecognized name without normalization.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+}
+
+/// A registered rule with topology-scoped input IDs.
+/// Constructing this value alone does not validate inputs or register a rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuleSpec {
+    /// Rule to execute.
     pub rule: Rule,
+    /// Primary input layer.
     pub layer: LayerId,
+    /// Secondary input layer, required only for binary rules.
     pub other: Option<LayerId>,
 }

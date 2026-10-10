@@ -6,10 +6,19 @@ mod write;
 use anyhow::Result;
 use clap::ArgMatches;
 use serde::Serialize;
-use std::{collections::BTreeMap, path::PathBuf, process::ExitCode};
+use std::{
+    collections::BTreeMap,
+    io::{self, Write},
+    path::PathBuf,
+    process::ExitCode,
+};
 use topology_checker_core::{LayerId, Rule, Topology};
 
 fn main() -> ExitCode {
+    let stdout = io::stdout();
+    let mut output = stdout.lock();
+    let stderr = io::stderr();
+    let mut diagnostics = stderr.lock();
     let command = cli::command();
     let matches = match command.try_get_matches() {
         Ok(m) => m,
@@ -22,23 +31,77 @@ fn main() -> ExitCode {
             } else {
                 2
             };
-            let _ = e.print();
-            return ExitCode::from(code);
+            // Use Clap's existing color adapter with our already locked streams.
+            let rendered = e.render();
+            let result = if e.use_stderr() {
+                let mut colored = anstream::AutoStream::auto(diagnostics);
+                let _ = write!(colored, "{}", rendered.ansi());
+                let _ = colored.flush();
+                diagnostics = colored.into_inner();
+                Ok(code)
+            } else {
+                let mut colored = anstream::AutoStream::auto(output);
+                write!(colored, "{}", rendered.ansi())
+                    .and_then(|()| colored.flush())
+                    .map(|()| code)
+                    .map_err(Into::into)
+            };
+            return ExitCode::from(exit_status(result, false, &mut diagnostics));
         }
     };
-    match run(&matches) {
-        Ok(code) => ExitCode::from(code),
-        Err(e) => {
-            if matches.get_flag("json") {
-                eprintln!("{}", serde_json::json!({"error":format!("{e:#}")}));
-            } else {
-                eprintln!("error: {e:#}");
-            }
-            ExitCode::from(2)
-        }
-    }
+    ExitCode::from(exit_status(
+        run(&matches, &mut output, &mut diagnostics),
+        matches.get_flag("json"),
+        &mut diagnostics,
+    ))
 }
-fn run(matches: &ArgMatches) -> Result<u8> {
+
+fn is_broken_pipe(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| {
+        cause
+            .downcast_ref::<io::Error>()
+            .is_some_and(|e| e.kind() == io::ErrorKind::BrokenPipe)
+            || cause
+                .downcast_ref::<serde_json::Error>()
+                .is_some_and(|e| e.io_error_kind() == Some(io::ErrorKind::BrokenPipe))
+    })
+}
+
+fn exit_status(result: Result<u8>, json: bool, diagnostics: &mut impl Write) -> u8 {
+    let code = match result {
+        Ok(code) => code,
+        Err(e) if is_broken_pipe(&e) => 0,
+        Err(e) => {
+            if json {
+                let _ = writeln!(
+                    diagnostics,
+                    "{}",
+                    serde_json::json!({"error":format!("{e:#}")})
+                );
+            } else {
+                let _ = writeln!(diagnostics, "error: {e:#}");
+            }
+            2
+        }
+    };
+    let _ = diagnostics.flush();
+    code
+}
+
+fn run(matches: &ArgMatches, output: &mut impl Write, diagnostics: &mut impl Write) -> Result<u8> {
+    let result = run_command(matches, output, diagnostics);
+    let flushed = output.flush();
+    result.and_then(|code| {
+        flushed?;
+        Ok(code)
+    })
+}
+
+fn run_command(
+    matches: &ArgMatches,
+    output: &mut impl Write,
+    diagnostics: &mut impl Write,
+) -> Result<u8> {
     let (command, args) = matches.subcommand().expect("clap requires a command");
     match command {
         "rules" => {
@@ -59,10 +122,10 @@ fn run(matches: &ArgMatches) -> Result<u8> {
                 })
                 .collect::<Vec<_>>();
             if matches.get_flag("json") {
-                println!("{}", serde_json::to_string(&rules)?);
+                report::json(output, &rules)?;
             } else {
                 for r in rules {
-                    println!("{:<55} {}", r.name, r.description);
+                    writeln!(output, "{:<55} {}", r.name, r.description)?;
                 }
             }
             Ok(0)
@@ -70,27 +133,26 @@ fn run(matches: &ArgMatches) -> Result<u8> {
         "drivers" => {
             let drivers = write::drivers(args.get_flag("read"), args.get_flag("write"));
             if matches.get_flag("json") {
-                println!("{}", serde_json::to_string(&drivers)?);
+                report::json(output, &drivers)?;
             } else {
                 for d in drivers {
-                    println!(
+                    writeln!(
+                        output,
                         "{:<22} read={} write={} {}",
                         d.name,
                         d.read,
                         d.write,
                         d.extensions.join(" ")
-                    );
+                    )?;
                 }
             }
             Ok(0)
         }
-        "validate" => validate_config(matches, args),
-        "utilities" => utility(matches, args),
+        "validate" => validate_config(matches, args, output, diagnostics),
+        "utilities" => utility(matches, args, output, diagnostics),
         kind => {
             let (name, rule_args) = args.subcommand().expect("clap requires a rule");
-            let rule = format!("{kind}/{name}")
-                .parse::<Rule>()
-                .map_err(anyhow::Error::msg)?;
+            let rule = format!("{kind}/{name}").parse::<Rule>()?;
             let input = rule_args
                 .get_one::<PathBuf>("input")
                 .expect("required input");
@@ -127,7 +189,15 @@ fn run(matches: &ArgMatches) -> Result<u8> {
                     topology.add_rule(rule, a, None)?;
                 }
             }
-            finish(matches, rule_args, &topology, srs.as_ref(), warnings)
+            finish(
+                matches,
+                rule_args,
+                &topology,
+                srs.as_ref(),
+                warnings,
+                output,
+                diagnostics,
+            )
         }
     }
 }
@@ -144,7 +214,12 @@ fn collect(
     }
     Ok((topology, ids, warnings))
 }
-fn validate_config(matches: &ArgMatches, args: &ArgMatches) -> Result<u8> {
+fn validate_config(
+    matches: &ArgMatches,
+    args: &ArgMatches,
+    output: &mut impl Write,
+    diagnostics: &mut impl Write,
+) -> Result<u8> {
     let cfg = config::Config::read(args.get_one::<PathBuf>("input").expect("required config"))?;
     let mut inputs = Vec::new();
     let mut ranges = BTreeMap::new();
@@ -171,7 +246,15 @@ fn validate_config(matches: &ArgMatches, args: &ArgMatches) -> Result<u8> {
             }
         }
     }
-    finish(matches, args, &topology, srs.as_ref(), warnings)
+    finish(
+        matches,
+        args,
+        &topology,
+        srs.as_ref(),
+        warnings,
+        output,
+        diagnostics,
+    )
 }
 fn finish(
     matches: &ArgMatches,
@@ -179,6 +262,8 @@ fn finish(
     topology: &Topology,
     srs: Option<&gdal::spatial_ref::SpatialRef>,
     warnings: Vec<String>,
+    output: &mut impl Write,
+    diagnostics: &mut impl Write,
 ) -> Result<u8> {
     let mut result = topology.validate()?;
     result.warnings.extend(warnings);
@@ -208,11 +293,16 @@ fn finish(
             result.warnings.push("Shapefile fields use orig_layer, dest_layer and dest_fid to fit the 10-character limit".into());
         }
     }
-    report::print(&result, matches.get_flag("json"))?;
+    report::print(&result, matches.get_flag("json"), output, diagnostics)?;
     Ok(if result.is_valid() { 0 } else { 1 })
 }
 
-fn utility(matches: &ArgMatches, args: &ArgMatches) -> Result<u8> {
+fn utility(
+    matches: &ArgMatches,
+    args: &ArgMatches,
+    output: &mut impl Write,
+    diagnostics: &mut impl Write,
+) -> Result<u8> {
     let (name, args) = args.subcommand().expect("required utility");
     let input = args.get_one::<PathBuf>("input").expect("required input");
     let layers = read::read(
@@ -257,9 +347,9 @@ fn utility(matches: &ArgMatches, args: &ArgMatches) -> Result<u8> {
     if srs.as_ref().is_some_and(|s| s.is_geographic()) && tolerance > 0. {
         warnings.push("tolerance is in angular units; calculations are planar".into());
     }
-    let output = args.get_one::<PathBuf>("output").expect("required output");
+    let output_path = args.get_one::<PathBuf>("output").expect("required output");
     let paths = write::geometries(
-        output,
+        output_path,
         matches.get_one::<String>("driver").map(String::as_str),
         matches.get_flag("overwrite"),
         srs.as_ref(),
@@ -271,15 +361,175 @@ fn utility(matches: &ArgMatches, args: &ArgMatches) -> Result<u8> {
         },
     )?;
     if matches.get_flag("json") {
-        println!(
-            "{}",
-            serde_json::json!({"outputs":paths,"features":geometries.len(),"tolerance":tolerance,"warnings":warnings})
-        );
+        report::json(
+            output,
+            &serde_json::json!({"outputs":paths,"features":geometries.len(),"tolerance":tolerance,"warnings":warnings}),
+        )?;
     } else {
-        println!("wrote {} line features", geometries.len());
+        writeln!(output, "wrote {} line features", geometries.len())?;
     }
     for warning in warnings {
-        eprintln!("warning: {warning}");
+        let _ = writeln!(diagnostics, "warning: {warning}");
     }
     Ok(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct FailingWriter {
+        kind: io::ErrorKind,
+        write_limit: Option<usize>,
+        flush_fails: bool,
+        flushed: bool,
+    }
+    impl Write for FailingWriter {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            if let Some(left) = &mut self.write_limit {
+                if *left == 0 {
+                    return Err(io::Error::from(self.kind));
+                }
+                let n = bytes.len().min(*left);
+                *left -= n;
+                Ok(n)
+            } else {
+                Ok(bytes.len())
+            }
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            self.flushed = true;
+            if self.flush_fails {
+                Err(io::Error::from(self.kind))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    fn matches(json: bool, validation: bool) -> ArgMatches {
+        let mut args = vec![
+            "topology-checker".to_string(),
+            "--tolerance".into(),
+            "0".into(),
+        ];
+        if json {
+            args.push("--json".into());
+        }
+        if validation {
+            args.extend([
+                "point".into(),
+                "must-not-overlap".into(),
+                format!(
+                    "{}/tests/fixtures/points.geojson",
+                    env!("CARGO_MANIFEST_DIR")
+                ),
+            ]);
+        } else {
+            args.push("rules".into());
+        }
+        cli::command().try_get_matches_from(args).unwrap()
+    }
+
+    #[test]
+    fn output_write_and_flush_failures_have_portable_exit_statuses() {
+        for json in [false, true] {
+            for validation in [false, true] {
+                for kind in [io::ErrorKind::BrokenPipe, io::ErrorKind::Other] {
+                    for (limit, flush_fails) in [(Some(0), false), (Some(17), false), (None, true)]
+                    {
+                        let mut output = FailingWriter {
+                            kind,
+                            write_limit: limit,
+                            flush_fails,
+                            flushed: false,
+                        };
+                        let mut diagnostics = Vec::new();
+                        let result = run(&matches(json, validation), &mut output, &mut diagnostics);
+                        assert!(output.flushed);
+                        let code = exit_status(result, json, &mut diagnostics);
+                        assert_eq!(
+                            code,
+                            if kind == io::ErrorKind::BrokenPipe {
+                                0
+                            } else {
+                                2
+                            }
+                        );
+                        if kind == io::ErrorKind::BrokenPipe {
+                            assert!(diagnostics.is_empty());
+                        } else if json {
+                            let error: serde_json::Value =
+                                serde_json::from_slice(&diagnostics).unwrap();
+                            assert!(error["error"].is_string());
+                        } else {
+                            assert!(diagnostics.starts_with(b"error: "));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn complete_reports_keep_status_newline_and_json_format() {
+        for json in [false, true] {
+            for validation in [false, true] {
+                let mut output = Vec::new();
+                let code = run(&matches(json, validation), &mut output, &mut Vec::new()).unwrap();
+                assert_eq!(code, u8::from(validation));
+                assert_eq!(output.last(), Some(&b'\n'));
+                if json {
+                    assert!(serde_json::from_slice::<serde_json::Value>(&output).is_ok());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn broken_pipe_json_errors_are_recognized_through_context() {
+        let mut output = FailingWriter {
+            kind: io::ErrorKind::BrokenPipe,
+            write_limit: Some(0),
+            flush_fails: false,
+            flushed: false,
+        };
+        let error = report::json(&mut output, &Rule::ALL).unwrap_err();
+        assert!(error.downcast_ref::<serde_json::Error>().is_some());
+        assert!(is_broken_pipe(&error.context("serializing report")));
+    }
+
+    #[test]
+    fn unavailable_stderr_does_not_panic_for_warnings_or_errors() {
+        let mut diagnostics = FailingWriter {
+            kind: io::ErrorKind::BrokenPipe,
+            write_limit: Some(0),
+            flush_fails: true,
+            flushed: false,
+        };
+        assert_eq!(
+            exit_status(
+                Err(anyhow::anyhow!("operational failure")),
+                false,
+                &mut diagnostics
+            ),
+            2
+        );
+        assert_eq!(
+            exit_status(
+                Err(anyhow::anyhow!("operational failure")),
+                true,
+                &mut diagnostics
+            ),
+            2
+        );
+        let report = topology_checker_core::Report {
+            tolerance: 0.,
+            warnings: vec!["test warning".into()],
+            rules: Vec::new(),
+        };
+        for json in [false, true] {
+            report::print(&report, json, &mut Vec::new(), &mut diagnostics).unwrap();
+        }
+    }
 }

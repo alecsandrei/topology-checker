@@ -12,7 +12,7 @@ use std::{
 };
 use topology_checker_core::{Report, Topology, TopologyError};
 
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub struct DriverInfo {
     pub name: String,
     pub extensions: Vec<String>,
@@ -77,13 +77,23 @@ fn driver(path: &Path, explicit: Option<&str>) -> Result<Driver> {
     Ok(d)
 }
 #[derive(Clone)]
+struct Attributes {
+    rule: &'static str,
+    error_type: &'static str,
+    origin_layer: Option<String>,
+    origin_fid: Option<i64>,
+    destination_layer: Option<String>,
+    destination_fid: Option<i64>,
+}
+
+#[derive(Clone)]
 struct Record {
     geometry: Geometry,
-    fields: Option<[Option<String>; 6]>,
+    fields: Option<Attributes>,
 }
 fn group_geometry(
     g: &Geometry,
-    fields: Option<[Option<String>; 6]>,
+    fields: Option<Attributes>,
     groups: &mut BTreeMap<&'static str, Vec<Record>>,
 ) {
     let (kind, geometry) = match g {
@@ -123,19 +133,21 @@ fn group_geometry(
         .or_default()
         .push(Record { geometry, fields });
 }
-fn fields(e: &TopologyError, t: &Topology) -> Result<[Option<String>; 6]> {
-    Ok([
-        Some(e.rule.name().into()),
-        Some(e.error_type.name().into()),
-        e.origin
+fn fields(e: &TopologyError, t: &Topology) -> Result<Attributes> {
+    Ok(Attributes {
+        rule: e.rule.name(),
+        error_type: e.error_type.name(),
+        origin_layer: e
+            .origin
             .map(|r| t.layer(r.layer).map(|l| l.name().to_string()))
             .transpose()?,
-        e.origin.map(|r| r.fid.to_string()),
-        e.destination
+        origin_fid: e.origin.map(|r| r.fid),
+        destination_layer: e
+            .destination
             .map(|r| t.layer(r.layer).map(|l| l.name().to_string()))
             .transpose()?,
-        e.destination.map(|r| r.fid.to_string()),
-    ])
+        destination_fid: e.destination.map(|r| r.fid),
+    })
 }
 pub fn report(
     path: &Path,
@@ -277,17 +289,14 @@ fn populate(
             layer.create_defn_fields(
                 &names
                     .into_iter()
-                    .enumerate()
-                    .map(|(i, n)| {
-                        (
-                            n,
-                            if i == 3 || i == 5 {
-                                OGRFieldType::OFTInteger64
-                            } else {
-                                OGRFieldType::OFTString
-                            },
-                        )
-                    })
+                    .zip([
+                        OGRFieldType::OFTString,
+                        OGRFieldType::OFTString,
+                        OGRFieldType::OFTString,
+                        OGRFieldType::OFTInteger64,
+                        OGRFieldType::OFTString,
+                        OGRFieldType::OFTInteger64,
+                    ])
                     .collect::<Vec<_>>(),
             )?;
         }
@@ -295,13 +304,18 @@ fn populate(
             let mut feature = Feature::new(layer.defn())?;
             feature.set_geometry(record.geometry.to_gdal()?)?;
             if let Some(fields) = record.fields {
-                for (i, value) in fields.into_iter().enumerate() {
+                feature.set_field_string(0, fields.rule)?;
+                feature.set_field_string(1, fields.error_type)?;
+                for (i, value) in [(2, fields.origin_layer), (4, fields.destination_layer)] {
                     if let Some(value) = value {
-                        if i == 3 || i == 5 {
-                            feature.set_field_integer64(i, value.parse()?)?;
-                        } else {
-                            feature.set_field_string(i, &value)?;
-                        }
+                        feature.set_field_string(i, &value)?;
+                    } else {
+                        feature.set_field_null(i)?;
+                    }
+                }
+                for (i, value) in [(3, fields.origin_fid), (5, fields.destination_fid)] {
+                    if let Some(value) = value {
+                        feature.set_field_integer64(i, value)?;
                     } else {
                         feature.set_field_null(i)?;
                     }

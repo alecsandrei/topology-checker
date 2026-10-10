@@ -279,3 +279,23 @@ fn snapped_zero_length_parts_do_not_create_degenerate_output() {
             .is_empty()
     );
 }
+
+#[test]
+fn reversed_long_parts_keep_vertices_snap_join_and_resolve_direction_tie() {
+    use geo::{Coord, LineString};
+    let first = LineString::from((0..=2_000).map(|i| (i as f64, 0.)).collect::<Vec<_>>());
+    let mut second = LineString::from(
+        (2_000..=4_000)
+            .rev()
+            .map(|i| (i as f64, 0.))
+            .collect::<Vec<_>>(),
+    );
+    second.0.last_mut().unwrap().x += 0.0001;
+    let merged = merge_lines([first, second], 0.001).unwrap();
+    assert_eq!(
+        merged,
+        vec![LineString(
+            (0..=4_000).map(|i| Coord { x: i as f64, y: 0. }).collect()
+        )]
+    );
+}

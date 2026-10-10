@@ -29,6 +29,30 @@ fn registry_and_driver_commands_work() {
         .assert()
         .success();
 }
+
+#[test]
+fn help_retains_clap_color_behavior_and_plain_redirected_format() {
+    let plain = cli()
+        .arg("--help")
+        .env_remove("CLICOLOR_FORCE")
+        .env("NO_COLOR", "1")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert!(!plain.contains(&0x1b));
+    let colored = cli()
+        .arg("--help")
+        .env_remove("NO_COLOR")
+        .env("CLICOLOR_FORCE", "1")
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    assert!(colored.contains(&0x1b));
+}
 #[test]
 fn exit_codes_and_no_output_for_clean_data() {
     let temp = TempDir::new().unwrap();
@@ -636,16 +660,124 @@ fn negative_gdal_feature_ids_are_preserved() {
     ds.execute_sql("UPDATE roads SET fid = -41", None, Dialect::DEFAULT)
         .unwrap();
     drop(ds);
+    let output = temp.path().join("errors.gpkg");
     let report = json_report(
         cli()
             .args(["--json", "line", "must-not-have-dangles"])
             .arg(&path)
+            .arg("-o")
+            .arg(&output)
             .assert()
             .code(1),
     );
     let errors = report["rules"][0]["errors"].as_array().unwrap();
     assert_eq!(errors.len(), 2);
     assert!(errors.iter().all(|e| e["origin"]["fid"] == -41));
+    let ds = Dataset::open(&output).unwrap();
+    let mut layer = ds.layer(0).unwrap();
+    let origin = layer.defn().field_index("origin_fid").unwrap();
+    let destination = layer.defn().field_index("destination_fid").unwrap();
+    assert_eq!(
+        layer.defn().fields().map(|f| f.name()).collect::<Vec<_>>(),
+        [
+            "rule",
+            "error_type",
+            "origin_layer",
+            "origin_fid",
+            "destination_layer",
+            "destination_fid"
+        ]
+    );
+    assert_eq!(
+        layer.defn().fields().nth(origin).unwrap().field_type(),
+        gdal::vector::OGRFieldType::OFTInteger64
+    );
+    for feature in layer.features() {
+        assert_eq!(feature.field_as_integer64(origin).unwrap(), Some(-41));
+        assert!(feature.field(destination).unwrap().is_none());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn closed_stdout_before_execution_is_graceful_and_utility_files_are_complete() {
+    use std::{
+        os::{fd::OwnedFd, unix::net::UnixStream},
+        process::{Command, Stdio},
+    };
+    let temp = TempDir::new().unwrap();
+    let config = temp.path().join("topology.toml");
+    std::fs::write(&config, format!("[layers]\np = {{ path = '{}' }}\n[[rules]]\nrule = 'point/must-not-overlap'\nlayer = 'p'\n", fixture("points.geojson"))).unwrap();
+    for json in [false, true] {
+        let mut commands = vec![
+            vec!["--help".into()],
+            vec!["rules".into()],
+            vec!["drivers".into()],
+            vec![
+                "point".into(),
+                "must-not-overlap".into(),
+                fixture("points.geojson"),
+            ],
+            vec!["validate".into(), config.display().to_string()],
+        ];
+        let mut outputs = Vec::new();
+        for utility in ["merge-lines", "explode-lines"] {
+            let path = temp.path().join(format!("{utility}-{json}.gpkg"));
+            commands.push(vec![
+                "utilities".into(),
+                utility.into(),
+                fixture("lines.geojson"),
+                "-o".into(),
+                path.display().to_string(),
+            ]);
+            outputs.push((utility, path));
+        }
+        for args in commands {
+            let (reader, writer) = UnixStream::pair().unwrap();
+            drop(reader);
+            let fd: OwnedFd = writer.into();
+            let mut child = Command::new(env!("CARGO_BIN_EXE_topology-checker"));
+            if json {
+                child.arg("--json");
+            }
+            let result = child
+                .args(args)
+                .stdout(Stdio::from(fd))
+                .stderr(Stdio::piped())
+                .output()
+                .unwrap();
+            assert_eq!(
+                result.status.code(),
+                Some(0),
+                "{}",
+                String::from_utf8_lossy(&result.stderr)
+            );
+            assert!(!String::from_utf8_lossy(&result.stderr).contains("error:"));
+            assert!(!String::from_utf8_lossy(&result.stderr).contains("panicked"));
+        }
+        for (utility, path) in outputs {
+            let ds = Dataset::open(path).unwrap();
+            let mut layer = ds.layer(0).unwrap();
+            assert_eq!(
+                layer.feature_count(),
+                if utility == "merge-lines" { 1 } else { 2 }
+            );
+            for (i, feature) in layer.features().enumerate() {
+                let geometry = feature.geometry().unwrap();
+                assert_eq!(geometry.geometry_count(), 1);
+                let line = geometry.get_geometry(0);
+                let expected = if utility == "merge-lines" {
+                    vec![(0., 0.), (1., 0.), (2., 0.)]
+                } else {
+                    vec![(i as f64, 0.), (i as f64 + 1., 0.)]
+                };
+                assert_eq!(line.point_count(), expected.len());
+                for (j, &(x, y)) in expected.iter().enumerate() {
+                    assert_eq!(line.get_point(j as i32), (x, y, 0.));
+                }
+            }
+        }
+    }
 }
 
 #[test]
