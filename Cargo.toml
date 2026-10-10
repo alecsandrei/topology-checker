@@ -1,43 +1,16 @@
-[package]
-name = "topology-checker"
+[workspace]
+members = ["crates/core", "crates/cli"]
+resolver = "3"
+
+[workspace.package]
 version = "0.1.0-alpha"
-edition = "2021"
+edition = "2024"
+rust-version = "1.88"
 license = "MIT"
-categories = ["command-line-interface"]
-rust-version = "1.85"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
-[features]
-default = ["bundled"]
-# Build GDAL, PROJ and SQLite from source and link them statically, so no
-# GDAL/PROJ installation is needed. Use `--no-default-features` to link
-# against a system GDAL found through pkg-config instead.
-bundled = ["gdal-sys/bundled", "dep:gdal-src"]
-
-[dependencies]
-geozero = "=0.13.0"
-gdal = "0.19.0"
-gdal-sys = "0.12.0"
-gdal-src = { version = "0.3.0", optional = true, features = [
-    "driver_gpkg",
-    "driver_shape",
-    "driver_geojson",
-    "driver_flatgeobuf",
-    "driver_csv",
-    "driver_openfilegdb",
-    "driver_tab",
-    "driver_vrt",
-    "driver_mem",
-] }
-geo = "0.28.0"
-geo-types = { version = "0.7.13", features = ["use-rstar_0_12"] }
-rayon = "1.10.0"
-itertools = "0.13.0"
-clap = { version = "4.5.4", features = ["derive", "env"] }
-rstar = "0.12.0"
-serde_json = "1.0.11"
-serde = "1.0.202"
-colored = "2.1.0"
-regex = "1.10.4"
-anyhow = "1.0.86"
+[workspace.dependencies]
+geo = { version = "0.33", features = ["serde"] }
+rstar = "0.12"
+rayon = "1.10"
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"

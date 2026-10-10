@@ -1,0 +1,13 @@
+[package]
+name = "topology-checker-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+geo.workspace = true
+rstar.workspace = true
+rayon.workspace = true
+serde.workspace = true
+thiserror.workspace = true
