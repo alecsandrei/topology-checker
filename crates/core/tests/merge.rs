@@ -191,7 +191,7 @@ mod optimized_regressions {
             line_string![( x: 1., y: 2. ), ( x: 2., y: 2. )],
         ];
         let output = merge_lines(input.clone(), 0.).unwrap();
-        println!("{:?}, {:?}", &output, &input);
+        println!("{output:?}, {input:?}");
         assert!(output.contains(&input[0]));
         assert!(output.contains(&input[1]));
         assert!(output.contains(&input[2]));
