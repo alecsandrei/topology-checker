@@ -8,7 +8,7 @@ use geo::{
     Coord, Geometry, GeometryCollection, LineString, MultiLineString, MultiPoint, MultiPolygon,
     Point, Polygon,
 };
-use std::path::Path;
+use std::{collections::HashSet, path::Path};
 use topology_checker_core::Layer;
 
 pub struct ReadLayer {
@@ -52,12 +52,15 @@ pub fn read(path: &Path, selector: Option<&str>, alias: &str) -> Result<Vec<Read
             let mut nulls = 0;
             let mut empties = 0;
             let mut zm = 0;
-            let mut missing_ids = 0;
+            let mut missing = Vec::new();
             for (ordinal, feature) in layer.features().enumerate() {
-                let fid = if let Some(fid) = feature.fid() {
-                    i64::try_from(fid).context("FID exceeds signed 64-bit range")?
+                // SAFETY: the iterator owns a live feature for this entire call. GDAL FIDs
+                // are signed; gdal::Feature::fid treats every negative value as absent,
+                // whereas only OGRNullFID (-1) denotes an unassigned ID.
+                let raw_fid = unsafe { gdal_sys::OGR_F_GetFID(feature.c_feature()) };
+                let fid = if raw_fid != -1 {
+                    raw_fid
                 } else {
-                    missing_ids += 1;
                     -(ordinal as i64) - 1
                 };
                 let Some(g) = feature.geometry() else {
@@ -68,12 +71,29 @@ pub fn read(path: &Path, selector: Option<&str>, alias: &str) -> Result<Vec<Read
                     empties += 1;
                     continue;
                 }
-                if geometry_type_has_z(g.geometry_type()) || geometry_type_has_m(g.geometry_type())
-                {
+                if has_zm(g) {
                     zm += 1;
                 }
                 let geometry = convert(g).with_context(|| format!("layer {label}, FID {fid}"))?;
+                if raw_fid == -1 {
+                    missing.push(features.len());
+                }
                 features.push((fid, geometry));
+            }
+            // Allocate fallbacks after reading all real IDs, so negative source IDs and
+            // later features cannot collide with the generated identities.
+            if !missing.is_empty() {
+                let mut used = features.iter().map(|(fid, _)| *fid).collect::<HashSet<_>>();
+                let mut candidate = -1_i64;
+                for &index in &missing {
+                    while used.contains(&candidate) {
+                        candidate = candidate
+                            .checked_sub(1)
+                            .context("no available fallback FID")?;
+                    }
+                    features[index].0 = candidate;
+                    used.insert(candidate);
+                }
             }
             if nulls > 0 {
                 warnings.push(format!("layer {label}: skipped {nulls} null geometries"));
@@ -86,7 +106,8 @@ pub fn read(path: &Path, selector: Option<&str>, alias: &str) -> Result<Vec<Read
                     "layer {label}: dropped Z/M values from {zm} geometries"
                 ));
             }
-            if missing_ids > 0 {
+            if !missing.is_empty() {
+                let missing_ids = missing.len();
                 warnings.push(format!(
                     "layer {label}: assigned negative FIDs to {missing_ids} features without IDs"
                 ));
@@ -101,6 +122,12 @@ pub fn read(path: &Path, selector: Option<&str>, alias: &str) -> Result<Vec<Read
             })
         })
         .collect()
+}
+
+fn has_zm(g: &gdal::vector::Geometry) -> bool {
+    geometry_type_has_z(g.geometry_type())
+        || geometry_type_has_m(g.geometry_type())
+        || (0..g.geometry_count()).any(|i| has_zm(&g.get_geometry(i)))
 }
 
 /// Read XY directly, avoiding the GDAL converter's assumptions about empty rings and Z/M types.
@@ -183,7 +210,10 @@ fn convert(g: &gdal::vector::Geometry) -> Result<Geometry> {
         }
         wkbGeometryCollection => Geometry::GeometryCollection(GeometryCollection(
             (0..g.geometry_count())
-                .map(|i| convert(&g.get_geometry(i)))
+                .filter_map(|i| {
+                    let child = g.get_geometry(i);
+                    (!child.is_empty()).then(|| convert(&child))
+                })
                 .collect::<Result<_>>()?,
         )),
         kind => bail!(

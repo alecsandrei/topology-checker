@@ -108,15 +108,19 @@ impl Topology {
         self.specs.push(RuleSpec { rule, layer, other });
         Ok(())
     }
-    pub fn validate(&self) -> Result<Report, Error> {
-        let warnings = self
+    /// Validate cached part views and report skipped degenerate parts without running rules.
+    pub fn warnings(&self) -> Result<Vec<String>, Error> {
+        Ok(self
             .layers()
             .map(|(id, layer)| self.parts(id).map(|p| (layer, p.skipped)))
             .collect::<Result<Vec<_>, _>>()?
             .into_iter()
             .filter(|(_, n)| *n > 0)
             .map(|(l, n)| format!("layer {}: skipped {n} degenerate parts or rings", l.name()))
-            .collect();
+            .collect())
+    }
+    pub fn validate(&self) -> Result<Report, Error> {
+        let warnings = self.warnings()?;
         let rules = self
             .specs
             .par_iter()

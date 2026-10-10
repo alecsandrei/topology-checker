@@ -197,10 +197,13 @@ fn finish(
             topology,
         )?;
         if !result.is_valid()
-            && matches
-                .get_one::<String>("driver")
-                .is_some_and(|s| s == "ESRI Shapefile")
-            || (!result.is_valid() && path.extension().is_some_and(|e| e == "shp"))
+            && matches.get_one::<String>("driver").map_or_else(
+                || {
+                    path.extension()
+                        .is_some_and(|e| e.eq_ignore_ascii_case("shp"))
+                },
+                |s| s == "ESRI Shapefile",
+            )
         {
             result.warnings.push("Shapefile fields use orig_layer, dest_layer and dest_fid to fit the 10-character limit".into());
         }
@@ -222,7 +225,7 @@ fn utility(matches: &ArgMatches, args: &ArgMatches) -> Result<u8> {
         .get_one::<f64>("tolerance")
         .copied()
         .unwrap_or_else(|| read::default_tolerance(srs.as_ref()));
-    let (mut t, ids, warnings) = collect(layers, tolerance)?;
+    let (mut t, ids, mut warnings) = collect(layers, tolerance)?;
     let mut geometries = Vec::new();
     fn extract(g: &geo::Geometry, lines: &mut Vec<geo::LineString>) {
         match g {
@@ -249,6 +252,10 @@ fn utility(matches: &ArgMatches, args: &ArgMatches) -> Result<u8> {
             topology_checker_core::explode_lines(lines)?
         };
         geometries.extend(output.into_iter().map(geo::Geometry::LineString));
+    }
+    warnings.extend(t.warnings()?);
+    if srs.as_ref().is_some_and(|s| s.is_geographic()) && tolerance > 0. {
+        warnings.push("tolerance is in angular units; calculations are planar".into());
     }
     let output = args.get_one::<PathBuf>("output").expect("required output");
     let paths = write::geometries(

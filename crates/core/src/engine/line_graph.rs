@@ -9,6 +9,8 @@ use geo::{
     BoundingRect, Coord, Line,
     line_intersection::{LineIntersection, line_intersection},
 };
+use num_rational::BigRational;
+use num_traits::ToPrimitive;
 use rayon::prelude::*;
 use std::collections::HashMap;
 
@@ -83,6 +85,31 @@ fn parameter(line: Line, point: Coord) -> f64 {
         (point.y - line.start.y) / dy
     }
 }
+
+/// Round the exact intersection of the input binary floats once. Pairwise floating point
+/// formulas can otherwise round a concurrent crossing differently for each segment pair,
+/// creating spurious tiny edges even at zero user tolerance. Endpoint contacts retain their
+/// original coordinates and do not pay for rational arithmetic.
+fn proper_intersection(a: Line, b: Line) -> Option<Coord> {
+    let [ax, ay, bx, by, cx, cy, dx, dy] = [
+        a.start.x, a.start.y, a.end.x, a.end.y, b.start.x, b.start.y, b.end.x, b.end.y,
+    ]
+    .map(BigRational::from_float);
+    let (ax, ay, bx, by, cx, cy, dx, dy) = (ax?, ay?, bx?, by?, cx?, cy?, dx?, dy?);
+    let rx = bx - &ax;
+    let ry = by - &ay;
+    let sx = dx - &cx;
+    let sy = dy - &cy;
+    let determinant = &rx * &sy - &ry * &sx;
+    if determinant == BigRational::from_integer(0.into()) {
+        return None;
+    }
+    let t = ((cx - &ax) * sy - (cy - &ay) * sx) / determinant;
+    Some(Coord {
+        x: (ax + &t * rx).to_f64()?,
+        y: (ay + t * ry).to_f64()?,
+    })
+}
 impl LineGraph {
     pub fn build(t: &Topology, layers: &[LayerId]) -> Result<Self, Error> {
         let mut parts = Vec::new();
@@ -109,7 +136,17 @@ impl LineGraph {
         let intersections = pairs
             .par_iter()
             .filter_map(|&(i, j)| {
-                line_intersection(segments[i].line, segments[j].line).map(|g| (i, j, g))
+                line_intersection(segments[i].line, segments[j].line).map(|mut g| {
+                    if let LineIntersection::SinglePoint {
+                        intersection,
+                        is_proper: true,
+                    } = &mut g
+                        && let Some(point) = proper_intersection(segments[i].line, segments[j].line)
+                    {
+                        *intersection = point;
+                    }
+                    (i, j, g)
+                })
             })
             .collect::<Vec<_>>();
         let mut split = segments

@@ -1,6 +1,6 @@
-mod original {
+use topology_checker_core::merge_lines;
 
-    // TODO: Add tests for case where linestring is circular
+mod original {
 
     use geo::{LineString, line_string};
     use topology_checker_core::merge_lines;
@@ -111,8 +111,6 @@ mod original {
     // }
 }
 mod optimized_regressions {
-
-    // TODO: Add tests for case where linestring is circular
 
     use geo::{LineString, line_string};
     use topology_checker_core::merge_lines;
@@ -260,4 +258,24 @@ mod additional {
         assert_eq!(merged.iter().map(|l| l.lines().count()).sum::<usize>(), 2);
         assert_eq!(explode_lines([a.clone(), a]).unwrap().len(), 2);
     }
+}
+
+#[test]
+fn diagonal_endpoint_tolerance_and_direction_tie() {
+    use geo::line_string;
+    let a = line_string![(x:0.,y:0.),(x:1.,y:1.)];
+    let b = line_string![(x:2.,y:2.),(x:1.000001,y:1.000001)];
+    let result = merge_lines([a, b], 0.001).unwrap();
+    assert_eq!(result.len(), 1);
+    assert_eq!(result[0].0[0], geo::coord! {x:0.,y:0.});
+    assert_eq!(result[0].0.last().unwrap(), &geo::coord! {x:2.,y:2.});
+}
+#[test]
+fn snapped_zero_length_parts_do_not_create_degenerate_output() {
+    use geo::line_string;
+    assert!(
+        merge_lines([line_string![(x:0.,y:0.),(x:0.00001,y:0.)]], 0.001)
+            .unwrap()
+            .is_empty()
+    );
 }

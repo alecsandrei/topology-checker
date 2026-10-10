@@ -55,17 +55,14 @@ pub fn merge_lines(
             let node = edges[part][end];
             for item in tree.locate_in_envelope_intersecting(&index::at(point, tolerance)) {
                 let (owner, position, segment) = segments[item.data];
-                let (parameter, projected) = projection(segment, point);
+                let (_, projected) = projection(segment, point);
                 if distance(point, projected) > tolerance {
                     continue;
                 }
                 // A true endpoint contact belongs in the endpoint graph. Interior contacts
                 // block merging, including a vertex between two segments of a part.
-                let at_start =
-                    position == 0 && cluster.insert(segment.start) == node && parameter == 0.;
-                let at_end = position + 2 == lines[owner].0.len()
-                    && cluster.insert(segment.end) == node
-                    && parameter == 1.;
+                let at_start = position == 0 && edges[owner][0] == node;
+                let at_end = position + 2 == lines[owner].0.len() && edges[owner][1] == node;
                 if !at_start && !at_end {
                     blocked[node] = true;
                 }
@@ -80,13 +77,17 @@ pub fn merge_lines(
         let mut forwards = 0;
         let mut backwards = 0;
         let mut minimum = start;
+        let mut minimum_forward = forward;
         loop {
             let (id, direction) = current;
             if visited[id] {
                 break;
             }
             visited[id] = true;
-            minimum = minimum.min(id);
+            if id < minimum {
+                minimum = id;
+                minimum_forward = direction;
+            }
             if direction {
                 forwards += 1;
             } else {
@@ -113,9 +114,10 @@ pub fn merge_lines(
             };
             current = next;
         }
-        if backwards > forwards {
+        if backwards > forwards || (backwards == forwards && !minimum_forward) {
             coords.reverse();
         }
+        coords.dedup();
         (minimum, LineString(coords))
     };
     for (node, uses) in incident.iter().enumerate() {
@@ -134,7 +136,11 @@ pub fn merge_lines(
         }
     }
     outputs.sort_by_key(|(id, _)| *id);
-    Ok(outputs.into_iter().map(|(_, line)| line).collect())
+    Ok(outputs
+        .into_iter()
+        .map(|(_, line)| line)
+        .filter(|l| l.0.len() >= 2)
+        .collect())
 }
 
 /// Explode nondegenerate parts into individual segments, preserving duplicate uses.

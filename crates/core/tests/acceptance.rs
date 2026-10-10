@@ -422,3 +422,21 @@ fn multipart_line_overlap_aggregates_disconnected_pieces() {
     assert_eq!(e.origin.unwrap().part, None);
     assert!(matches!(e.geometry, Geometry::MultiLineString(_)));
 }
+
+#[test]
+fn concurrent_crossings_do_not_create_roundoff_overlaps() {
+    use geo::LineString;
+    let r = run(
+        Rule::LineMustNotIntersectWith,
+        vec![LineString::from(vec![(4., -4.), (-1., -1.)]).into()],
+        Some(vec![
+            LineString::from(vec![(0., -3.), (3., -3.)]).into(),
+            LineString::from(vec![(3., -4.), (-1., 2.)]).into(),
+        ]),
+        0.,
+    );
+    assert_eq!(r.error_count(), 2);
+    assert!(r.errors().all(|e| e.error_type == ErrorType::Crossing));
+    let coordinates = r.errors().map(|e| &e.geometry).collect::<Vec<_>>();
+    assert_eq!(coordinates[0], coordinates[1]);
+}
