@@ -1,6 +1,9 @@
 use crate::{Dataset, SRSComparison, VectorDataset};
 use anyhow::Context;
-use gdal::{vector::LayerAccess, DatasetOptions, GdalOpenFlags, LayerOptions, Metadata};
+use gdal::{
+    vector::{LayerAccess, LayerOptions},
+    DatasetOptions, GdalOpenFlags, Metadata,
+};
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::BufReader;

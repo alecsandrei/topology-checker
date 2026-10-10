@@ -2,10 +2,4 @@
 assets/
 System Volume Information
 builds
-gdal*
-pkg_config
-*/__pycache__
-scripts/build
-scripts/dist
-# */*.spec
 *.zip

@@ -1,0 +1,54 @@
+name: build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      # PROJ needs the sqlite3 CLI at build time to generate proj.db.
+      - name: Install sqlite3 (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y sqlite3
+
+      - name: Install sqlite3 (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          choco install sqlite -y --no-progress
+          echo "C:\ProgramData\chocolatey\lib\SQLite\tools" >> $env:GITHUB_PATH
+
+      # GDAL and PROJ are compiled from source, cache them between runs.
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Test
+        run: cargo test --release --locked
+
+      - name: Smoke test
+        shell: bash
+        run: ./target/release/topology-checker gdal-drivers read-and-write
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: topology-checker-${{ runner.os }}-${{ runner.arch }}
+          path: |
+            target/release/topology-checker
+            target/release/topology-checker.exe
+          if-no-files-found: error

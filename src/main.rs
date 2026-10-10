@@ -290,7 +290,7 @@ use args::{
 };
 use clap::Parser;
 use colored::Colorize;
-use gdal::{vector::ToGdal, LayerOptions};
+use gdal::vector::{LayerOptions, ToGdal};
 use rayon::{iter::ParallelBridge, iter::ParallelIterator};
 use regex::Regex;
 use serde::Deserialize;

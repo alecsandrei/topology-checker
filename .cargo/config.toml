@@ -1,0 +1,4 @@
+[env]
+# CMake >= 4 rejects projects declaring cmake_minimum_required < 3.5, which some
+# of the bundled GDAL/PROJ dependencies still do.
+CMAKE_POLICY_VERSION_MINIMUM = "3.5"

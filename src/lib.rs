@@ -3,8 +3,8 @@ use anyhow::Context;
 use gdal::{
     errors::GdalError,
     spatial_ref::SpatialRef,
-    vector::{LayerAccess, ToGdal},
-    LayerOptions, Metadata,
+    vector::{geometry_type_flatten, Feature, LayerAccess, LayerOptions, ToGdal},
+    Metadata,
 };
 use geo::{
     GeoFloat, Geometry, Line, LineString, MultiLineString, MultiPoint, MultiPolygon, Point, Polygon,
@@ -49,18 +49,33 @@ impl VectorDataset {
                     .next()
                     .expect(format!("Dataset {} has no layers.", dataset.description()?).as_str());
 
-                for feature in layer.features() {
-                    let geom = feature.geometry().unwrap();
-                    geozero::gdal::process_geom(geom, &mut writer).with_context(|| {
-                        format!(
-                            "{} {}",
-                            "Failed to parse FID",
-                            feature.fid().expect(
-                                format!("Failed to get FID of feature {:?}", feature).as_str()
-                            ),
-                        )
-                    })?;
+                let geometries = layer
+                    .features()
+                    .map(|feature| {
+                        let fid_context = || format!("Failed to parse FID {:?}", feature.fid());
+                        let geom = feature
+                            .geometry()
+                            .ok_or_else(|| anyhow::anyhow!("Feature has no geometry."))
+                            .with_context(fid_context)?;
+                        let geo = if geometry_type_flatten(geom.geometry_type())
+                            == geom.geometry_type()
+                        {
+                            geom.to_geo()
+                        } else {
+                            // The conversion only supports 2D geometries, so drop Z/M values.
+                            let mut geom = geom.clone();
+                            geom.flatten_to_2d();
+                            geom.to_geo()
+                        };
+                        geo.with_context(fid_context)
+                    })
+                    .collect::<anyhow::Result<Vec<_>>>()?;
+                if geometries.is_empty() {
+                    return Err(anyhow::anyhow!(
+                        "Failed to retrieve geometry. Is the dataset empty?",
+                    ));
                 }
+                return Ok(geometries);
             }
         }
         let geometry = writer.take_geometry();
@@ -111,8 +126,8 @@ impl VectorDataset {
         }
         if srs1 != srs2 {
             return Ok(SRSComparison::Different(
-                srs1.unwrap().name()?,
-                srs2.unwrap().name()?,
+                srs1.unwrap().name().unwrap_or_else(|| "unknown".to_string()),
+                srs2.unwrap().name().unwrap_or_else(|| "unknown".to_string()),
             ));
         }
         Ok(SRSComparison::Same)
@@ -232,17 +247,8 @@ impl<T: GeoFloat> TopologyError<T> {
                     None
                 });
             }
-            if let Some(mut layer) = layer {
-                geometries
-                    .into_iter()
-                    .map(|geom| -> anyhow::Result<()> {
-                        Ok(layer.create_feature_fields(
-                            geom,
-                            &["rule"],
-                            &[gdal::vector::FieldValue::StringValue(rule_name.to_string())],
-                        )?)
-                    })
-                    .collect::<anyhow::Result<Vec<_>>>()?;
+            if let Some(layer) = layer {
+                write_rule_features(&layer, geometries, &rule_name)?;
             } else {
                 let mut layer = None;
                 if let Some(dataset) = &mut dataset {
@@ -258,20 +264,27 @@ impl<T: GeoFloat> TopologyError<T> {
                     gdal::vector::FieldDefn::new("rule", gdal::vector::OGRFieldType::OFTString)
                         .with_context(|| "Failed to create field 'rule' inside the layer.")?;
                 field.add_to_layer(layer.as_mut().unwrap()).unwrap();
-                geometries
-                    .into_iter()
-                    .map(|geom| -> anyhow::Result<()> {
-                        Ok(layer.as_mut().unwrap().create_feature_fields(
-                            geom,
-                            &["rule"],
-                            &[gdal::vector::FieldValue::StringValue(rule_name.to_string())],
-                        )?)
-                    })
-                    .collect::<anyhow::Result<Vec<_>>>()?;
+                write_rule_features(layer.as_ref().unwrap(), geometries, &rule_name)?;
             }
         }
         Ok(())
     }
+}
+
+/// Writes every geometry as a new feature of the layer, with the "rule" field set to rule_name.
+fn write_rule_features<L: LayerAccess>(
+    layer: &L,
+    geometries: Vec<gdal::vector::Geometry>,
+    rule_name: &str,
+) -> anyhow::Result<()> {
+    let rule_field = layer.defn().field_index("rule")?;
+    for geometry in geometries {
+        let mut feature = Feature::new(layer.defn())?;
+        feature.set_geometry(geometry)?;
+        feature.set_field_string(rule_field, rule_name)?;
+        feature.create(layer)?;
+    }
+    Ok(())
 }
 
 pub enum TopologyResult<T: GeoFloat> {

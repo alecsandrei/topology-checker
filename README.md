@@ -1,5 +1,23 @@
 A small project, **currently under development**, that can be used to check the topology of vector datasets. It's goal is to be faster than current alternatives. It has a CLI.
 
+# Building
+
+GDAL and PROJ do **not** need to be installed. They are compiled from source and linked statically, so the resulting binary (`target/release/topology-checker`) is self-contained and can be copied to other machines with the same OS.
+
+Prerequisites:
+- [Rust](https://rustup.rs) 1.85 or newer
+- CMake
+- A C/C++ compiler (Xcode Command Line Tools on macOS, `build-essential` on Linux, Visual Studio Build Tools on Windows)
+- The `sqlite3` command line tool, used by the PROJ build. It ships with macOS. On Linux run `sudo apt-get install sqlite3`. On Windows run `winget install SQLite.SQLite` or `choco install sqlite`.
+
+```sh
+cargo build --release
+```
+
+The first build compiles GDAL and PROJ and takes several minutes. Later builds reuse them.
+
+The bundled GDAL includes these drivers: GPKG, ESRI Shapefile, GeoJSON, FlatGeobuf, CSV, OpenFileGDB, MapInfo File, VRT and Memory. To link against a GDAL already installed on the system (found through `pkg-config`) instead, build with `cargo build --release --no-default-features`.
+
 # Basic usage
 
 ## Listing accepted drivers
