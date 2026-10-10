@@ -93,6 +93,21 @@ Location: root `Cargo.toml`, the `geo` dependency enables its defaults.
 
 Do not make this change automatically: the core publicly reexports `geo`, so removing dependency features can reduce APIs visible to downstream users. Benchmark build effects and review that public surface first. This review does not recommend upgrading dependency versions just because newer versions exist.
 
+### 9. Named module files instead of `mod.rs`, low priority
+
+Locations: `crates/core/src/engine/mod.rs` and `crates/core/src/rules/mod.rs`.
+
+The [Rust Reference encourages the newer named-file convention](https://doc.rust-lang.org/reference/items/modules.html#module-source-filenames), which avoids many indistinguishable `mod.rs` filenames and makes module naming more consistent. A module can live in `engine.rs` while its child modules remain in the `engine/` directory. The [edition guide describes this layout](https://doc.rust-lang.org/edition-guide/rust-2018/path-changes.html).
+
+Suggested file moves, if a source cleanup is authorized later:
+
+| Current file | Suggested file |
+| --- | --- |
+| `crates/core/src/engine/mod.rs` | `crates/core/src/engine.rs` |
+| `crates/core/src/rules/mod.rs` | `crates/core/src/rules.rs` |
+
+Keep the child files in their existing directories. Module declarations and ordinary import paths would remain the same; the inspected files do not contain custom path attributes requiring adjustment. Both layouts are supported, and `mod.rs` is not deprecated. Established projects still use it, including [Tokio's sync module](https://github.com/tokio-rs/tokio/tree/master/tokio/src/sync). This is an encouraged naming convention and a navigation improvement, with no runtime or performance benefit. No files were moved for this review.
+
 ## Patterns worth retaining
 
 - Standard-library `OnceLock` is appropriate for caches whose initialization needs a topology or layer input. The [standard library distinguishes this use from simpler `LazyLock` initialization](https://doc.rust-lang.org/std/sync/struct.OnceLock.html). Caching `Result` also retains deterministic validation failures.
