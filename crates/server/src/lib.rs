@@ -1,5 +1,7 @@
 //! Local topology inspection HTTP API. Heavy work runs on Tokio's blocking pool.
 pub mod archive;
+pub mod assets;
+pub mod dto;
 pub mod examples;
 pub mod export;
 pub mod model;
@@ -15,30 +17,61 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
+use dto::{
+    CrsInfo, ErrorBody, Example, JobPoll, JobStatus, MapFeature, Page, RuleInfo, RunAccepted,
+    Viewport, Violation, WorkspaceView,
+};
 use futures_util::StreamExt;
 use model::*;
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::json;
 use std::{
     collections::HashMap,
     path::PathBuf,
     sync::{Arc, Mutex},
+    time::{Duration, Instant},
 };
 use tokio::{io::AsyncWriteExt, sync::Semaphore};
-use uuid::Uuid;
-use workspace::{Job, SharedWorkspace, Workspace};
+use workspace::{SharedWorkspace, Workspace};
 
+/// Host and Origin values accepted from the local browser, guarding against DNS rebinding.
+#[derive(Debug)]
+struct LocalOrigins {
+    hosts: [String; 2],
+    origins: [String; 4],
+}
+impl LocalOrigins {
+    fn new(port: u16) -> Self {
+        Self {
+            hosts: [format!("127.0.0.1:{port}"), format!("localhost:{port}")],
+            // The Vite development server proxies API requests from port 5173.
+            origins: [
+                format!("http://127.0.0.1:{port}"),
+                format!("http://localhost:{port}"),
+                "http://127.0.0.1:5173".into(),
+                "http://localhost:5173".into(),
+            ],
+        }
+    }
+}
+
+/// Workspaces unused for this long are discarded with their temporary files.
+pub const IDLE_TIMEOUT: Duration = Duration::from_secs(4 * 60 * 60);
+
+#[derive(Debug)]
+struct Tracked {
+    workspace: SharedWorkspace,
+    last_used: Instant,
+}
 #[derive(Debug, Clone)]
 pub struct AppState {
-    workspaces: Arc<Mutex<HashMap<String, SharedWorkspace>>>,
+    workspaces: Arc<Mutex<HashMap<String, Tracked>>>,
     validation: Arc<Semaphore>,
+    local: Arc<LocalOrigins>,
 }
 impl Default for AppState {
     fn default() -> Self {
-        Self {
-            workspaces: Arc::new(Mutex::new(HashMap::new())),
-            validation: Arc::new(Semaphore::new(1)),
-        }
+        Self::new(8080)
     }
 }
 #[derive(Debug)]
@@ -50,7 +83,7 @@ impl From<anyhow::Error> for ApiError {
 }
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        (self.0, Json(json!({"error":self.1}))).into_response()
+        (self.0, Json(ErrorBody { error: self.1 })).into_response()
     }
 }
 type ApiResult<T> = std::result::Result<T, ApiError>;
@@ -68,31 +101,65 @@ async fn blocking<T: Send + 'static>(
         .map_err(Into::into)
 }
 impl AppState {
-    fn workspace(&self, id: &str) -> ApiResult<SharedWorkspace> {
-        self.workspaces
-            .lock()
-            .unwrap()
-            .get(id)
-            .cloned()
-            .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "workspace not found".into()))
+    /// Create empty state for a server listening on `port` on the loopback interface.
+    #[must_use]
+    pub fn new(port: u16) -> Self {
+        Self {
+            workspaces: Arc::new(Mutex::new(HashMap::new())),
+            validation: Arc::new(Semaphore::new(1)),
+            local: Arc::new(LocalOrigins::new(port)),
+        }
     }
-    fn insert(&self, ws: Workspace) -> Value {
-        let value = ws.json();
-        self.workspaces
-            .lock()
-            .unwrap()
-            .insert(ws.id.clone(), Arc::new(Mutex::new(ws)));
+    fn workspace(&self, id: &str) -> ApiResult<SharedWorkspace> {
+        let mut workspaces = self.workspaces.lock().unwrap();
+        let tracked = workspaces
+            .get_mut(id)
+            .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "workspace not found".into()))?;
+        tracked.last_used = Instant::now();
+        Ok(Arc::clone(&tracked.workspace))
+    }
+    fn insert(&self, ws: Workspace) -> WorkspaceView {
+        let value = ws.to_view();
+        self.workspaces.lock().unwrap().insert(
+            ws.id().to_owned(),
+            Tracked {
+                workspace: Arc::new(Mutex::new(ws)),
+                last_used: Instant::now(),
+            },
+        );
         value
+    }
+    /// Discard workspaces unused for at least `idle`, except those that are busy or
+    /// running a validation job, and return how many were discarded.
+    pub fn evict_idle(&self, idle: Duration) -> usize {
+        let now = Instant::now();
+        let mut workspaces = self.workspaces.lock().unwrap();
+        let before = workspaces.len();
+        workspaces.retain(|_, tracked| {
+            now.duration_since(tracked.last_used) < idle
+                || tracked
+                    .workspace
+                    .try_lock()
+                    .map_or(true, |ws| ws.job_running())
+        });
+        before - workspaces.len()
     }
 }
 pub fn api(state: AppState) -> Router {
     Router::new()
         .route("/health", get(|| async { Json(json!({"status":"ok"})) }))
-        .route("/rules", get(|| async { Json(catalog()) }))
+        .route("/rules", get(|| async { Json::<Vec<RuleInfo>>(catalog()) }))
+        .route(
+            "/formats",
+            get(|| async { Json(topology_checker_io::registry::formats()) }),
+        )
         .route("/crs", get(resolve_crs))
         .route("/workspaces", post(create))
         .route("/example", post(example))
-        .route("/examples", get(|| async { Json(examples::catalog()) }))
+        .route(
+            "/examples",
+            get(|| async { Json::<&[Example]>(examples::catalog()) }),
+        )
         .route("/examples/{id}", post(real_example))
         .route("/projects/open", post(open_project))
         .route(
@@ -115,36 +182,31 @@ pub fn api(state: AppState) -> Router {
         .fallback(|| async {
             (
                 StatusCode::NOT_FOUND,
-                Json(json!({"error":"API endpoint not found"})),
+                Json(ErrorBody {
+                    error: "API endpoint not found".into(),
+                }),
             )
         })
         .layer(DefaultBodyLimit::max(
             archive::UPLOAD_LIMIT as usize + 1024 * 1024,
         ))
-        .layer(middleware::from_fn(local_request))
+        .layer(middleware::from_fn_with_state(state.clone(), local_request))
         .with_state(state)
 }
 async fn local_request(
+    State(state): State<AppState>,
     headers: HeaderMap,
     request: axum::extract::Request,
     next: Next,
 ) -> Response {
-    let host_ok = headers
-        .get(header::HOST)
-        .and_then(|h| h.to_str().ok())
-        .is_none_or(|h| matches!(h, "127.0.0.1:8080" | "localhost:8080"));
-    let origin_ok = headers
-        .get(header::ORIGIN)
-        .and_then(|h| h.to_str().ok())
-        .is_none_or(|h| {
-            matches!(
-                h,
-                "http://127.0.0.1:8080"
-                    | "http://localhost:8080"
-                    | "http://127.0.0.1:5173"
-                    | "http://localhost:5173"
-            )
-        });
+    let allowed = |name, values: &[String]| {
+        headers
+            .get(name)
+            .and_then(|h| h.to_str().ok())
+            .is_none_or(|h| values.iter().any(|v| v == h))
+    };
+    let host_ok = allowed(header::HOST, &state.local.hosts);
+    let origin_ok = allowed(header::ORIGIN, &state.local.origins);
     if !host_ok || !origin_ok {
         return ApiError(
             StatusCode::FORBIDDEN,
@@ -154,15 +216,15 @@ async fn local_request(
     }
     next.run(request).await
 }
-async fn create(State(state): State<AppState>) -> ApiResult<Json<Value>> {
+async fn create(State(state): State<AppState>) -> ApiResult<Json<WorkspaceView>> {
     blocking(move || Ok(Json(state.insert(Workspace::new()?)))).await
 }
 async fn workspace_info(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<WorkspaceView>> {
     let ws = state.workspace(&id)?;
-    blocking(move || Ok(Json(ws.lock().unwrap().json()))).await
+    blocking(move || Ok(Json(ws.lock().unwrap().to_view()))).await
 }
 async fn remove_workspace(State(state): State<AppState>, Path(id): Path<String>) -> StatusCode {
     state.workspaces.lock().unwrap().remove(&id);
@@ -172,7 +234,7 @@ async fn remove_workspace(State(state): State<AppState>, Path(id): Path<String>)
 struct CrsQuery {
     definition: String,
 }
-async fn resolve_crs(Query(q): Query<CrsQuery>) -> ApiResult<Json<Value>> {
+async fn resolve_crs(Query(q): Query<CrsQuery>) -> ApiResult<Json<CrsInfo>> {
     blocking(move || Ok(Json(crs_info(&q.definition)?))).await
 }
 async fn incoming(mut multipart: Multipart) -> ApiResult<(tempfile::TempDir, String, PathBuf)> {
@@ -218,30 +280,20 @@ async fn upload(
     State(state): State<AppState>,
     Path(id): Path<String>,
     multipart: Multipart,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<WorkspaceView>> {
     let ws = state.workspace(&id)?;
     let (temporary, filename, path) = incoming(multipart).await?;
     blocking(move || {
-        let (root, version, config, existing) = {
-            let w = ws.lock().unwrap();
-            (
-                w.storage.path().to_path_buf(),
-                w.version,
-                w.config.clone(),
-                w.layers.clone(),
-            )
-        };
-        let pending = workspace::PendingImport::copy(&root, filename, &path)?;
-        let layers = workspace::import(&pending.source, &root)?;
-        // Build prospective indexes outside the workspace lock.
-        let addition = workspace::Addition::prepare(config, existing, layers)?;
+        let snapshot = ws.lock().unwrap().snapshot();
+        // Copy, read and index outside the workspace lock.
+        let pending = workspace::PendingImport::copy(&snapshot.root, filename, &path)?;
+        let layers = workspace::import(&pending.source, &snapshot.root)?;
+        let addition =
+            workspace::Addition::prepare(snapshot.config.clone(), snapshot.layers.clone(), layers)?;
         let mut w = ws.lock().unwrap();
-        if w.version != version {
-            bail!("workspace changed during import; retry upload");
-        }
-        addition.commit(&mut w, pending.commit());
+        w.commit_import(&snapshot, addition, pending)?;
         drop(temporary);
-        Ok(Json(w.json()))
+        Ok(Json(w.to_view()))
     })
     .await
 }
@@ -249,38 +301,22 @@ async fn configure(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Json(mut config): Json<Config>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<WorkspaceView>> {
     let ws = state.workspace(&id)?;
     blocking(move || {
-        let (old, sources, version, previous) = {
-            let w = ws.lock().unwrap();
-            (w.config.clone(), w.layers.clone(), w.version, w.prepared.clone())
+        let snapshot = ws.lock().unwrap().snapshot();
+        normalize_config(&mut config, &snapshot.config, &snapshot.layers)?;
+        // Reprojection and indexing happen outside the lock, and only when needed.
+        let prepared = if config.geometry_differs(&snapshot.config) {
+            prepare(&config, &snapshot.layers)?
+        } else {
+            Arc::clone(&snapshot.prepared)
         };
-        normalize_config(&mut config, &old, &sources)?;
-        let signature = |c: &Config| {
-            json!({
-                "crs": c.working_crs,
-                "tolerance": c.tolerance,
-                "checks": c.checks,
-                "layers": c.layers.iter().map(|l| json!([l.id, l.selected, l.source_crs])).collect::<Vec<_>>()
-            })
-        };
-        let changed = signature(&config) != signature(&old);
-        let geometry_changed = config.working_crs != old.working_crs
-            || config.layers.iter().any(|l| {
-                !old.layers.iter().any(|o| {
-                    o.id == l.id && o.selected == l.selected && o.source_crs == l.source_crs
-                })
-            });
-        let prepared = if geometry_changed { prepare(&config, &sources)? } else { previous };
         let mut w = ws.lock().unwrap();
-        if version != w.version { bail!("workspace changed during configuration; retry"); }
-        w.config = config;
-        w.prepared = prepared;
-        w.version += 1;
-        if changed { w.invalidate(); }
-        Ok(Json(w.json()))
-    }).await
+        w.commit_config(&snapshot, config, prepared)?;
+        Ok(Json(w.to_view()))
+    })
+    .await
 }
 #[derive(Deserialize)]
 struct ViewQuery {
@@ -304,20 +340,15 @@ fn bounds(s: &str) -> Result<[f64; 4]> {
 fn prepared(ws: &SharedWorkspace, id: &str) -> Result<(Arc<IndexedLayer>, Option<String>)> {
     let w = ws.lock().unwrap();
     Ok((
-        Arc::clone(
-            w.prepared
-                .iter()
-                .find(|l| l.source.id == id)
-                .context("layer is not selected")?,
-        ),
-        w.config.working_crs.clone(),
+        Arc::clone(w.prepared().layer(id).context("layer is not selected")?),
+        w.config().working_crs.clone(),
     ))
 }
 async fn viewport(
     State(state): State<AppState>,
     Path((id, layer)): Path<(String, String)>,
     Query(q): Query<ViewQuery>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<Viewport>> {
     let b = bounds(&q.bbox)?;
     let (layer, crs) = prepared(&state.workspace(&id)?, &layer)?;
     blocking(move || Ok(Json(layer.viewport(b, crs.as_deref(), q.display)?))).await
@@ -331,31 +362,22 @@ async fn feature(
     State(state): State<AppState>,
     Path((id, layer, fid)): Path<(String, String, String)>,
     Query(q): Query<DisplayQuery>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<MapFeature>> {
     let fid = fid.parse::<i64>().map_err(anyhow::Error::from)?;
     let (layer, working) = prepared(&state.workspace(&id)?, &layer)?;
     blocking(move || {
-        let mut f = layer.feature(fid).context("feature not found")?;
-        if q.display {
-            let value: geojson::Geometry = serde_json::from_value(f["geometry"].clone())?;
-            let geometry: geo::Geometry = value.try_into()?;
-            let from = topology_checker_io::crs::parse(
-                working.as_deref().context("working CRS is unknown")?,
-            )?;
-            let to = topology_checker_io::crs::parse("EPSG:3857")?;
-            f["geometry"] = geometry_json(&topology_checker_io::crs::transform(
-                &geometry,
-                &gdal::spatial_ref::CoordTransform::new(&from, &to)?,
-            )?);
-        }
-        Ok(Json(f))
+        Ok(Json(
+            layer
+                .feature(fid, working.as_deref(), q.display)?
+                .context("feature not found")?,
+        ))
     })
     .await
 }
 async fn run(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> ApiResult<(StatusCode, Json<Value>)> {
+) -> ApiResult<(StatusCode, Json<RunAccepted>)> {
     let ws = state.workspace(&id)?;
     let permit = Arc::clone(&state.validation)
         .try_acquire_owned()
@@ -365,53 +387,32 @@ async fn run(
                 "a validation job is already running".into(),
             )
         })?;
-    let (revision, config, layers, id) = {
-        let mut w = ws.lock().unwrap();
-        let id = Uuid::new_v4().to_string();
-        let config = w.config.clone();
-        w.result = None;
-        w.job = Some(Job {
-            id: id.clone(),
-            revision: w.revision,
-            status: "running".into(),
-            message: None,
-            config: config.clone(),
-        });
-        (w.revision, config, w.prepared.clone(), id)
+    let ticket = ws.lock().unwrap().start_job();
+    let response = RunAccepted {
+        id: ticket.id.clone(),
+        revision: ticket.revision,
+        status: JobStatus::Running,
     };
-    let response = json!({"id":id,"revision":revision,"status":"running"});
     tokio::spawn(async move {
-        let result =
-            tokio::task::spawn_blocking(move || ValidationResult::run(revision, config, layers))
-                .await;
-        let mut w = ws.lock().unwrap();
-        let stale = w.revision != revision;
-        let (status, message) = match result {
-            Ok(Ok(r)) if !stale => {
-                w.result = Some(Arc::new(r));
-                ("completed", None)
-            }
-            Ok(Ok(_)) => ("stale", Some("workspace changed; run checks again".into())),
-            Ok(Err(e)) => ("failed", Some(format!("{e:#}"))),
-            Err(e) => ("failed", Some(format!("validation task failed: {e}"))),
-        };
-        if let Some(job) = &mut w.job {
-            job.status = status.into();
-            job.message = message;
-        }
+        let (revision, config, prepared) = (
+            ticket.revision,
+            ticket.config.clone(),
+            Arc::clone(&ticket.prepared),
+        );
+        let outcome =
+            tokio::task::spawn_blocking(move || ValidationResult::run(revision, config, &prepared))
+                .await
+                .unwrap_or_else(|e| Err(anyhow::anyhow!("validation task failed: {e}")));
+        ws.lock().unwrap().finish_job(&ticket, outcome);
         drop(permit);
     });
     Ok((StatusCode::ACCEPTED, Json(response)))
 }
-async fn job(State(state): State<AppState>, Path(id): Path<String>) -> ApiResult<Json<Value>> {
-    let ws = state.workspace(&id)?;
-    let w = ws.lock().unwrap();
-    Ok(Json(
-        json!({"job":w.job,"result":w.result.as_ref().map(|r|r.summary())}),
-    ))
+async fn job(State(state): State<AppState>, Path(id): Path<String>) -> ApiResult<Json<JobPoll>> {
+    Ok(Json(state.workspace(&id)?.lock().unwrap().poll()))
 }
 fn result(ws: &SharedWorkspace) -> ApiResult<Arc<ValidationResult>> {
-    ws.lock().unwrap().result.clone().ok_or_else(|| {
+    ws.lock().unwrap().result().ok_or_else(|| {
         ApiError(
             StatusCode::CONFLICT,
             "run checks to generate current results".into(),
@@ -427,7 +428,7 @@ async fn results(
     State(state): State<AppState>,
     Path(id): Path<String>,
     Query(q): Query<PageQuery>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<Page>> {
     let r = result(&state.workspace(&id)?)?;
     blocking(move || Ok(Json(r.page(q.page)?))).await
 }
@@ -435,7 +436,7 @@ async fn violation(
     State(state): State<AppState>,
     Path((id, index)): Path<(String, usize)>,
     Query(q): Query<DisplayQuery>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<Violation>> {
     let r = result(&state.workspace(&id)?)?;
     blocking(move || Ok(Json(r.violation(index, q.display)?))).await
 }
@@ -474,19 +475,37 @@ async fn download_report(
         let (name, content_type) = match format.as_str() {
             "json" => {
                 export::write_json(&r, std::io::BufWriter::new(std::fs::File::create(&path)?))?;
-                ("topology-report.json", "application/json")
+                ("topology-report.json".to_string(), "application/json")
             }
             "geojson" => {
                 export::write_geojson(&r, std::io::BufWriter::new(std::fs::File::create(&path)?))?;
-                ("violations.geojson", "application/geo+json")
+                ("violations.geojson".to_string(), "application/geo+json")
             }
             "gpkg" => {
-                export::geopackage(&r, &path)?;
-                ("violations.gpkg", "application/geopackage+sqlite3")
+                export::dataset(&r, &path)?;
+                (
+                    "violations.gpkg".to_string(),
+                    "application/geopackage+sqlite3",
+                )
             }
-            _ => bail!("unknown export format"),
+            _ => {
+                let f = topology_checker_io::registry::for_path(&path)
+                    .filter(|f| f.native && f.web_export && f.write)
+                    .context("unknown export format")?;
+                export::dataset(&r, &path)?;
+                (
+                    format!("violations.{format}"),
+                    match f.name.as_str() {
+                        "KML" if format == "kmz" => "application/vnd.google-earth.kmz",
+                        "KML" => "application/vnd.google-earth.kml+xml",
+                        "GeoParquet" => "application/vnd.apache.parquet",
+                        "GPX" => "application/gpx+xml",
+                        _ => "application/octet-stream",
+                    },
+                )
+            }
         };
-        file_download(directory, &path, name, content_type)
+        file_download(directory, &path, &name, content_type)
     })
     .await
 }
@@ -515,7 +534,7 @@ async fn download_project(
 async fn open_project(
     State(state): State<AppState>,
     multipart: Multipart,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Json<WorkspaceView>> {
     let (temporary, _, path) = incoming(multipart).await?;
     blocking(move || {
         let ws = workspace::reopen(&path)?;
@@ -524,7 +543,7 @@ async fn open_project(
     })
     .await
 }
-async fn example(State(state): State<AppState>) -> ApiResult<Json<Value>> {
+async fn example(State(state): State<AppState>) -> ApiResult<Json<WorkspaceView>> {
     blocking(move || {
         let mut ws = Workspace::new()?;
         let source = DatasetSource {
@@ -533,28 +552,30 @@ async fn example(State(state): State<AppState>) -> ApiResult<Json<Value>> {
             filename: "streets.geojson".into(),
             path: PathBuf::from("sources/example/streets.geojson"),
         };
-        let path = ws.storage.path().join(&source.path);
-        std::fs::create_dir_all(path.parent().unwrap())?;
+        let path = ws.root().join(&source.path);
+        std::fs::create_dir_all(path.parent().context("source directory")?)?;
         std::fs::write(&path, include_str!("../example.geojson"))?;
-        let layers = workspace::import(&source, ws.storage.path())?;
+        let layers = workspace::import(&source, ws.root())?;
         workspace::append(&mut ws, source, layers)?;
-        ws.config.working_crs = Some("EPSG:28992".into());
-        ws.config.tolerance = 0.001;
-        ws.config.checks = vec![
+        let streets = ws.layers()[0].id.clone();
+        let mut config = ws.config().clone();
+        config.working_crs = Some("EPSG:28992".into());
+        config.tolerance = 0.001;
+        config.checks = vec![
             Check {
                 rule: topology_checker_core::Rule::LineMustNotHaveDangles,
-                layer: ws.layers[0].id.clone(),
+                layer: streets.clone(),
                 other: None,
                 enabled: true,
             },
             Check {
                 rule: topology_checker_core::Rule::LineMustNotOverlap,
-                layer: ws.layers[0].id.clone(),
+                layer: streets,
                 other: None,
                 enabled: true,
             },
         ];
-        ws.prepared = prepare(&ws.config, &ws.layers)?;
+        ws.initialize(config)?;
         Ok(Json(state.insert(ws)))
     })
     .await
@@ -563,14 +584,31 @@ async fn example(State(state): State<AppState>) -> ApiResult<Json<Value>> {
 async fn real_example(
     State(state): State<AppState>,
     Path(id): Path<String>,
-) -> ApiResult<Json<Value>> {
-    if !examples::catalog()
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|e| e["id"] == id)
-    {
+) -> ApiResult<Json<WorkspaceView>> {
+    if !examples::catalog().iter().any(|e| e.id == id) {
         return Err(ApiError(StatusCode::NOT_FOUND, "example not found".into()));
     }
     blocking(move || Ok(Json(state.insert(examples::load(&id)?)))).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn idle_workspaces_are_evicted_unless_running_or_busy() {
+        let state = AppState::default();
+        let ids = (0..3)
+            .map(|_| state.insert(Workspace::new().unwrap()).id)
+            .collect::<Vec<_>>();
+        let running = state.workspace(&ids[0]).unwrap();
+        let _ticket = running.lock().unwrap().start_job();
+        let busy = state.workspace(&ids[1]).unwrap();
+        let _guard = busy.lock().unwrap();
+        assert_eq!(state.evict_idle(IDLE_TIMEOUT), 0, "recently used");
+        assert_eq!(state.evict_idle(Duration::ZERO), 1);
+        assert!(state.workspace(&ids[0]).is_ok());
+        assert!(state.workspace(&ids[1]).is_ok());
+        assert!(state.workspace(&ids[2]).is_err());
+    }
 }

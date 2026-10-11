@@ -48,7 +48,7 @@ const store = useWorkspace();
           <strong>{{ rule.rule.split("/")[1]?.replaceAll("-", " ") }}</strong
           ><span v-if="!rule.total" class="clean">✓ Clean</span
           ><span v-for="(count, category) in rule.counts" :key="category"
-            >{{ category }} <b>{{ count.toLocaleString() }}</b></span
+            >{{ category }} <b>{{ (count ?? 0).toLocaleString() }}</b></span
           >
         </div>
       </div>

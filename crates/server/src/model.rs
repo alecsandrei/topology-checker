@@ -1,22 +1,28 @@
+use crate::dto::{
+    Attributes, CollectionTag, CrsInfo, FeatureTag, GeoJson, LayerView, MapFeature, Page,
+    Provenance, RuleInfo, RuleSummary, SourceRef, Summary, Viewport, Violation,
+};
 use anyhow::{Context, Result, bail};
-use gdal::spatial_ref::CoordTransform;
 use geo::{BoundingRect, CoordsIter, Geometry};
 use rstar::{AABB, RTree, RTreeObject};
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value, json};
 use std::{
     collections::{HashMap, HashSet},
     path::PathBuf,
-    sync::Arc,
+    sync::{Arc, Mutex, PoisonError},
 };
 use topology_checker_core::{GeometryKind, Layer, Report, Rule, Topology};
+use topology_checker_io::Transform as CoordTransform;
 use topology_checker_io::{crs, read};
+use ts_rs::TS;
 
 pub const FEATURE_LIMIT: usize = 10_000;
 pub const COORDINATE_LIMIT: usize = 200_000;
+pub const PAGE_SIZE: usize = 100;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
+#[ts(export)]
 pub struct Check {
     pub rule: Rule,
     pub layer: String,
@@ -27,8 +33,9 @@ pub struct Check {
 fn yes() -> bool {
     true
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
+#[ts(export)]
 pub struct LayerSettings {
     pub id: String,
     pub selected: bool,
@@ -36,15 +43,17 @@ pub struct LayerSettings {
     pub color: String,
     pub source_crs: Option<String>,
 }
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
+#[ts(export)]
 pub struct ViewSettings {
     pub basemap: bool,
     pub center: Option<[f64; 2]>,
     pub resolution: Option<f64>,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
+#[ts(export)]
 pub struct Config {
     pub working_crs: Option<String>,
     pub tolerance: f64,
@@ -64,13 +73,39 @@ impl Default for Config {
         }
     }
 }
+/// Layer settings that select and georeference working geometry: (id, selected, source CRS).
+type LayerKey<'a> = Vec<(&'a str, bool, Option<&'a str>)>;
+impl Config {
+    fn layer_key(&self) -> LayerKey<'_> {
+        let mut key = self
+            .layers
+            .iter()
+            .map(|l| (l.id.as_str(), l.selected, l.source_crs.as_deref()))
+            .collect::<Vec<_>>();
+        key.sort_unstable();
+        key
+    }
+    /// Whether `other` produces different working geometry, so layers must be prepared again.
+    #[must_use]
+    pub fn geometry_differs(&self, other: &Self) -> bool {
+        self.working_crs != other.working_crs || self.layer_key() != other.layer_key()
+    }
+    /// Whether `other` can produce different validation results. Colours, visibility
+    /// and the map view do not.
+    #[must_use]
+    pub fn validation_differs(&self, other: &Self) -> bool {
+        self.geometry_differs(other)
+            || self.tolerance != other.tolerance
+            || self.checks != other.checks
+    }
+}
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DatasetSource {
     pub id: String,
     pub filename: String,
     pub path: PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub provenance: Option<Value>,
+    pub provenance: Option<Provenance>,
 }
 #[derive(Debug)]
 pub struct SourceLayer {
@@ -81,8 +116,9 @@ pub struct SourceLayer {
     pub name: String,
     pub crs: Option<String>,
     pub warnings: Vec<String>,
-    pub features: Vec<(i64, Geometry)>,
-    pub attributes: Arc<Vec<Map<String, Value>>>,
+    /// Original geometry, shared with prepared layers that need no reprojection.
+    pub layer: Arc<Layer>,
+    pub attributes: Arc<Vec<Attributes>>,
     pub kinds: Vec<GeometryKind>,
 }
 #[derive(Debug, Clone)]
@@ -97,25 +133,33 @@ impl RTreeObject for Entry {
         self.bounds
     }
 }
+/// A layer in the working CRS, indexed for previews. Its `Arc<Layer>` is shared with
+/// every validation topology, so cleaned parts, indexes and unions are built once.
 #[derive(Debug)]
 pub struct IndexedLayer {
     pub source: Arc<SourceLayer>,
-    pub features: Vec<(i64, Geometry)>,
+    pub layer: Arc<Layer>,
     index: RTree<Entry>,
     ids: HashMap<i64, usize>,
     pub extent: Option<[f64; 4]>,
+    /// The extent in Web Mercator, when a working CRS is assigned.
+    pub display_extent: Option<[f64; 4]>,
 }
 impl IndexedLayer {
     /// Index complete geometries by extent and feature identity.
     ///
     /// # Errors
     /// Returns an error for duplicate FIDs or non-finite coordinates.
-    pub fn new(source: Arc<SourceLayer>, features: Vec<(i64, Geometry)>) -> Result<Self> {
+    pub fn new(
+        source: Arc<SourceLayer>,
+        layer: Arc<Layer>,
+        working_crs: Option<&str>,
+    ) -> Result<Self> {
         let mut entries = Vec::new();
         let mut extent: Option<[f64; 4]> = None;
         let mut ids = HashMap::new();
-        for (i, (fid, g)) in features.iter().enumerate() {
-            if ids.insert(*fid, i).is_some() {
+        for (i, (fid, g)) in layer.features().enumerate() {
+            if ids.insert(fid, i).is_some() {
                 bail!("duplicate FID {fid} in {}", source.name);
             }
             if g.coords_iter()
@@ -140,21 +184,57 @@ impl IndexedLayer {
                 });
             }
         }
+        let display_extent = extent.and_then(|e| {
+            let to = crs::transform_between(working_crs?, "EPSG:3857").ok()?;
+            to.transform_bounds(&e, 21).ok()
+        });
         Ok(Self {
             source,
-            features,
+            layer,
             index: RTree::bulk_load(entries),
             ids,
             extent,
+            display_extent,
         })
     }
-    pub fn feature(&self, fid: i64) -> Option<Value> {
-        self.ids
-            .get(&fid)
-            .map(|&i| self.json_feature(i, &self.features[i].1))
+    fn geometry(&self, ordinal: usize) -> (i64, &Geometry) {
+        self.layer
+            .feature(ordinal)
+            .expect("indexed ordinals belong to the layer")
     }
-    fn json_feature(&self, ordinal: usize, g: &Geometry) -> Value {
-        json!({"type":"Feature", "id":self.features[ordinal].0.to_string(), "geometry":geometry_json(g), "properties":self.source.attributes.get(ordinal), "layer":self.source.id})
+    /// Look up one complete feature in working or display coordinates.
+    ///
+    /// # Errors
+    /// Returns an error for an unknown working CRS or a failed display transformation.
+    pub fn feature(
+        &self,
+        fid: i64,
+        working_crs: Option<&str>,
+        display: bool,
+    ) -> Result<Option<MapFeature>> {
+        let Some(&ordinal) = self.ids.get(&fid) else {
+            return Ok(None);
+        };
+        let g = self.geometry(ordinal).1;
+        let transformed;
+        let g = if display {
+            let working = working_crs.context("working CRS is unknown")?;
+            let to_display = crs::transform_between(working, "EPSG:3857")?;
+            transformed = crs::transform(g, &to_display)?;
+            &transformed
+        } else {
+            g
+        };
+        Ok(Some(self.map_feature(ordinal, g)))
+    }
+    fn map_feature(&self, ordinal: usize, g: &Geometry) -> MapFeature {
+        MapFeature {
+            kind: FeatureTag::Feature,
+            id: self.geometry(ordinal).0.to_string(),
+            geometry: geometry(g),
+            properties: self.source.attributes.get(ordinal).cloned(),
+            layer: self.source.id.clone(),
+        }
     }
     /// Query a bounded spatial preview in working or display coordinates.
     ///
@@ -165,28 +245,22 @@ impl IndexedLayer {
         bounds: [f64; 4],
         working_crs: Option<&str>,
         display: bool,
-    ) -> Result<Value> {
-        let to_working = if display {
-            Some(CoordTransform::new(
-                &crs::parse("EPSG:3857")?,
-                &crs::parse(working_crs.context("assign a working CRS for map display")?)?,
-            )?)
+    ) -> Result<Viewport> {
+        let to_display = if display {
+            let working = working_crs.context("assign a working CRS for map display")?;
+            Some((
+                crs::transform_between("EPSG:3857", working)?,
+                crs::transform_between(working, "EPSG:3857")?,
+            ))
         } else {
             None
         };
-        let bounds = if let Some(t) = &to_working {
-            t.transform_bounds(&bounds, 21)?
+        let bounds = if let Some((to_working, _)) = &to_display {
+            to_working.transform_bounds(&bounds, 21)?
         } else {
             bounds
         };
-        let to_display = if display {
-            Some(CoordTransform::new(
-                &crs::parse(working_crs.unwrap())?,
-                &crs::parse("EPSG:3857")?,
-            )?)
-        } else {
-            None
-        };
+        let to_display = to_display.map(|(_, to_display)| to_display);
         let query = AABB::from_corners([bounds[0], bounds[1]], [bounds[2], bounds[3]]);
         let mut output = Vec::new();
         let mut coordinates = 0;
@@ -200,7 +274,7 @@ impl IndexedLayer {
                 incomplete = true;
                 continue;
             }
-            let g = &self.features[entry.ordinal].1;
+            let g = self.geometry(entry.ordinal).1;
             let transformed;
             let g = if let Some(t) = &to_display {
                 transformed = crs::transform(g, t)?;
@@ -208,18 +282,25 @@ impl IndexedLayer {
             } else {
                 g
             };
-            output.push(self.json_feature(entry.ordinal, g));
+            output.push(self.map_feature(entry.ordinal, g));
             coordinates += entry.coordinates;
         }
-        Ok(
-            json!({"type":"FeatureCollection", "features":output,"incomplete":incomplete,"coordinates":coordinates,"feature_limit":FEATURE_LIMIT,"coordinate_limit":COORDINATE_LIMIT}),
-        )
+        Ok(Viewport {
+            kind: CollectionTag::FeatureCollection,
+            features: output,
+            incomplete,
+            coordinates,
+            feature_limit: FEATURE_LIMIT,
+            coordinate_limit: COORDINATE_LIMIT,
+        })
     }
 }
-pub fn geometry_json(g: &Geometry) -> Value {
-    serde_json::to_value(geojson::Geometry::new(geojson::Value::from(g))).expect("finite geometry")
+/// Convert a geometry to GeoJSON without changing its coordinates.
+pub fn geometry(g: &Geometry) -> GeoJson {
+    geojson::Geometry::new(geojson::Value::from(g))
 }
-pub fn kinds(features: &[(i64, Geometry)]) -> Vec<GeometryKind> {
+/// Return the distinct geometry families in a layer, looking inside collections.
+pub fn kinds(layer: &Layer) -> Vec<GeometryKind> {
     fn add(g: &Geometry, out: &mut Vec<GeometryKind>) {
         if let Geometry::GeometryCollection(c) = g {
             for child in c {
@@ -233,7 +314,7 @@ pub fn kinds(features: &[(i64, Geometry)]) -> Vec<GeometryKind> {
         }
     }
     let mut out = Vec::new();
-    for (_, g) in features {
+    for (_, g) in layer.features() {
         add(g, &mut out);
     }
     out
@@ -289,10 +370,11 @@ pub fn normalize_config(
         }
     }
     for c in config.checks.iter().filter(|c| c.enabled) {
-        let (a, b) = c.rule.inputs();
-        if c.other.is_some() != b.is_some() || c.other.as_ref() == Some(&c.layer) {
-            bail!("{} has invalid inputs", c.rule);
+        c.rule.check_input_count(c.other.is_some())?;
+        if c.other.as_ref() == Some(&c.layer) {
+            bail!("{} requires two distinct input layers", c.rule);
         }
+        let (a, b) = c.rule.inputs();
         for (id, kind) in [(Some(&c.layer), Some(a)), (c.other.as_ref(), b)] {
             if let (Some(id), Some(kind)) = (id, kind) {
                 let s = sources
@@ -302,7 +384,7 @@ pub fn normalize_config(
                 if !config.layers.iter().any(|l| &l.id == id && l.selected) {
                     bail!("rule input is not selected");
                 }
-                if kind != GeometryKind::Any && s.kinds.iter().any(|k| *k != kind) {
+                if !s.kinds.iter().all(|k| k.satisfies(kind)) {
                     bail!("{} requires {kind:?} input", c.rule);
                 }
             }
@@ -310,13 +392,30 @@ pub fn normalize_config(
     }
     Ok(())
 }
+/// Selected layers in the working CRS, with a validation topology reused by every run
+/// at the same tolerance. A configuration that changes working geometry prepares a new
+/// instance, so the cached topology can never see stale layers.
+#[derive(Debug, Default)]
+pub struct Prepared {
+    pub layers: Vec<Arc<IndexedLayer>>,
+    topology: Mutex<Option<Topology>>,
+}
+impl Prepared {
+    /// Find a selected layer by its workspace ID.
+    #[must_use]
+    pub fn layer(&self, id: &str) -> Option<&Arc<IndexedLayer>> {
+        self.layers.iter().find(|l| l.source.id == id)
+    }
+}
+
 /// Transform original layers into the working CRS and index their complete geometries.
+/// Layers already in the working CRS share their original geometry.
 ///
 /// # Errors
 /// Returns an error for missing source CRSs, failed transforms or invalid geometries.
-pub fn prepare(config: &Config, sources: &[Arc<SourceLayer>]) -> Result<Vec<Arc<IndexedLayer>>> {
+pub fn prepare(config: &Config, sources: &[Arc<SourceLayer>]) -> Result<Arc<Prepared>> {
     let target = config.working_crs.as_deref().map(crs::parse).transpose()?;
-    sources
+    let layers = sources
         .iter()
         .filter(|s| config.layers.iter().any(|l| l.id == s.id && l.selected))
         .map(|s| {
@@ -334,24 +433,33 @@ pub fn prepare(config: &Config, sources: &[Arc<SourceLayer>]) -> Result<Vec<Arc<
             } else {
                 None
             };
-            let features = s
-                .features
-                .iter()
-                .map(|(fid, g)| {
-                    Ok((
-                        *fid,
-                        if let Some(t) = &transform {
+            let layer = if let Some(t) = &transform {
+                let features = s
+                    .layer
+                    .features()
+                    .map(|(fid, g)| {
+                        Ok((
+                            fid,
                             crs::transform(g, t)
-                                .with_context(|| format!("transforming {}, FID {fid}", s.name))?
-                        } else {
-                            g.clone()
-                        },
-                    ))
-                })
-                .collect::<Result<Vec<_>>>()?;
-            Ok(Arc::new(IndexedLayer::new(Arc::clone(s), features)?))
+                                .with_context(|| format!("transforming {}, FID {fid}", s.name))?,
+                        ))
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Arc::new(Layer::from_features(&s.name, features))
+            } else {
+                Arc::clone(&s.layer)
+            };
+            Ok(Arc::new(IndexedLayer::new(
+                Arc::clone(s),
+                layer,
+                config.working_crs.as_deref(),
+            )?))
         })
-        .collect()
+        .collect::<Result<_>>()?;
+    Ok(Arc::new(Prepared {
+        layers,
+        topology: Mutex::default(),
+    }))
 }
 #[derive(Debug)]
 pub struct ValidationResult {
@@ -359,22 +467,45 @@ pub struct ValidationResult {
     pub config: Config,
     pub layers: Vec<Arc<IndexedLayer>>,
     pub report: Report,
+    /// Core, import and CRS warnings as display text.
+    pub warnings: Vec<String>,
     rows: Vec<(usize, usize)>,
 }
 impl ValidationResult {
-    /// Validate an immutable workspace configuration with the existing core.
+    /// Validate an immutable workspace configuration with the existing core, reusing
+    /// the prepared topology and its line graphs while the tolerance is unchanged.
     ///
     /// # Errors
     /// Returns an error for invalid rule inputs or core validation failures.
-    pub fn run(revision: u64, config: Config, layers: Vec<Arc<IndexedLayer>>) -> Result<Self> {
-        let mut topology = Topology::new(config.tolerance)?;
-        let mut ids = HashMap::new();
-        for l in &layers {
-            ids.insert(
-                &l.source.id,
-                topology.add_layer(Layer::from_features(&l.source.name, l.features.clone())),
-            );
+    pub fn run(revision: u64, config: Config, prepared: &Prepared) -> Result<Self> {
+        if !config.checks.iter().any(|c| c.enabled) {
+            bail!("enable at least one rule");
         }
+        // Registration is transactional and validation only reads the topology, so a
+        // panic elsewhere cannot leave it inconsistent.
+        let mut cached = prepared
+            .topology
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if cached
+            .as_ref()
+            .is_none_or(|t| t.tolerance() != config.tolerance)
+        {
+            let mut topology = Topology::new(config.tolerance)?;
+            for l in &prepared.layers {
+                topology.add_layer(Arc::clone(&l.layer));
+            }
+            *cached = Some(topology);
+        }
+        let topology = cached.as_mut().expect("topology prepared above");
+        topology.clear_rules();
+        let ids = prepared
+            .layers
+            .iter()
+            .zip(topology.layers())
+            .map(|(l, (id, _))| (&l.source.id, id))
+            .collect::<HashMap<_, _>>();
+        let layers = prepared.layers.clone();
         for c in config.checks.iter().filter(|c| c.enabled) {
             topology.add_rule(
                 c.rule,
@@ -385,15 +516,18 @@ impl ValidationResult {
                     .transpose()?,
             )?;
         }
-        if !config.checks.iter().any(|c| c.enabled) {
-            bail!("enable at least one rule");
-        }
-        let mut report = topology.validate()?;
+        let report = topology.validate()?;
+        drop(cached);
+        let mut warnings = report
+            .warnings
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>();
         for l in &layers {
-            report.warnings.extend(l.source.warnings.clone());
+            warnings.extend(l.source.warnings.iter().cloned());
         }
         if config.working_crs.is_none() {
-            report.warnings.push(
+            warnings.push(
                 "Raw XY mode: input coordinates are used directly without CRS transformation"
                     .into(),
             );
@@ -405,46 +539,55 @@ impl ValidationResult {
             .transpose()?
             .is_some_and(|s| s.is_geographic())
         {
-            report
-                .warnings
-                .push("Tolerance is in angular units; calculations are planar".into());
+            warnings.push("Tolerance is in angular units; calculations are planar".into());
         }
         let rows = report
             .rules
             .iter()
             .enumerate()
-            .flat_map(|(r, rule)| (0..rule.errors.len()).map(move |e| (r, e)))
+            .flat_map(|(r, rule)| (0..rule.violations.len()).map(move |e| (r, e)))
             .collect();
         Ok(Self {
             revision,
             config,
             layers,
             report,
+            warnings,
             rows,
         })
     }
-    fn reference(&self, r: Option<topology_checker_core::FeatureRef>) -> Value {
-        r.map_or(Value::Null, |r| {
+    fn reference(&self, r: Option<topology_checker_core::FeatureRef>) -> Option<SourceRef> {
+        r.map(|r| {
             let l = &self.layers[r.layer.index()];
-            json!({"layer":l.source.id,"name":l.source.name,"dataset":l.source.dataset,"selector":l.source.selector,"fid":r.fid.to_string(),"part":r.part,"attributes":l.ids.get(&r.fid).and_then(|&i|l.source.attributes.get(i))})
+            SourceRef {
+                layer: l.source.id.clone(),
+                name: l.source.name.clone(),
+                dataset: l.source.dataset.clone(),
+                selector: l.source.selector.clone(),
+                fid: r.fid.to_string(),
+                part: r.part,
+                attributes: l
+                    .ids
+                    .get(&r.fid)
+                    .and_then(|&i| l.source.attributes.get(i))
+                    .cloned(),
+            }
         })
     }
     /// Serialize a single aggregated violation and signed source references.
     ///
     /// # Errors
     /// Returns an error for an unknown violation or failed display transformation.
-    pub fn violation(&self, index: usize, display: bool) -> Result<Value> {
+    pub fn violation(&self, index: usize, display: bool) -> Result<Violation> {
         let &(rule, error) = self.rows.get(index).context("unknown violation")?;
-        let e = &self.report.rules[rule].errors[error];
+        let e = &self.report.rules[rule].violations[error];
         let transform = if display {
-            Some(CoordTransform::new(
-                &crs::parse(
-                    self.config
-                        .working_crs
-                        .as_deref()
-                        .context("working CRS is unknown")?,
-                )?,
-                &crs::parse("EPSG:3857")?,
+            Some(crs::transform_between(
+                self.config
+                    .working_crs
+                    .as_deref()
+                    .context("working CRS is unknown")?,
+                "EPSG:3857",
             )?)
         } else {
             None
@@ -454,60 +597,125 @@ impl ValidationResult {
         } else {
             e.geometry.clone()
         };
-        Ok(
-            json!({"id":index,"rule":e.rule,"category":e.error_type,"geometry":geometry_json(&g),"origin":self.reference(e.origin),"destination":self.reference(e.destination)}),
-        )
+        Ok(Violation {
+            id: index,
+            rule: e.rule,
+            category: e.kind,
+            geometry: geometry(&g),
+            origin: self.reference(e.origin),
+            destination: self.reference(e.destination),
+        })
     }
-    pub fn summary(&self) -> Value {
-        json!({"revision":self.revision,"config":self.config,"valid":self.report.is_valid(),"total":self.report.error_count(),"warnings":self.report.warnings,"rules":self.report.rules.iter().map(|r| json!({"rule":r.spec.rule,"layer":self.layers[r.spec.layer.index()].source.id,"other":r.spec.other.map(|id| &self.layers[id.index()].source.id),"counts":r.counts,"total":r.errors.len()})).collect::<Vec<_>>()})
+    pub fn summary(&self) -> Summary {
+        Summary {
+            revision: self.revision,
+            config: self.config.clone(),
+            valid: self.report.is_valid(),
+            total: self.report.violation_count(),
+            warnings: self.warnings.clone(),
+            rules: self
+                .report
+                .rules
+                .iter()
+                .map(|r| RuleSummary {
+                    rule: r.spec.rule,
+                    layer: self.layers[r.spec.layer.index()].source.id.clone(),
+                    other: r
+                        .spec
+                        .other
+                        .map(|id| self.layers[id.index()].source.id.clone()),
+                    counts: r.counts.clone(),
+                    total: r.violations.len(),
+                })
+                .collect(),
+        }
     }
     /// Return up to 100 violations in deterministic core report order.
     ///
     /// # Errors
     /// Returns an error for page offset overflow or violation serialization failures.
-    pub fn page(&self, page: usize) -> Result<Value> {
-        let start = page.checked_mul(100).context("page out of range")?;
-        let rows = (start..(start.saturating_add(100)).min(self.report.error_count()))
+    pub fn page(&self, page: usize) -> Result<Page> {
+        let start = page.checked_mul(PAGE_SIZE).context("page out of range")?;
+        let violations = (start
+            ..(start.saturating_add(PAGE_SIZE)).min(self.report.violation_count()))
             .map(|i| self.violation(i, false))
             .collect::<Result<Vec<_>>>()?;
-        Ok(json!({"page":page,"page_size":100,"total":self.report.error_count(),"violations":rows}))
+        Ok(Page {
+            page,
+            page_size: PAGE_SIZE,
+            total: self.report.violation_count(),
+            violations,
+        })
     }
     /// Serialize the complete report with its configuration snapshot.
     ///
     /// # Errors
     /// Returns an error if a violation cannot be serialized.
-    pub fn complete_json(&self) -> Result<Value> {
-        let mut summary = self.summary();
-        summary["violations"] = Value::Array(
-            (0..self.report.error_count())
+    pub fn complete_json(&self) -> Result<serde_json::Value> {
+        #[derive(Serialize)]
+        struct Complete {
+            #[serde(flatten)]
+            summary: Summary,
+            violations: Vec<Violation>,
+        }
+        Ok(serde_json::to_value(Complete {
+            summary: self.summary(),
+            violations: (0..self.report.violation_count())
                 .map(|i| self.violation(i, false))
                 .collect::<Result<_>>()?,
-        );
-        Ok(summary)
+        })?)
     }
 }
-pub fn catalog() -> Value {
-    json!(Rule::ALL.iter().map(|r| { let (primary,secondary) = r.inputs(); json!({"name":r.name(),"description":r.description(),"primary":primary,"secondary":secondary}) }).collect::<Vec<_>>())
+pub fn catalog() -> Vec<RuleInfo> {
+    Rule::ALL
+        .iter()
+        .map(|&rule| {
+            let (primary, secondary) = rule.inputs();
+            RuleInfo {
+                name: rule,
+                description: rule.description().into(),
+                primary,
+                secondary,
+            }
+        })
+        .collect()
 }
 /// Describe a working CRS, its units and default tolerance.
 ///
 /// # Errors
-/// Returns an error for invalid CRS definitions or failed GDAL metadata conversion.
-pub fn crs_info(def: &str) -> Result<Value> {
+/// Returns an error for invalid CRS definitions or failed CRS metadata conversion.
+pub fn crs_info(def: &str) -> Result<CrsInfo> {
     let s = crs::parse(def)?;
-    Ok(
-        json!({"definition":s.to_wkt()?,"label":s.authority().unwrap_or_else(|_|s.name().unwrap_or_else(||"Custom CRS".into())),"units":if s.is_geographic(){s.angular_units_name()}else{s.linear_units_name()},"default_tolerance":read::default_tolerance(Some(&s))}),
-    )
+    Ok(CrsInfo {
+        definition: s.to_wkt()?,
+        label: s
+            .authority()
+            .unwrap_or_else(|_| s.name().unwrap_or_else(|| "Custom CRS".into())),
+        units: if s.is_geographic() {
+            s.angular_units_name()
+        } else {
+            s.linear_units_name()
+        },
+        default_tolerance: read::default_tolerance(Some(&s)),
+    })
 }
-pub fn layer_metadata(
-    sources: &[Arc<SourceLayer>],
-    prepared: &[Arc<IndexedLayer>],
-    config: &Config,
-) -> Vec<Value> {
-    sources.iter().map(|s| {
-        let p = prepared.iter().find(|p| p.source.id == s.id);
-        let extent = p.and_then(|p| p.extent);
-        let display_extent = extent.and_then(|e| config.working_crs.as_deref().and_then(|def| { let from = crs::parse(def).ok()?; let to = crs::parse("EPSG:3857").ok()?; CoordTransform::new(&from,&to).ok()?.transform_bounds(&e,21).ok() }));
-        json!({"id":s.id,"dataset":s.dataset,"selector":s.selector,"name":s.name,"feature_count":s.features.len(),"kinds":s.kinds,"source_crs":s.crs,"warnings":s.warnings,"extent":extent,"display_extent":display_extent})
-    }).collect()
+pub fn layer_metadata(sources: &[Arc<SourceLayer>], prepared: &Prepared) -> Vec<LayerView> {
+    sources
+        .iter()
+        .map(|s| {
+            let p = prepared.layer(&s.id);
+            LayerView {
+                id: s.id.clone(),
+                dataset: s.dataset.clone(),
+                selector: s.selector.clone(),
+                name: s.name.clone(),
+                feature_count: s.layer.len(),
+                kinds: s.kinds.clone(),
+                source_crs: s.crs.clone(),
+                warnings: s.warnings.clone(),
+                extent: p.and_then(|p| p.extent),
+                display_extent: p.and_then(|p| p.display_extent),
+            }
+        })
+        .collect()
 }

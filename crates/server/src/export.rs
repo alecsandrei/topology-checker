@@ -1,22 +1,59 @@
-use crate::model::{ValidationResult, geometry_json};
-use anyhow::{Context, Result};
-use gdal::{
-    DriverManager,
-    spatial_ref::CoordTransform,
-    vector::{Feature, LayerAccess, LayerOptions, OGRFieldType, OGRwkbGeometryType, ToGdal},
+use crate::{
+    dto::{GeoJson, SourceRef, Summary, Violation},
+    model::{ValidationResult, geometry},
 };
-use serde_json::{Value, json};
+use anyhow::{Context, Result};
+use serde::Serialize;
+use serde_json::Value;
 use std::path::Path;
+use topology_checker_core::{Rule, ViolationKind};
 use topology_checker_io::crs;
+use topology_checker_io::{Transform as CoordTransform, write};
+
+/// A violation without geometry, as GeoJSON feature properties.
+#[derive(Debug, Serialize)]
+struct Properties {
+    id: usize,
+    rule: Rule,
+    category: ViolationKind,
+    origin: Option<SourceRef>,
+    destination: Option<SourceRef>,
+}
+impl From<Violation> for Properties {
+    fn from(v: Violation) -> Self {
+        Self {
+            id: v.id,
+            rule: v.rule,
+            category: v.category,
+            origin: v.origin,
+            destination: v.destination,
+        }
+    }
+}
+#[derive(Debug, Serialize)]
+struct Feature {
+    r#type: &'static str,
+    id: String,
+    geometry: GeoJson,
+    properties: Properties,
+}
+#[derive(Debug, Serialize)]
+struct FeatureCollection {
+    r#type: &'static str,
+    features: Vec<Feature>,
+    summary: Summary,
+}
 
 /// Stream a complete report without materializing all serialized violations.
 ///
 /// # Errors
 /// Returns an error for output failures or violation serialization failures.
 pub fn write_json(result: &ValidationResult, mut output: impl std::io::Write) -> Result<()> {
-    let summary = result.summary();
+    let Value::Object(summary) = serde_json::to_value(result.summary())? else {
+        unreachable!("a summary serializes as an object");
+    };
     output.write_all(b"{")?;
-    for (i, (key, value)) in summary.as_object().unwrap().iter().enumerate() {
+    for (i, (key, value)) in summary.iter().enumerate() {
         if i > 0 {
             output.write_all(b",")?;
         }
@@ -25,7 +62,7 @@ pub fn write_json(result: &ValidationResult, mut output: impl std::io::Write) ->
         serde_json::to_writer(&mut output, value)?;
     }
     output.write_all(b",\"violations\":[")?;
-    for i in 0..result.report.error_count() {
+    for i in 0..result.report.violation_count() {
         if i > 0 {
             output.write_all(b",")?;
         }
@@ -36,11 +73,7 @@ pub fn write_json(result: &ValidationResult, mut output: impl std::io::Write) ->
     Ok(())
 }
 
-/// Stream WGS84 GeoJSON with one feature per violation.
-///
-/// # Errors
-/// Returns an error for missing CRS, transformation failures or output failures.
-pub fn write_geojson(result: &ValidationResult, mut output: impl std::io::Write) -> Result<()> {
+fn wgs84(result: &ValidationResult) -> Result<CoordTransform> {
     let from = crs::parse(
         result
             .config
@@ -48,16 +81,35 @@ pub fn write_geojson(result: &ValidationResult, mut output: impl std::io::Write)
             .as_deref()
             .context("assign a working CRS before geographic export")?,
     )?;
-    let operation = CoordTransform::new(&from, &crs::parse("EPSG:4326")?)?;
+    CoordTransform::new(&from, &crs::parse("EPSG:4326")?)
+}
+/// Build WGS84 features lazily, in report order.
+fn features<'a>(
+    result: &'a ValidationResult,
+    operation: &'a CoordTransform,
+) -> impl Iterator<Item = Result<Feature>> + 'a {
+    result.report.violations().enumerate().map(move |(i, e)| {
+        Ok(Feature {
+            r#type: "Feature",
+            id: i.to_string(),
+            geometry: geometry(&crs::transform(&e.geometry, operation)?),
+            properties: result.violation(i, false)?.into(),
+        })
+    })
+}
+
+/// Stream WGS84 GeoJSON with one feature per violation.
+///
+/// # Errors
+/// Returns an error for missing CRS, transformation failures or output failures.
+pub fn write_geojson(result: &ValidationResult, mut output: impl std::io::Write) -> Result<()> {
+    let operation = wgs84(result)?;
     output.write_all(b"{\"type\":\"FeatureCollection\",\"features\":[")?;
-    for (i, e) in result.report.errors().enumerate() {
+    for (i, feature) in features(result, &operation).enumerate() {
         if i > 0 {
             output.write_all(b",")?;
         }
-        let mut properties = result.violation(i, false)?;
-        properties.as_object_mut().unwrap().remove("geometry");
-        let feature = json!({"type":"Feature","id":i.to_string(),"geometry":geometry_json(&crs::transform(&e.geometry,&operation)?),"properties":properties});
-        serde_json::to_writer(&mut output, &feature)?;
+        serde_json::to_writer(&mut output, &feature?)?;
     }
     output.write_all(b"],\"summary\":")?;
     serde_json::to_writer(&mut output, &result.summary())?;
@@ -71,27 +123,20 @@ pub fn write_geojson(result: &ValidationResult, mut output: impl std::io::Write)
 /// # Errors
 /// Returns an error for unknown working CRS or failed coordinate transformations.
 pub fn geojson(result: &ValidationResult) -> Result<Value> {
-    let from = crs::parse(
-        result
-            .config
-            .working_crs
-            .as_deref()
-            .context("assign a working CRS before geographic export")?,
-    )?;
-    let operation = CoordTransform::new(&from, &crs::parse("EPSG:4326")?)?;
-    let features = result.report.errors().enumerate().map(|(i,e)| {
-        let mut properties = result.violation(i,false)?;
-        properties.as_object_mut().unwrap().remove("geometry");
-        Ok(json!({"type":"Feature","id":i.to_string(),"geometry":geometry_json(&crs::transform(&e.geometry,&operation)?),"properties":properties}))
-    }).collect::<Result<Vec<_>>>()?;
-    Ok(json!({"type":"FeatureCollection","features":features,"summary":result.summary()}))
+    let operation = wgs84(result)?;
+    Ok(serde_json::to_value(FeatureCollection {
+        r#type: "FeatureCollection",
+        features: features(result, &operation).collect::<Result<_>>()?,
+        summary: result.summary(),
+    })?)
 }
-/// One record per violation, including multipart and mixed collections.
-/// Export mixed violations to a single GeoPackage layer.
+/// Export one record per violation, keeping multipart and mixed geometries whole,
+/// with the report columns the CLI writes.
 ///
 /// # Errors
-/// Returns an error for unknown working CRS or GDAL write failures.
-pub fn geopackage(result: &ValidationResult, path: &Path) -> Result<()> {
+/// Returns an error for a missing working CRS, geometry the format cannot hold or
+/// dataset write failures.
+pub fn dataset(result: &ValidationResult, path: &Path) -> Result<()> {
     let srs = crs::parse(
         result
             .config
@@ -99,32 +144,13 @@ pub fn geopackage(result: &ValidationResult, path: &Path) -> Result<()> {
             .as_deref()
             .context("assign a working CRS before geographic export")?,
     )?;
-    let mut dataset = DriverManager::get_driver_by_name("GPKG")?.create_vector_only(path)?;
-    let layer = dataset.create_layer(LayerOptions {
-        name: "violations",
-        srs: Some(&srs),
-        ty: OGRwkbGeometryType::wkbUnknown,
-        ..Default::default()
-    })?;
-    layer.create_defn_fields(&[
-        ("violation_id", OGRFieldType::OFTInteger64),
-        ("rule", OGRFieldType::OFTString),
-        ("category", OGRFieldType::OFTString),
-        ("source_refs", OGRFieldType::OFTString),
-    ])?;
-    for (i, e) in result.report.errors().enumerate() {
-        let row = result.violation(i, false)?;
-        let mut feature = Feature::new(layer.defn())?;
-        feature.set_geometry(e.geometry.to_gdal()?)?;
-        feature.set_field_integer64(0, i as i64)?;
-        feature.set_field_string(1, e.rule.name())?;
-        feature.set_field_string(2, e.error_type.name())?;
-        feature.set_field_string(
-            3,
-            &json!({"origin":row["origin"],"destination":row["destination"]}).to_string(),
-        )?;
-        feature.create(&layer)?;
-    }
-    dataset.flush_cache()?;
+    write::report(
+        path,
+        None,
+        false,
+        Some(&srs),
+        &result.report,
+        write::ReportLayout::Complete,
+    )?;
     Ok(())
 }

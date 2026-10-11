@@ -1,16 +1,20 @@
 //! Offline, pinned Natural Earth examples imported through the regular workspace importer.
 use crate::{
+    dto::Example,
     model::*,
     workspace::{self, Workspace},
 };
 use anyhow::{Context, Result, bail};
-use serde_json::Value;
-use std::{fs, path::PathBuf};
-use topology_checker_core::Rule;
+use std::{fs, path::PathBuf, sync::OnceLock};
 use uuid::Uuid;
 
-pub fn catalog() -> Value {
-    serde_json::from_str(include_str!("../examples/catalog.json")).expect("bundled example catalog")
+/// Return the bundled example catalog, parsed once.
+pub fn catalog() -> &'static [Example] {
+    static CATALOG: OnceLock<Vec<Example>> = OnceLock::new();
+    CATALOG.get_or_init(|| {
+        serde_json::from_str(include_str!("../examples/catalog.json"))
+            .expect("bundled example catalog")
+    })
 }
 fn asset(name: &str) -> Result<&'static [u8]> {
     Ok(match name {
@@ -41,53 +45,71 @@ fn asset(name: &str) -> Result<&'static [u8]> {
 /// # Errors
 /// Returns an error for unknown examples, filesystem failures or importer failures.
 pub fn load(id: &str) -> Result<Workspace> {
-    let catalog = catalog();
-    let example = catalog
-        .as_array()
-        .unwrap()
+    let example = catalog()
         .iter()
-        .find(|e| e["id"] == id)
+        .find(|e| e.id == id)
         .context("unknown example")?;
     let mut ws = Workspace::new()?;
-    for dataset in example["datasets"].as_array().unwrap() {
-        let filename = dataset["filename"].as_str().unwrap();
+    let mut imported = Vec::new();
+    for dataset in &example.datasets {
         let id = Uuid::new_v4().to_string();
         let source = DatasetSource {
-            path: PathBuf::from("sources").join(&id).join(filename),
+            path: PathBuf::from("sources").join(&id).join(&dataset.filename),
             id,
-            filename: filename.into(),
-            provenance: Some(dataset["provenance"].clone()),
+            filename: dataset.filename.clone(),
+            provenance: Some(dataset.provenance.clone()),
         };
-        let path = ws.storage.path().join(&source.path);
-        fs::create_dir_all(path.parent().unwrap())?;
-        fs::write(&path, asset(filename)?)?;
-        let layers = workspace::import(&source, ws.storage.path())?;
-        let layer_ids = layers.iter().map(|l| l.id.clone()).collect::<Vec<_>>();
+        let path = ws.root().join(&source.path);
+        fs::create_dir_all(path.parent().context("source directory")?)?;
+        fs::write(&path, asset(&dataset.filename)?)?;
+        let layers = workspace::import(&source, ws.root())?;
+        imported.extend(layers.iter().map(|l| (l.id.clone(), dataset)));
         workspace::append(&mut ws, source, layers)?;
-        for id in layer_ids {
-            let settings = ws.config.layers.iter_mut().find(|l| l.id == id).unwrap();
-            settings.selected = true;
-            settings.visible = dataset["visible"].as_bool().unwrap();
-            for rule in dataset["checks"].as_array().unwrap() {
-                ws.config.checks.push(Check {
-                    rule: rule.as_str().unwrap().parse::<Rule>()?,
-                    layer: id.clone(),
-                    other: None,
-                    enabled: true,
-                });
-            }
-        }
     }
-    ws.config.working_crs = Some("EPSG:4326".into());
-    ws.config.tolerance = 1e-8;
+    let mut config = ws.config().clone();
+    for (id, dataset) in imported {
+        let settings = config
+            .layers
+            .iter_mut()
+            .find(|l| l.id == id)
+            .context("imported layer settings")?;
+        settings.selected = true;
+        settings.visible = dataset.visible;
+        config
+            .checks
+            .extend(dataset.checks.iter().map(|&rule| Check {
+                rule,
+                layer: id.clone(),
+                other: None,
+                enabled: true,
+            }));
+    }
+    config.working_crs = Some("EPSG:4326".into());
+    config.tolerance = 1e-8;
     normalize_config(
-        &mut ws.config,
+        &mut config,
         &Config {
             working_crs: Some("EPSG:4326".into()),
             ..Config::default()
         },
-        &ws.layers,
+        ws.layers(),
     )?;
-    ws.prepared = prepare(&ws.config, &ws.layers)?;
+    ws.initialize(config)?;
     Ok(ws)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn bundled_catalog_parses_and_every_dataset_has_an_asset() {
+        let catalog = super::catalog();
+        assert!(!catalog.is_empty());
+        for dataset in catalog.iter().flat_map(|e| &e.datasets) {
+            assert!(
+                super::asset(&dataset.filename).is_ok(),
+                "{}",
+                dataset.filename
+            );
+        }
+    }
 }

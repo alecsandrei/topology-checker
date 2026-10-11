@@ -6,6 +6,7 @@ import RulePanel from "../src/components/RulePanel.vue";
 import ResultsPanel from "../src/components/ResultsPanel.vue";
 import LayerPanel from "../src/components/LayerPanel.vue";
 import { fixture } from "./fixtures";
+import type { Example, Violation } from "../src/types";
 beforeEach(() => {
   setActivePinia(createPinia());
   const store = useWorkspace();
@@ -71,7 +72,7 @@ describe("inspection results", () => {
       warnings: [],
       rules: [],
     };
-    const row = {
+    const row: Violation = {
       id: 0,
       rule: "line/must-not-have-dangles",
       category: "dangle",
@@ -87,6 +88,9 @@ describe("inspection results", () => {
         name: "Streets",
         fid: "9007199254740993",
         part: null,
+        dataset: "d",
+        selector: "lines",
+        attributes: null,
       },
       destination: null,
     };
@@ -137,7 +141,7 @@ describe("examples gallery", () => {
     const { default: catalog } =
       await import("../../crates/server/examples/catalog.json");
     const store = useWorkspace();
-    store.examples = catalog;
+    store.examples = catalog as Example[];
     store.galleryOpen = true;
     const load = vi.spyOn(store, "loadExample").mockResolvedValue();
     const wrapper = mount(ExamplesGallery, {

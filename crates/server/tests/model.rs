@@ -5,7 +5,8 @@ use topology_checker_core::{Layer, Rule, Topology};
 use topology_checker_web::{export, model::*};
 fn source(id: &str, crs: Option<&str>, features: Vec<(i64, Geometry)>) -> Arc<SourceLayer> {
     let attributes = Arc::new(features.iter().map(|_| Map::new()).collect());
-    let kinds = kinds(&features);
+    let layer = Layer::from_features(id, features);
+    let kinds = kinds(&layer);
     Arc::new(SourceLayer {
         id: id.into(),
         dataset: id.into(),
@@ -14,7 +15,7 @@ fn source(id: &str, crs: Option<&str>, features: Vec<(i64, Geometry)>) -> Arc<So
         name: id.into(),
         crs: crs.map(String::from),
         warnings: vec!["source warning".into()],
-        features,
+        layer: Arc::new(layer),
         attributes,
         kinds,
     })
@@ -71,18 +72,18 @@ fn binary_mixed_geometry_results_match_direct_core_and_preserve_counts_in_export
     );
     let prepared = prepare(&cfg, &sources).unwrap();
     let mut direct = Topology::new(0.).unwrap();
-    let a = direct.add_layer(Layer::from_features("line", sources[0].features.clone()));
-    let b = direct.add_layer(Layer::from_features("polygon", sources[1].features.clone()));
+    let a = direct.add_layer(Arc::clone(&sources[0].layer));
+    let b = direct.add_layer(Arc::clone(&sources[1].layer));
     direct
         .add_rule(Rule::LineMustNotIntersectPolygons, a, Some(b))
         .unwrap();
-    let result = ValidationResult::run(7, cfg, prepared).unwrap();
+    let result = ValidationResult::run(7, cfg, &prepared).unwrap();
     let direct = direct.validate().unwrap();
     assert_eq!(
-        result.report.errors().next().unwrap().geometry,
-        direct.errors().next().unwrap().geometry
+        result.report.violations().next().unwrap().geometry,
+        direct.violations().next().unwrap().geometry
     );
-    assert_eq!(result.report.error_count(), 1);
+    assert_eq!(result.report.violation_count(), 1);
     let row = result.violation(0, false).unwrap();
     let mut streamed = Vec::new();
     export::write_json(&result, &mut streamed).unwrap();
@@ -96,10 +97,14 @@ fn binary_mixed_geometry_results_match_direct_core_and_preserve_counts_in_export
         serde_json::from_slice::<Value>(&streamed).unwrap(),
         export::geojson(&result).unwrap()
     );
-    assert_eq!(row["geometry"]["type"], "GeometryCollection");
-    assert_eq!(row["origin"]["fid"], "-12");
-    assert_eq!(row["destination"]["fid"], "9007199254740993");
-    assert!(row["origin"]["part"].is_null());
+    assert!(matches!(
+        row.geometry.value,
+        geojson::Value::GeometryCollection(_)
+    ));
+    let origin = row.origin.as_ref().unwrap();
+    assert_eq!(origin.fid, "-12");
+    assert_eq!(row.destination.as_ref().unwrap().fid, "9007199254740993");
+    assert!(origin.part.is_none());
     assert_eq!(
         export::geojson(&result).unwrap()["features"]
             .as_array()
@@ -109,7 +114,7 @@ fn binary_mixed_geometry_results_match_direct_core_and_preserve_counts_in_export
     );
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("report.gpkg");
-    export::geopackage(&result, &path).unwrap();
+    export::dataset(&result, &path).unwrap();
     let read = topology_checker_io::read::read_with_attributes(&path, None, "report", true)
         .unwrap()
         .remove(0);
@@ -118,6 +123,41 @@ fn binary_mixed_geometry_results_match_direct_core_and_preserve_counts_in_export
         read.layer.features().next().unwrap().1,
         Geometry::GeometryCollection(_)
     ));
+    // The web export shares the CLI report columns.
+    let attributes = &read.attributes[0];
+    let mut columns = attributes.keys().map(String::as_str).collect::<Vec<_>>();
+    columns.sort_unstable();
+    assert_eq!(
+        columns,
+        [
+            "destination_fid",
+            "destination_layer",
+            "destination_part",
+            "error_type",
+            "origin_fid",
+            "origin_layer",
+            "origin_part",
+            "rule",
+            "violation_id",
+        ]
+    );
+    assert_eq!(attributes["violation_id"], 0);
+    assert_eq!(attributes["origin_fid"], -12);
+    assert_eq!(attributes["origin_part"], Value::Null);
+    for extension in ["fgb", "parquet", "kml", "kmz"] {
+        let path = dir.path().join(format!("report.{extension}"));
+        export::dataset(&result, &path).unwrap();
+        let read = topology_checker_io::read::read(&path, None, "report").unwrap();
+        assert_eq!(read[0].layer.len(), 1, "{extension}");
+        assert!(
+            matches!(
+                read[0].layer.features().next().unwrap().1,
+                Geometry::GeometryCollection(_)
+            ),
+            "{extension}"
+        );
+    }
+    assert!(export::dataset(&result, &dir.path().join("report.gpx")).is_err());
 }
 #[test]
 fn viewport_limits_do_not_limit_validation_and_paginate_aggregated_violations() {
@@ -136,27 +176,15 @@ fn viewport_limits_do_not_limit_validation_and_paginate_aggregated_violations() 
         None,
     );
     let prepared = prepare(&cfg, &sources).unwrap();
-    let preview = prepared[0]
+    let preview = prepared.layers[0]
         .viewport([-1., -1., 13000., 2.], None, false)
         .unwrap();
-    assert_eq!(preview["features"].as_array().unwrap().len(), FEATURE_LIMIT);
-    assert_eq!(preview["incomplete"], true);
-    let result = ValidationResult::run(1, cfg, prepared).unwrap();
-    assert_eq!(result.report.error_count(), 12_001);
-    assert_eq!(
-        result.page(0).unwrap()["violations"]
-            .as_array()
-            .unwrap()
-            .len(),
-        100
-    );
-    assert_eq!(
-        result.page(120).unwrap()["violations"]
-            .as_array()
-            .unwrap()
-            .len(),
-        1
-    );
+    assert_eq!(preview.features.len(), FEATURE_LIMIT);
+    assert!(preview.incomplete);
+    let result = ValidationResult::run(1, cfg, &prepared).unwrap();
+    assert_eq!(result.report.violation_count(), 12_001);
+    assert_eq!(result.page(0).unwrap().violations.len(), 100);
+    assert_eq!(result.page(120).unwrap().violations.len(), 1);
     assert!(result.page(usize::MAX).is_err());
 }
 #[test]
@@ -168,16 +196,17 @@ fn oversized_geometry_is_omitted_from_preview_without_simplification() {
     );
     let sources = vec![source("long", None, vec![(-12, line.into())])];
     let prepared = prepare(&config(&sources, vec![], None), &sources).unwrap();
-    let viewport = prepared[0]
+    let viewport = prepared.layers[0]
         .viewport([-1., -1., 1e6, 1.], None, false)
         .unwrap();
-    assert!(viewport["features"].as_array().unwrap().is_empty());
-    assert_eq!(viewport["incomplete"], true);
-    assert_eq!(sources[0].features[0].1, prepared[0].features[0].1);
+    assert!(viewport.features.is_empty());
+    assert!(viewport.incomplete);
+    // Geometry already in the working CRS is shared, not copied.
+    assert!(Arc::ptr_eq(&sources[0].layer, &prepared.layers[0].layer));
 }
 #[test]
 fn mixed_crs_reprojection_source_assignment_and_display_coordinates_are_separate() {
-    let projected = gdal::spatial_ref::CoordTransform::new(
+    let projected = topology_checker_io::Transform::new(
         &topology_checker_io::crs::parse("EPSG:4326").unwrap(),
         &topology_checker_io::crs::parse("EPSG:3857").unwrap(),
     )
@@ -201,13 +230,17 @@ fn mixed_crs_reprojection_source_assignment_and_display_coordinates_are_separate
         Some("EPSG:3857"),
     );
     let prepared = prepare(&cfg, &sources).unwrap();
-    assert_eq!(prepared[0].features[0].1, g);
-    assert_eq!(sources[0].features[0].1, Point::new(5., 52.).into());
+    assert_eq!(prepared.layers[0].layer.feature(0).unwrap().1, &g);
     assert_eq!(
-        ValidationResult::run(1, cfg, prepared)
+        sources[0].layer.feature(0).unwrap().1,
+        &Point::new(5., 52.).into()
+    );
+    assert!(!Arc::ptr_eq(&sources[0].layer, &prepared.layers[0].layer));
+    assert_eq!(
+        ValidationResult::run(1, cfg, &prepared)
             .unwrap()
             .report
-            .error_count(),
+            .violation_count(),
         1
     );
     let unknown = vec![source(
@@ -226,21 +259,22 @@ fn mixed_crs_reprojection_source_assignment_and_display_coordinates_are_separate
     assert!(prepare(&cfg, &unknown).is_ok());
     let geographic = config(&sources[..1], vec![], Some("EPSG:4326"));
     let prepared = prepare(&geographic, &sources[..1]).unwrap();
-    let display = prepared[0]
+    let display = prepared.layers[0]
         .viewport(
             [500000., 6700000., 600000., 6900000.],
             Some("EPSG:4326"),
             true,
         )
         .unwrap();
-    assert_eq!(display["features"].as_array().unwrap().len(), 1);
-    assert!(
-        display["features"][0]["geometry"]["coordinates"][0]
-            .as_f64()
-            .unwrap()
-            > 500000.
+    assert_eq!(display.features.len(), 1);
+    let geojson::Value::Point(point) = &display.features[0].geometry.value else {
+        panic!("expected a point");
+    };
+    assert!(point[0] > 500000.);
+    assert_eq!(
+        prepared.layers[0].layer.feature(0).unwrap().1,
+        &Point::new(5., 52.).into()
     );
-    assert_eq!(prepared[0].features[0].1, Point::new(5., 52.).into());
 }
 #[test]
 fn tolerance_changes_match_core_and_incompatible_checks_are_rejected() {
@@ -258,16 +292,16 @@ fn tolerance_changes_match_core_and_incompatible_checks_are_rejected() {
         None,
     );
     let run = |cfg: Config| {
-        ValidationResult::run(1, cfg.clone(), prepare(&cfg, &sources).unwrap()).unwrap()
+        ValidationResult::run(1, cfg.clone(), &prepare(&cfg, &sources).unwrap()).unwrap()
     };
-    assert_eq!(run(cfg.clone()).report.error_count(), 0);
+    assert_eq!(run(cfg.clone()).report.violation_count(), 0);
     cfg.tolerance = 0.1;
-    assert_eq!(run(cfg.clone()).report.error_count(), 1);
+    assert_eq!(run(cfg.clone()).report.violation_count(), 1);
     assert!(
-        run(cfg.clone()).summary()["warnings"]
-            .as_array()
-            .unwrap()
-            .contains(&Value::String("source warning".into()))
+        run(cfg.clone())
+            .summary()
+            .warnings
+            .contains(&"source warning".to_string())
     );
     cfg.checks[0].rule = Rule::LineMustNotHaveDangles;
     assert!(normalize_config(&mut cfg.clone(), &cfg, &sources).is_err());
@@ -280,10 +314,10 @@ fn clean_geopackage_and_raw_xy_exports_have_explicit_behavior() {
         vec![check(Rule::GeometryMustNotBeMultipart, "empty", None)],
         Some("EPSG:3857"),
     );
-    let result = ValidationResult::run(1, cfg.clone(), prepare(&cfg, &sources).unwrap()).unwrap();
+    let result = ValidationResult::run(1, cfg.clone(), &prepare(&cfg, &sources).unwrap()).unwrap();
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("empty.gpkg");
-    export::geopackage(&result, &path).unwrap();
+    export::dataset(&result, &path).unwrap();
     assert!(
         topology_checker_io::read::read(&path, None, "empty").unwrap()[0]
             .layer
@@ -294,7 +328,7 @@ fn clean_geopackage_and_raw_xy_exports_have_explicit_behavior() {
         vec![check(Rule::GeometryMustNotBeMultipart, "empty", None)],
         None,
     );
-    let result = ValidationResult::run(1, raw.clone(), prepare(&raw, &sources).unwrap()).unwrap();
+    let result = ValidationResult::run(1, raw.clone(), &prepare(&raw, &sources).unwrap()).unwrap();
     assert!(export::geojson(&result).is_err());
 }
 #[test]
@@ -313,10 +347,55 @@ fn all_geometry_collection_components_stay_one_violation() {
         vec![check(Rule::GeometryMustNotBeMultipart, "collection", None)],
         None,
     );
-    let result = ValidationResult::run(1, cfg.clone(), prepare(&cfg, &sources).unwrap()).unwrap();
-    assert_eq!(result.report.error_count(), 1);
+    let result = ValidationResult::run(1, cfg.clone(), &prepare(&cfg, &sources).unwrap()).unwrap();
+    assert_eq!(result.report.violation_count(), 1);
     assert_eq!(
-        result.report.errors().next().unwrap().geometry,
+        result.report.violations().next().unwrap().geometry,
         Geometry::GeometryCollection(geometry)
     );
+}
+#[test]
+fn reused_topology_matches_fresh_validation_across_rules_and_tolerances() {
+    let sources = vec![source(
+        "roads",
+        None,
+        vec![
+            (1, LineString::from(vec![(0., 0.), (2., 0.)]).into()),
+            (2, LineString::from(vec![(1., -1.), (1., 0.05)]).into()),
+        ],
+    )];
+    let mut cfg = config(
+        &sources,
+        vec![check(Rule::LineMustNotHaveDangles, "roads", None)],
+        None,
+    );
+    let prepared = prepare(&cfg, &sources).unwrap();
+    let count = |cfg: &Config, prepared: &Prepared| {
+        ValidationResult::run(1, cfg.clone(), prepared)
+            .unwrap()
+            .report
+            .violation_count()
+    };
+    let mut counts = Vec::new();
+    for (rule, tolerance) in [
+        (Rule::LineMustNotHaveDangles, 0.),
+        (Rule::LineMustNotIntersect, 0.),
+        (Rule::LineMustNotHaveDangles, 0.1),
+        (Rule::LineMustNotIntersectOrTouchInterior, 0.1),
+        (Rule::LineMustNotHaveDangles, 0.),
+    ] {
+        cfg.checks = vec![check(rule, "roads", None)];
+        cfg.tolerance = tolerance;
+        let reused = count(&cfg, &prepared);
+        assert_eq!(
+            reused,
+            count(&cfg, &prepare(&cfg, &sources).unwrap()),
+            "{rule} at {tolerance}"
+        );
+        counts.push(reused);
+    }
+    // The near miss becomes a junction within tolerance.
+    assert_eq!(counts[0], 4);
+    assert_eq!(counts[2], 3);
+    assert_eq!(counts[4], 4);
 }

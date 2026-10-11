@@ -4,20 +4,46 @@ import { download, jsonBody, request } from "./api";
 import type {
   Config,
   Example,
-  Job,
+  Format,
+  GeometryKind,
+  JobPoll,
   MapFeature,
   Page,
-  Rule,
-  Summary,
+  RuleInfo,
   Violation,
   Workspace,
 } from "./types";
-export function compatible(kinds: string[], required: string): boolean {
+// A UI filter only: the server validates rule inputs with the core's own checks.
+export function compatible(
+  kinds: GeometryKind[],
+  required: GeometryKind,
+): boolean {
   return required === "any" || kinds.every((k) => k === required);
 }
 export const useWorkspace = defineStore("workspace", () => {
   const ws = ref<Workspace | null>(null);
-  const rules = ref<Rule[]>([]);
+  const rules = ref<RuleInfo[]>([]);
+  const formats = ref<Format[]>([]);
+  const importAccept = computed(() =>
+    [
+      ...formats.value
+        .filter((f) => f.native && f.read && f.name !== "ESRI Shapefile")
+        .flatMap((f) => f.extensions.map((e) => `.${e}`)),
+      ".zip",
+    ].join(","),
+  );
+  const exportFormats = computed(() =>
+    formats.value
+      .filter((f) => f.native && f.write && f.web_export)
+      .flatMap((f) =>
+        f.extensions
+          .filter((e) => e !== "json" && e !== "geoparquet")
+          .map((extension) => ({
+            extension,
+            label: `${f.name === "GPKG" ? "GeoPackage" : f.name}${extension === "kmz" ? " (KMZ)" : ""} · ${["GeoJSON", "KML", "GPX"].includes(f.name) ? "WGS84" : "working CRS"}`,
+          })),
+      ),
+  );
   const busy = ref(false);
   const examples = ref<Example[]>([]);
   const galleryOpen = ref(false);
@@ -51,6 +77,8 @@ export const useWorkspace = defineStore("workspace", () => {
   let pageVersion = 0;
   let pollVersion = 0;
   let operations = 0;
+  // Imports chosen while the page is still loading wait for the workspace.
+  let initialized: Promise<void> | undefined;
   async function perform<T>(work: () => Promise<T>): Promise<T | undefined> {
     const context = contextVersion;
     operations++;
@@ -96,15 +124,23 @@ export const useWorkspace = defineStore("workspace", () => {
         void inspect(priorInspection.layer, priorInspection.id);
     }
   }
-  async function initialize() {
+  function initialize() {
+    initialized = load();
+    return initialized;
+  }
+  async function load() {
     await perform(async () => {
-      rules.value = await request<Rule[]>("/rules");
+      rules.value = await request<RuleInfo[]>("/rules");
+      formats.value = await request<Format[]>("/formats");
       const saved = sessionStorage.getItem("topology-workspace");
       if (saved) {
         try {
           adopt(await request<Workspace>(`/workspaces/${saved}`));
         } catch {
+          // Idle workspaces are discarded by the server after several hours.
           adopt(await request<Workspace>("/workspaces", { method: "POST" }));
+          error.value =
+            "Your previous workspace has expired, so a new one was started.";
         }
       } else {
         adopt(await request<Workspace>("/workspaces", { method: "POST" }));
@@ -142,8 +178,10 @@ export const useWorkspace = defineStore("workspace", () => {
       error.value = "Upload exceeds 512 MiB";
       return;
     }
+    await initialized;
+    if (!ws.value) return;
     if (dirty.value && !(await apply())) return;
-    await replace(`/workspaces/${ws.value!.id}/uploads`, file);
+    await replace(`/workspaces/${ws.value.id}/uploads`, file);
   }
   async function apply(config = draft.value!): Promise<boolean> {
     let succeeded = false;
@@ -184,10 +222,7 @@ export const useWorkspace = defineStore("workspace", () => {
     const version = ++pollVersion;
     pollTimer = setTimeout(async () => {
       try {
-        const response = await request<{
-          job: Job | null;
-          result: Summary | null;
-        }>(`/workspaces/${id}/job`);
+        const response = await request<JobPoll>(`/workspaces/${id}/job`);
         if (ws.value?.id !== id || version !== pollVersion) return;
         ws.value.job = response.job;
         ws.value.result =
@@ -288,6 +323,9 @@ export const useWorkspace = defineStore("workspace", () => {
     openExamples,
     loadExample,
     rules,
+    formats,
+    importAccept,
+    exportFormats,
     busy,
     error,
     page,

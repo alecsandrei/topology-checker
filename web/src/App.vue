@@ -94,7 +94,7 @@ onMounted(() => store.initialize());
         ref="uploadInput"
         type="file"
         multiple
-        accept=".geojson,.json,.gpkg,.fgb,.zip"
+        :accept="store.importAccept"
         hidden
         @change="upload"
       /><input
@@ -142,15 +142,12 @@ onMounted(() => store.initialize());
                 @select="store.exportReport('json')"
                 >Complete JSON report</DropdownMenuItem
               ><DropdownMenuItem
+                v-for="format in store.exportFormats"
+                :key="format.extension"
                 class="dropdown-item"
                 :disabled="!store.ws?.config.working_crs"
-                @select="store.exportReport('geojson')"
-                >GeoJSON · WGS84</DropdownMenuItem
-              ><DropdownMenuItem
-                class="dropdown-item"
-                :disabled="!store.ws?.config.working_crs"
-                @select="store.exportReport('gpkg')"
-                >GeoPackage · working CRS</DropdownMenuItem
+                @select="store.exportReport(format.extension)"
+                >{{ format.label }}</DropdownMenuItem
               ></DropdownMenuContent
             ></DropdownMenuPortal
           ></DropdownMenuRoot

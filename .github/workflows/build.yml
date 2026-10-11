@@ -33,21 +33,25 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-      - name: Install sqlite3 (Linux)
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y sqlite3
-      - name: Install sqlite3 (Windows)
-        if: runner.os == 'Windows'
-        run: |
-          choco install sqlite -y --no-progress
-          echo "C:\ProgramData\chocolatey\lib\SQLite\tools" >> $env:GITHUB_PATH
       - uses: Swatinem/rust-cache@v2
       - name: Format
         run: cargo fmt --check
+      - name: Check native GIS dependencies
+        if: runner.os == 'Linux'
+        run: bash .github/workflows/native-dependencies.sh
       - name: Build
         run: cargo build --workspace --release --locked
       - name: Test
         run: cargo test --workspace --release --locked
+      - name: Generated TypeScript bindings are current
+        if: runner.os == 'Linux'
+        run: |
+          changes=$(git status --porcelain -- web/src/generated)
+          if [ -n "$changes" ]; then
+            echo "$changes"
+            echo "Run cargo test and commit web/src/generated."
+            exit 1
+          fi
       - name: Clippy
         run: cargo clippy --workspace --all-targets --release --locked -- -D warnings
       - name: Smoke test
@@ -65,8 +69,8 @@ jobs:
       - name: Package local application
         shell: bash
         run: |
-          mkdir -p builds/package/web
-          cp -R web/dist/. builds/package/web/
+          # The web binary embeds web/dist, built in an earlier step.
+          mkdir -p builds/package
           cp README.md builds/package/README.md
           cp crates/server/examples/DATA-LICENSE.md builds/package/DATA-LICENSE.md
           if [[ -f target/release/topology-checker.exe ]]; then
@@ -85,6 +89,42 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.88.0
-      - run: sudo apt-get update && sudo apt-get install -y sqlite3
       - uses: Swatinem/rust-cache@v2
       - run: cargo check --workspace --all-targets --locked
+  gdal-interoperability:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Frontend preparation
+        run: |
+          npm ci --prefix web
+          npm test --prefix web
+          npm run build --prefix web
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: clippy
+      - run: sudo apt-get update && sudo apt-get install -y cmake sqlite3 ripgrep
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: gdal-bundled
+      - name: Bundled GDAL interoperability and application regression tests
+        run: cargo test -p topology-checker-io -p topology-checker -p topology-checker-web --features gdal --locked
+      - name: GDAL feature lint checks
+        run: cargo clippy -p topology-checker-io -p topology-checker -p topology-checker-web --all-targets --features gdal --locked -- -D warnings
+      - name: Bundled GDAL browser regression tests
+        env:
+          TOPOLOGY_WEB_EXECUTABLE: ./target/debug/topology-checker-web
+        run: |
+          cargo build -p topology-checker-web --features gdal --locked
+          cd web
+          npx playwright install --with-deps chromium
+          npm run test:browser
+      - name: System GDAL compatibility
+        run: |
+          sudo apt-get install -y libgdal-dev gdal-bin
+          cargo test -p topology-checker-io -p topology-checker -p topology-checker-web --features gdal-system --locked

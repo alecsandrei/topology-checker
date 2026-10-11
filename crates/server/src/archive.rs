@@ -74,7 +74,7 @@ pub fn extract_with_budget(
             .to_ascii_lowercase();
         let supported = if project {
             relative == Path::new("manifest.json")
-                || matches!(ext.as_str(), "geojson" | "json" | "gpkg" | "fgb" | "zip")
+                || topology_checker_io::registry::project_extension(&ext)
         } else {
             matches!(
                 ext.as_str(),

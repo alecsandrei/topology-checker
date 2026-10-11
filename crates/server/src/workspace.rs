@@ -1,7 +1,10 @@
-use crate::{archive, model::*};
+use crate::{
+    archive,
+    dto::{CrsInfo, DatasetView, Job, JobPoll, JobStatus, WorkspaceView},
+    model::*,
+};
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -11,26 +14,45 @@ use tempfile::TempDir;
 use topology_checker_io::read;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Serialize)]
-pub struct Job {
-    pub id: String,
-    pub revision: u64,
-    pub status: String,
-    pub message: Option<String>,
-    pub config: Config,
-}
+/// Imported datasets, their configuration and the latest validation job.
+///
+/// Edits follow one pattern: take a [`Snapshot`] under the lock, do slow work such as
+/// reading or reprojecting outside it, then commit with the snapshot. A commit fails
+/// when another edit landed in between, so a client retries rather than losing work.
 #[derive(Debug)]
 pub struct Workspace {
-    pub id: String,
-    pub storage: TempDir,
-    pub sources: Vec<DatasetSource>,
-    pub layers: Vec<Arc<SourceLayer>>,
-    pub prepared: Vec<Arc<IndexedLayer>>,
+    id: String,
+    storage: TempDir,
+    sources: Vec<DatasetSource>,
+    layers: Vec<Arc<SourceLayer>>,
+    prepared: Arc<Prepared>,
+    config: Config,
+    /// The parsed working CRS, kept with `config` so responses do not parse it again.
+    crs_info: Option<CrsInfo>,
+    /// Results generation shared with clients. Any edit that can change validation
+    /// results increments it and discards the current result.
+    revision: u64,
+    /// Concurrency token incremented by every committed edit.
+    edit_version: u64,
+    job: Option<Job>,
+    result: Option<Arc<ValidationResult>>,
+}
+/// Workspace state captured under the lock for preparing an edit outside it.
+#[derive(Debug, Clone)]
+pub struct Snapshot {
+    pub root: PathBuf,
     pub config: Config,
+    pub layers: Vec<Arc<SourceLayer>>,
+    pub prepared: Arc<Prepared>,
+    edit_version: u64,
+}
+/// The inputs of a started validation job.
+#[derive(Debug)]
+pub struct JobTicket {
+    pub id: String,
     pub revision: u64,
-    pub version: u64,
-    pub job: Option<Job>,
-    pub result: Option<Arc<ValidationResult>>,
+    pub config: Config,
+    pub prepared: Arc<Prepared>,
 }
 impl Workspace {
     /// Create a temporary local workspace.
@@ -43,18 +65,179 @@ impl Workspace {
             storage: tempfile::tempdir()?,
             sources: vec![],
             layers: vec![],
-            prepared: vec![],
+            prepared: Arc::default(),
             config: Config::default(),
+            crs_info: None,
             revision: 0,
-            version: 0,
+            edit_version: 0,
             job: None,
             result: None,
         })
     }
-    pub fn json(&self) -> Value {
-        json!({"id":self.id,"revision":self.revision,"config":self.config,"working_crs_info":self.config.working_crs.as_deref().and_then(|c|crs_info(c).ok()),"datasets":self.sources.iter().map(|s|json!({"id":s.id,"filename":s.filename,"provenance":s.provenance})).collect::<Vec<_>>(),"layers":layer_metadata(&self.layers,&self.prepared,&self.config),"job":self.job,"result":self.result.as_ref().map(|r|r.summary())})
+    #[must_use]
+    pub fn id(&self) -> &str {
+        &self.id
     }
-    pub fn invalidate(&mut self) {
+    /// The temporary directory holding original and extracted sources.
+    #[must_use]
+    pub fn root(&self) -> &Path {
+        self.storage.path()
+    }
+    #[must_use]
+    pub fn config(&self) -> &Config {
+        &self.config
+    }
+    #[must_use]
+    pub fn sources(&self) -> &[DatasetSource] {
+        &self.sources
+    }
+    #[must_use]
+    pub fn layers(&self) -> &[Arc<SourceLayer>] {
+        &self.layers
+    }
+    #[must_use]
+    pub fn prepared(&self) -> &Arc<Prepared> {
+        &self.prepared
+    }
+    /// The result of the latest completed job for the current revision.
+    #[must_use]
+    pub fn result(&self) -> Option<Arc<ValidationResult>> {
+        self.result.clone()
+    }
+    #[must_use]
+    pub fn job_running(&self) -> bool {
+        self.job
+            .as_ref()
+            .is_some_and(|j| j.status == JobStatus::Running)
+    }
+    #[must_use]
+    pub fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            root: self.root().to_path_buf(),
+            config: self.config.clone(),
+            layers: self.layers.clone(),
+            prepared: Arc::clone(&self.prepared),
+            edit_version: self.edit_version,
+        }
+    }
+    fn set_config(&mut self, config: Config) {
+        self.crs_info = config.working_crs.as_deref().and_then(|c| crs_info(c).ok());
+        self.config = config;
+    }
+    /// Set the configuration of a workspace that is not shared yet and prepare its layers.
+    ///
+    /// # Errors
+    /// Returns an error if the working geometry cannot be prepared.
+    pub(crate) fn initialize(&mut self, config: Config) -> Result<()> {
+        self.prepared = prepare(&config, &self.layers)?;
+        self.set_config(config);
+        Ok(())
+    }
+    /// Apply a normalized configuration and the layers prepared for it from `snapshot`.
+    ///
+    /// # Errors
+    /// Returns an error if another edit was committed after the snapshot.
+    pub fn commit_config(
+        &mut self,
+        snapshot: &Snapshot,
+        config: Config,
+        prepared: Arc<Prepared>,
+    ) -> Result<()> {
+        if snapshot.edit_version != self.edit_version {
+            bail!("workspace changed during configuration; retry");
+        }
+        let invalidates = config.validation_differs(&self.config);
+        self.set_config(config);
+        self.prepared = prepared;
+        self.edit_version += 1;
+        if invalidates {
+            self.invalidate();
+        }
+        Ok(())
+    }
+    /// Accept an import prepared from `snapshot`, keeping its copied files.
+    ///
+    /// # Errors
+    /// Returns an error if another edit was committed after the snapshot. The pending
+    /// import then removes its files when dropped.
+    pub(crate) fn commit_import(
+        &mut self,
+        snapshot: &Snapshot,
+        addition: Addition,
+        pending: PendingImport,
+    ) -> Result<()> {
+        if snapshot.edit_version != self.edit_version {
+            bail!("workspace changed during import; retry upload");
+        }
+        addition.apply(self, pending.commit());
+        Ok(())
+    }
+    /// Record a running job for the current configuration and discard the old result.
+    pub fn start_job(&mut self) -> JobTicket {
+        let ticket = JobTicket {
+            id: Uuid::new_v4().to_string(),
+            revision: self.revision,
+            config: self.config.clone(),
+            prepared: Arc::clone(&self.prepared),
+        };
+        self.result = None;
+        self.job = Some(Job {
+            id: ticket.id.clone(),
+            revision: ticket.revision,
+            status: JobStatus::Running,
+            message: None,
+            config: ticket.config.clone(),
+        });
+        ticket
+    }
+    /// Store a job's outcome. A result for an outdated revision is reported as stale.
+    pub fn finish_job(&mut self, ticket: &JobTicket, outcome: Result<ValidationResult>) {
+        let stale = self.revision != ticket.revision;
+        let (status, message) = match outcome {
+            Ok(result) if !stale => {
+                self.result = Some(Arc::new(result));
+                (JobStatus::Completed, None)
+            }
+            Ok(_) => (
+                JobStatus::Stale,
+                Some("workspace changed; run checks again".into()),
+            ),
+            Err(e) => (JobStatus::Failed, Some(format!("{e:#}"))),
+        };
+        if let Some(job) = self.job.as_mut().filter(|j| j.id == ticket.id) {
+            job.status = status;
+            job.message = message;
+        }
+    }
+    #[must_use]
+    pub fn poll(&self) -> JobPoll {
+        JobPoll {
+            job: self.job.clone(),
+            result: self.result.as_ref().map(|r| r.summary()),
+        }
+    }
+    #[must_use]
+    pub fn to_view(&self) -> WorkspaceView {
+        WorkspaceView {
+            id: self.id.clone(),
+            revision: self.revision,
+            config: self.config.clone(),
+            working_crs_info: self.crs_info.clone(),
+            datasets: self
+                .sources
+                .iter()
+                .map(|s| DatasetView {
+                    id: s.id.clone(),
+                    filename: s.filename.clone(),
+                    provenance: s.provenance.clone(),
+                })
+                .collect(),
+            layers: layer_metadata(&self.layers, &self.prepared),
+            job: self.job.clone(),
+            result: self.result.as_ref().map(|r| r.summary()),
+        }
+    }
+    fn invalidate(&mut self) {
         self.revision += 1;
         self.result = None;
     }
@@ -104,11 +287,12 @@ impl Drop for PendingImport {
     }
 }
 
+/// Layers and configuration prepared outside the lock for an import.
 #[derive(Debug)]
 pub(crate) struct Addition {
     config: Config,
     layers: Vec<Arc<SourceLayer>>,
-    prepared: Vec<Arc<IndexedLayer>>,
+    prepared: Arc<Prepared>,
 }
 impl Addition {
     pub fn prepare(
@@ -135,19 +319,19 @@ impl Addition {
             prepared,
         })
     }
-    pub fn commit(self, ws: &mut Workspace, source: DatasetSource) {
+    fn apply(self, ws: &mut Workspace, source: DatasetSource) {
         ws.layers = self.layers;
         ws.sources.push(source);
-        ws.config = self.config;
+        ws.set_config(self.config);
         ws.prepared = self.prepared;
-        ws.version += 1;
+        ws.edit_version += 1;
         ws.invalidate();
     }
 }
 /// Read an uploaded dataset and preserve original geometry and attributes.
 ///
 /// # Errors
-/// Returns an error for unsupported content, invalid archives or failed GDAL reads.
+/// Returns an error for unsupported content, invalid archives or failed vector reads.
 pub fn import(source: &DatasetSource, root: &Path) -> Result<Vec<Arc<SourceLayer>>> {
     let mut remaining = archive::EXPANSION_LIMIT;
     import_with_budget(source, root, &mut remaining)
@@ -176,10 +360,12 @@ fn import_with_budget(
             bail!("ZIP contains no Shapefiles");
         }
         files
-    } else if matches!(extension.as_str(), "geojson" | "json" | "gpkg" | "fgb") {
+    } else if topology_checker_io::registry::for_path(&path)
+        .is_some_and(|f| f.native && f.read && f.name != "ESRI Shapefile")
+    {
         vec![path]
     } else {
-        bail!("upload GeoJSON, GeoPackage, FlatGeobuf or a zipped Shapefile");
+        bail!("upload a supported vector file or a zipped Shapefile");
     };
     let mut layers = Vec::new();
     for member in members {
@@ -188,12 +374,6 @@ fn import_with_budget(
             .and_then(|x| x.to_str())
             .unwrap_or("dataset");
         for data in read::read_with_attributes(&member, None, alias, true)? {
-            let features = data
-                .layer
-                .features()
-                .map(|(fid, g)| (fid, g.clone()))
-                .collect::<Vec<_>>();
-            let kinds = kinds(&features);
             layers.push(Arc::new(SourceLayer {
                 id: Uuid::new_v4().to_string(),
                 dataset: source.id.clone(),
@@ -202,15 +382,15 @@ fn import_with_budget(
                 name: data.layer.name().to_string(),
                 crs: data.srs.map(|s| s.to_wkt()).transpose()?,
                 warnings: data.warnings,
-                features,
+                kinds: kinds(&data.layer),
+                layer: Arc::new(data.layer),
                 attributes: Arc::new(data.attributes),
-                kinds,
             }));
         }
     }
     Ok(layers)
 }
-/// Add an imported dataset to a workspace.
+/// Add an imported dataset to a workspace that is not shared yet.
 ///
 /// # Errors
 /// Returns an error if the prospective working geometry cannot be prepared.
@@ -219,7 +399,7 @@ pub fn append(
     source: DatasetSource,
     layers: Vec<Arc<SourceLayer>>,
 ) -> Result<()> {
-    Addition::prepare(ws.config.clone(), ws.layers.clone(), layers)?.commit(ws, source);
+    Addition::prepare(ws.config.clone(), ws.layers.clone(), layers)?.apply(ws, source);
     Ok(())
 }
 #[derive(Debug, Serialize, Deserialize)]
@@ -393,8 +573,7 @@ pub fn reopen(path: &Path) -> Result<Workspace> {
     let mut config = manifest.config;
     let old = config.clone(); // Preserve a saved explicit tolerance on reopen.
     normalize_config(&mut config, &old, &ws.layers)?;
-    ws.prepared = prepare(&config, &ws.layers)?;
-    ws.config = config;
+    ws.initialize(config)?;
     Ok(ws)
 }
 
@@ -440,24 +619,84 @@ mod tests {
         let incoming = tempfile::tempdir().unwrap();
         let path = incoming.path().join("data.geojson");
         fs::write(&path, include_str!("../example.geojson")).unwrap();
-        let pending = PendingImport::copy(ws.storage.path(), "data.geojson".into(), &path).unwrap();
-        let layers = import(&pending.source, ws.storage.path()).unwrap();
-        let _addition = Addition::prepare(ws.config.clone(), ws.layers.clone(), layers).unwrap();
-        let original = ws.storage.path().join(&pending.source.path);
-        // A concurrent configuration change can reject an otherwise valid import.
-        ws.version += 1;
-        drop(pending);
+        let prepare_import = |ws: &Workspace| {
+            let snapshot = ws.snapshot();
+            let pending =
+                PendingImport::copy(&snapshot.root, "data.geojson".into(), &path).unwrap();
+            let layers = import(&pending.source, &snapshot.root).unwrap();
+            let addition =
+                Addition::prepare(snapshot.config.clone(), snapshot.layers.clone(), layers)
+                    .unwrap();
+            let original = snapshot.root.join(&pending.source.path);
+            (snapshot, pending, addition, original)
+        };
+        let (snapshot, pending, addition, original) = prepare_import(&ws);
+        // A concurrent configuration change rejects an otherwise valid import.
+        let mut changed = ws.config().clone();
+        changed.tolerance = 1.;
+        ws.commit_config(&ws.snapshot(), changed, Arc::clone(ws.prepared()))
+            .unwrap();
+        assert!(ws.commit_import(&snapshot, addition, pending).is_err());
         assert!(!original.exists());
         assert!(ws.sources.is_empty());
+        assert_eq!(ws.revision, 1);
 
-        let pending = PendingImport::copy(ws.storage.path(), "data.geojson".into(), &path).unwrap();
-        let layers = import(&pending.source, ws.storage.path()).unwrap();
-        let addition = Addition::prepare(ws.config.clone(), ws.layers.clone(), layers).unwrap();
-        let original = ws.storage.path().join(&pending.source.path);
-        addition.commit(&mut ws, pending.commit());
+        let (snapshot, pending, addition, original) = prepare_import(&ws);
+        ws.commit_import(&snapshot, addition, pending).unwrap();
         assert!(original.exists());
         assert_eq!(ws.sources.len(), 1);
         assert_eq!(ws.layers.len(), 1);
-        assert_eq!(ws.revision, 1);
+        assert_eq!(ws.revision, 2);
+    }
+
+    #[test]
+    fn appearance_edits_keep_results_and_late_results_are_stale() {
+        let mut ws = Workspace::new().unwrap();
+        let incoming = tempfile::tempdir().unwrap();
+        let path = incoming.path().join("streets.geojson");
+        fs::write(&path, include_str!("../example.geojson")).unwrap();
+        let snapshot = ws.snapshot();
+        let pending = PendingImport::copy(&snapshot.root, "streets.geojson".into(), &path).unwrap();
+        let layers = import(&pending.source, &snapshot.root).unwrap();
+        let addition =
+            Addition::prepare(snapshot.config.clone(), snapshot.layers.clone(), layers).unwrap();
+        ws.commit_import(&snapshot, addition, pending).unwrap();
+        let mut config = ws.config().clone();
+        config.checks.push(Check {
+            rule: topology_checker_core::Rule::LineMustNotHaveDangles,
+            layer: ws.layers[0].id.clone(),
+            other: None,
+            enabled: true,
+        });
+        ws.commit_config(&ws.snapshot(), config, Arc::clone(ws.prepared()))
+            .unwrap();
+        let revision = ws.revision;
+
+        let ticket = ws.start_job();
+        assert!(ws.job_running());
+        let mut appearance = ws.config().clone();
+        appearance.view.basemap = true;
+        appearance.layers[0].color = "#000000".into();
+        ws.commit_config(&ws.snapshot(), appearance, Arc::clone(ws.prepared()))
+            .unwrap();
+        assert_eq!(ws.revision, revision, "appearance does not change results");
+        let result =
+            ValidationResult::run(ticket.revision, ticket.config.clone(), &ticket.prepared);
+        ws.finish_job(&ticket, result);
+        assert_eq!(ws.poll().job.unwrap().status, JobStatus::Completed);
+        assert!(ws.result().is_some());
+
+        let ticket = ws.start_job();
+        let result =
+            ValidationResult::run(ticket.revision, ticket.config.clone(), &ticket.prepared);
+        let mut tolerance = ws.config().clone();
+        tolerance.tolerance = 0.5;
+        ws.commit_config(&ws.snapshot(), tolerance, Arc::clone(ws.prepared()))
+            .unwrap();
+        ws.finish_job(&ticket, result);
+        let poll = ws.poll();
+        assert_eq!(poll.job.unwrap().status, JobStatus::Stale);
+        assert!(poll.result.is_none());
+        assert!(!ws.job_running());
     }
 }

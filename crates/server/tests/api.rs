@@ -66,6 +66,108 @@ async fn completed(app: &Router, id: &str) -> Value {
     panic!("validation did not complete")
 }
 #[tokio::test]
+async fn registry_formats_export_import_and_project_reopen() {
+    let app = api(AppState::default());
+    let (status, formats) = call(&app, "GET", "/formats", Value::Null).await;
+    assert_eq!(status, StatusCode::OK);
+    let formats = formats.as_array().unwrap();
+    for name in [
+        "GeoJSON",
+        "GPKG",
+        "FlatGeobuf",
+        "GeoParquet",
+        "KML",
+        "GPX",
+        "ESRI Shapefile",
+    ] {
+        assert!(
+            formats
+                .iter()
+                .any(|f| f["name"] == name && f["native"] == true)
+        );
+    }
+    let (_, ws) = call(&app, "POST", "/example", Value::Null).await;
+    let id = ws["id"].as_str().unwrap();
+    call(&app, "POST", &format!("/workspaces/{id}/runs"), Value::Null).await;
+    let result = completed(&app, id).await;
+    let count = result["result"]["total"].as_u64().unwrap() as usize;
+    let dir = tempfile::tempdir().unwrap();
+    for ext in ["geojson", "gpkg", "fgb", "parquet", "kml", "kmz", "gpx"] {
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/workspaces/{id}/export/{ext}"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK, "{ext}");
+        assert!(
+            response.headers()["content-disposition"]
+                .to_str()
+                .unwrap()
+                .contains(&format!("violations.{ext}"))
+        );
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let path = dir.path().join(format!("violations.{ext}"));
+        std::fs::write(&path, &bytes).unwrap();
+        let layers =
+            topology_checker_io::read::read_with_attributes(&path, None, "export", true).unwrap();
+        assert_eq!(
+            layers[0].layer.len(),
+            count,
+            "{ext}: one complete geometry per violation"
+        );
+        if ["geojson", "kml", "kmz", "gpx"].contains(&ext) {
+            assert_eq!(
+                layers[0].srs,
+                Some(topology_checker_io::crs::parse("EPSG:4326").unwrap())
+            );
+        }
+        let (_, empty) = call(&app, "POST", "/workspaces", Value::Null).await;
+        let new_id = empty["id"].as_str().unwrap();
+        let (status, imported) = multipart(
+            &app,
+            &format!("/workspaces/{new_id}/uploads"),
+            &format!("violations.{ext}"),
+            &bytes,
+        )
+        .await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "{ext}: {}",
+            String::from_utf8_lossy(&imported)
+        );
+        let imported: Value = serde_json::from_slice(&imported).unwrap();
+        assert_eq!(imported["layers"].as_array().unwrap().len(), 1);
+        let response = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/workspaces/{new_id}/project"))
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = response.into_body().collect().await.unwrap().to_bytes();
+        let (status, reopened) = multipart(&app, "/projects/open", "project.zip", &bytes).await;
+        assert_eq!(
+            status,
+            StatusCode::OK,
+            "{ext}: {}",
+            String::from_utf8_lossy(&reopened)
+        );
+        let reopened: Value = serde_json::from_slice(&reopened).unwrap();
+        assert_eq!(reopened["layers"], imported["layers"], "{ext}");
+        assert_eq!(reopened["config"], imported["config"], "{ext}");
+    }
+}
+#[tokio::test]
 async fn example_validation_matches_core_and_keeps_signed_ids() {
     let app = api(AppState::default());
     let (status, ws) = call(&app, "POST", "/example", Value::Null).await;
@@ -95,7 +197,7 @@ async fn example_validation_matches_core_and_keeps_signed_ids() {
         .add_rule(topology_checker_core::Rule::LineMustNotOverlap, layer, None)
         .unwrap();
     let report = direct.validate().unwrap();
-    assert_eq!(complete["result"]["total"], report.error_count());
+    assert_eq!(complete["result"]["total"], report.violation_count());
     let (_, page) = call(
         &app,
         "GET",
@@ -105,7 +207,7 @@ async fn example_validation_matches_core_and_keeps_signed_ids() {
     .await;
     assert_eq!(
         page["violations"].as_array().unwrap().len(),
-        report.error_count()
+        report.violation_count()
     );
     assert!(
         page["violations"]
@@ -299,6 +401,40 @@ async fn local_api_rejects_foreign_origins_and_hosts() {
         assert_eq!(response.status(), StatusCode::FORBIDDEN);
     }
 }
+#[tokio::test]
+async fn local_origin_checks_follow_the_listening_port() {
+    let app = api(AppState::new(9123));
+    let status = |headers: &[(&'static str, &'static str)]| {
+        let mut request = Request::builder().uri("/health");
+        for &(name, value) in headers {
+            request = request.header(name, value);
+        }
+        let app = app.clone();
+        async move {
+            app.oneshot(request.body(Body::empty()).unwrap())
+                .await
+                .unwrap()
+                .status()
+        }
+    };
+    let local = [
+        ("host", "127.0.0.1:9123"),
+        ("origin", "http://localhost:9123"),
+    ];
+    assert_eq!(status(&local).await, StatusCode::OK);
+    assert_eq!(
+        status(&[("origin", "http://127.0.0.1:5173")]).await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        status(&[("host", "127.0.0.1:8080")]).await,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        status(&[("origin", "http://localhost:8080")]).await,
+        StatusCode::FORBIDDEN
+    );
+}
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[ignore = "representative 200,000-feature responsiveness exercise"]
@@ -414,6 +550,7 @@ async fn large_workspace_keeps_http_responsive_and_discards_stale_jobs() {
     );
 }
 
+#[cfg(feature = "gdal-system")]
 #[tokio::test]
 async fn geopackage_layer_picker_and_zipped_shapefile_upload() {
     use gdal::{
@@ -518,8 +655,9 @@ async fn geopackage_layer_picker_and_zipped_shapefile_upload() {
 #[tokio::test]
 async fn natural_earth_examples_presets_match_direct_core_and_roundtrip_provenance() {
     use std::collections::HashSet;
-    use topology_checker_core::{Layer, Topology};
-    use topology_checker_web::{examples, model::geometry_json};
+    use topology_checker_core::Topology;
+    use topology_checker_web::{examples, model::geometry};
+    let geometry_json = |g: &geo::Geometry| serde_json::to_value(geometry(g)).unwrap();
     let app = api(AppState::default());
     let (status, catalog) = call(&app, "GET", "/examples", Value::Null).await;
     assert_eq!(status, StatusCode::OK);
@@ -558,8 +696,8 @@ async fn natural_earth_examples_presets_match_direct_core_and_roundtrip_provenan
         assert_eq!(ws["config"]["tolerance"], 1e-8);
         assert_eq!(ws["config"]["view"]["basemap"], false);
         let direct_ws = examples::load(example_id).unwrap();
-        let mut direct = Topology::new(direct_ws.config.tolerance).unwrap();
-        for (i, layer) in direct_ws.layers.iter().enumerate() {
+        let mut direct = Topology::new(direct_ws.config().tolerance).unwrap();
+        for (i, layer) in direct_ws.layers().iter().enumerate() {
             assert!(dataset_ids.insert(ws["datasets"][i]["id"].as_str().unwrap().to_owned()));
             assert_eq!(
                 ws["layers"][i]["feature_count"],
@@ -570,8 +708,7 @@ async fn natural_earth_examples_presets_match_direct_core_and_roundtrip_provenan
                 ws["config"]["layers"][i]["visible"],
                 example["datasets"][i]["visible"]
             );
-            let bytes =
-                std::fs::read(direct_ws.storage.path().join(&direct_ws.sources[i].path)).unwrap();
+            let bytes = std::fs::read(direct_ws.root().join(&direct_ws.sources()[i].path)).unwrap();
             let original: Value = serde_json::from_slice(&bytes).unwrap();
             let retained = original["features"]
                 .as_array()
@@ -583,7 +720,7 @@ async fn natural_earth_examples_presets_match_direct_core_and_roundtrip_provenan
                         .is_none_or(|c| !c.is_empty())
                 })
                 .collect::<Vec<_>>();
-            for (ordinal, (_, geometry)) in layer.features.iter().enumerate() {
+            for (ordinal, (_, geometry)) in layer.layer.features().enumerate() {
                 let imported = geometry_json(geometry);
                 geometry_types.insert(imported["type"].as_str().unwrap().to_owned());
                 assert_eq!(
@@ -605,9 +742,9 @@ async fn natural_earth_examples_presets_match_direct_core_and_roundtrip_provenan
                     "attributes changed in {example_id}"
                 );
             }
-            let id = direct.add_layer(Layer::from_features(&layer.name, layer.features.clone()));
+            let id = direct.add_layer(std::sync::Arc::clone(&layer.layer));
             for check in direct_ws
-                .config
+                .config()
                 .checks
                 .iter()
                 .filter(|c| c.layer == layer.id)
@@ -625,23 +762,26 @@ async fn natural_earth_examples_presets_match_direct_core_and_roundtrip_provenan
         );
         let complete = completed(&app, id).await;
         assert_eq!(complete["job"]["status"], "completed", "{complete}");
-        assert_eq!(complete["result"]["total"], report.error_count());
+        assert_eq!(complete["result"]["total"], report.violation_count());
         for (i, rule) in report.rules.iter().enumerate() {
             assert_eq!(
                 complete["result"]["rules"][i]["counts"],
                 serde_json::to_value(&rule.counts).unwrap()
             );
-            assert_eq!(complete["result"]["rules"][i]["total"], rule.errors.len());
+            assert_eq!(
+                complete["result"]["rules"][i]["total"],
+                rule.violations.len()
+            );
         }
         if example_id == "country-city-atlas" {
             // Multipart detection aggregates collection members into one finding per parent FID.
-            assert_eq!(report.error_count(), 169);
+            assert_eq!(report.violation_count(), 169);
             let all_fids = report.rules[0]
-                .errors
+                .violations
                 .iter()
                 .map(|e| e.origin.unwrap().fid)
                 .collect::<HashSet<_>>();
-            assert_eq!(all_fids.len(), report.error_count());
+            assert_eq!(all_fids.len(), report.violation_count());
             let (_, page) = call(
                 &app,
                 "GET",

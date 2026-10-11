@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from "vue";
 import { compatible, useWorkspace } from "../store";
-import type { Check } from "../types";
+import type { Check, GeometryKind } from "../types";
 const store = useWorkspace();
 const chosen = ref("line/must-not-have-dangles");
 const manualCrs = ref("EPSG:28992");
@@ -19,7 +19,7 @@ const available = computed(() =>
     ),
   ),
 );
-function candidates(kind: string) {
+function candidates(kind: GeometryKind) {
   return (
     store.ws?.layers.filter(
       (l) =>

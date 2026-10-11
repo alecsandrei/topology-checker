@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPinia, setActivePinia } from "pinia";
 import { request } from "../src/api";
 import { useWorkspace } from "../src/store";
-import type { Page, Summary, Violation } from "../src/types";
+import type { Format, Page, Summary, Violation } from "../src/types";
 import { fixture } from "./fixtures";
 
 vi.mock("../src/api", async (original) => ({
@@ -31,7 +31,15 @@ function row(): Violation {
     rule: "line/must-not-have-dangles",
     category: "dangle",
     geometry: { type: "Point", coordinates: [5, 52] },
-    origin: { layer: "lines", name: "Streets", fid: "-12", part: null },
+    origin: {
+      layer: "lines",
+      name: "Streets",
+      dataset: "d",
+      selector: "lines",
+      fid: "-12",
+      part: null,
+      attributes: null,
+    },
     destination: null,
   };
 }
@@ -89,7 +97,10 @@ describe("workspace response ordering", () => {
       message: null,
       config: workspace.config,
     };
-    api.mockResolvedValueOnce([]).mockResolvedValueOnce(workspace);
+    api
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce(workspace);
     await store.initialize();
     const pending = deferred<unknown>();
     api.mockReturnValueOnce(pending.promise);
@@ -106,7 +117,7 @@ describe("workspace response ordering", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(store.ws!.result).toBeNull();
     expect(store.page).toBeNull();
-    expect(api).toHaveBeenCalledTimes(4);
+    expect(api).toHaveBeenCalledTimes(5);
   });
 
   it("keeps controls busy until all overlapping operations finish", async () => {
@@ -143,6 +154,59 @@ describe("workspace response ordering", () => {
 });
 
 describe("configuration and display", () => {
+  it("derives imports and export CRS labels from the server format registry", () => {
+    const store = useWorkspace();
+    const format = (
+      name: string,
+      extensions: string[],
+      extra: Partial<Format> = {},
+    ): Format => ({
+      name,
+      extensions,
+      read: true,
+      write: true,
+      layers: false,
+      collections: true,
+      polygons: true,
+      web_export: true,
+      native: true,
+      ...extra,
+    });
+    store.formats = [
+      format("GeoJSON", ["geojson", "json"]),
+      format("GPKG", ["gpkg"]),
+      format("KML", ["kml", "kmz"]),
+      format("GPX", ["gpx"]),
+      format("GeoParquet", ["parquet", "geoparquet"]),
+      format("ESRI Shapefile", ["shp"], { web_export: false }),
+      format("CSV", ["csv"], { native: false }),
+    ];
+    expect(store.importAccept.split(",")).toEqual([
+      ".geojson",
+      ".json",
+      ".gpkg",
+      ".kml",
+      ".kmz",
+      ".gpx",
+      ".parquet",
+      ".geoparquet",
+      ".zip",
+    ]);
+    expect(store.exportFormats.map((f) => f.extension)).toEqual([
+      "geojson",
+      "gpkg",
+      "kml",
+      "kmz",
+      "gpx",
+      "parquet",
+    ]);
+    expect(
+      store.exportFormats.find((f) => f.extension === "gpx")!.label,
+    ).toContain("WGS84");
+    expect(
+      store.exportFormats.find((f) => f.extension === "gpkg")!.label,
+    ).toContain("working CRS");
+  });
   it("applies pending rule changes before importing another dataset", async () => {
     const store = useWorkspace();
     store.draft!.checks = [
@@ -236,5 +300,24 @@ describe("example loading", () => {
     await store.openExamples();
     expect(store.error).toBe("");
     expect(api).toHaveBeenLastCalledWith("/examples");
+  });
+});
+
+describe("session restore", () => {
+  it("starts a new workspace and says so when the saved one has expired", async () => {
+    const store = useWorkspace();
+    store.ws = null;
+    sessionStorage.setItem("topology-workspace", "expired");
+    const fresh = { ...fixture(), id: "fresh" };
+    api
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockRejectedValueOnce(new Error("workspace not found"))
+      .mockResolvedValueOnce(fresh);
+    await store.initialize();
+    expect(api).toHaveBeenNthCalledWith(3, "/workspaces/expired");
+    expect(store.ws!.id).toBe("fresh");
+    expect(sessionStorage.getItem("topology-workspace")).toBe("fresh");
+    expect(store.error).toContain("expired");
   });
 });

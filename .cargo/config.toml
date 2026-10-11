@@ -2,3 +2,7 @@
 # CMake >= 4 rejects projects declaring cmake_minimum_required < 3.5, which some
 # of the bundled GDAL/PROJ dependencies still do.
 CMAKE_POLICY_VERSION_MINIMUM = "3.5"
+# `cargo test` exports the web API's TypeScript bindings here. JSON numbers are
+# plain numbers; 64-bit FIDs are already serialized as strings.
+TS_RS_EXPORT_DIR = { value = "web/src/generated", relative = true }
+TS_RS_LARGE_INT = "number"

@@ -3,6 +3,7 @@ export const fixture = (): Workspace => ({
   id: "workspace",
   revision: 1,
   working_crs_info: null,
+  datasets: [],
   config: {
     working_crs: null,
     tolerance: 0,
