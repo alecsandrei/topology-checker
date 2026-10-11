@@ -1,2 +1,4 @@
 # Preserve upstream source snapshots exactly, including trailing spaces.
-crates/server/examples/sources/*.geojson whitespace=-blank-at-eol
+crates/server/examples/sources/*.geojson -text whitespace=-blank-at-eol
+crates/server/examples/generated/*.geojson text eol=lf
+crates/server/examples/catalog.json text eol=lf

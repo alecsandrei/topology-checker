@@ -38,7 +38,9 @@ jobs:
         run: cargo fmt --check
       - name: Check native GIS dependencies
         if: runner.os == 'Linux'
-        run: bash .github/workflows/native-dependencies.sh
+        run: |
+          sudo apt-get update && sudo apt-get install -y ripgrep
+          bash .github/workflows/native-dependencies.sh
       - name: Build
         run: cargo build --workspace --release --locked
       - name: Test

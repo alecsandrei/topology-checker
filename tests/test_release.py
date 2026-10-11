@@ -128,7 +128,7 @@ def rewrite_wheel(
             if remove_suffix is not None and name.endswith(remove_suffix):
                 continue
             if crlf and not name.endswith((".pyd", ".so")):
-                payload = payload.replace(b"\n", b"\r\n")
+                payload = payload.replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
             archive.writestr(name, payload)
 
 
@@ -159,9 +159,25 @@ def test_duplicate_platform(bundle: Path) -> None:
         validate_release(bundle)
 
 
-def test_windows_checkout_line_endings(bundle: Path) -> None:
+@pytest.mark.parametrize("initial_crlf", [False, True])
+def test_windows_checkout_line_endings(bundle: Path, initial_crlf: bool) -> None:
     """Windows checkout line endings do not invalidate equivalent source text."""
-    rewrite_wheel(next(bundle.glob("*win_amd64.whl")), crlf=True)
+    wheel = next(bundle.glob("*win_amd64.whl"))
+    with zipfile.ZipFile(wheel) as archive:
+        files = {name: archive.read(name) for name in archive.namelist()}
+    with zipfile.ZipFile(wheel, "w") as archive:
+        for name, payload in files.items():
+            if not name.endswith(".pyd"):
+                payload = payload.replace(b"\r\n", b"\n")
+            archive.writestr(name, payload)
+    if initial_crlf:
+        rewrite_wheel(wheel, crlf=True)
+    rewrite_wheel(wheel, crlf=True)
+    with zipfile.ZipFile(wheel) as archive:
+        before = {name: archive.read(name) for name in archive.namelist()}
+    rewrite_wheel(wheel, crlf=True)
+    with zipfile.ZipFile(wheel) as archive:
+        assert before == {name: archive.read(name) for name in archive.namelist()}
     assert len(validate_release(bundle).splitlines()) == 5
 
 
