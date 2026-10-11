@@ -346,11 +346,11 @@ pub(crate) fn decode_gpkg(data: &[u8], srs: i32) -> Result<Decoded> {
     };
     let start = 8 + doubles * 8;
     ensure!(data.len() >= start, "truncated GeoPackage envelope");
-    for bytes in data[8..start].chunks_exact(8) {
+    for bytes in data[8..start].as_chunks::<8>().0 {
         let v = if le {
-            f64::from_le_bytes(bytes.try_into()?)
+            f64::from_le_bytes(*bytes)
         } else {
-            f64::from_be_bytes(bytes.try_into()?)
+            f64::from_be_bytes(*bytes)
         };
         ensure!(
             v.is_finite() || flags & 16 != 0,
