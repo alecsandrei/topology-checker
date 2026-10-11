@@ -30,14 +30,14 @@ classifiers = [
 [project.urls]
 Repository = "https://github.com/alecsandrei/topology-checker"
 Issues = "https://github.com/alecsandrei/topology-checker/issues"
-Documentation = "https://github.com/alecsandrei/topology-checker/blob/master/docs/python-usage.md"
+Documentation = "https://alecsandrei.github.io/topology-checker/"
 
 [project.optional-dependencies]
 geopandas = ["geopandas>=0.14,<2"]
 
 [dependency-groups]
 release = ["packaging>=24", "tomli>=2", "twine>=6"]
-docs = ["mkdocs-material>=9"]
+docs = ["mkdocs-material>=9", "mkdocstrings-python>=1"]
 dev = [
     "maturin==1.15.0",
     "pytest>=8",

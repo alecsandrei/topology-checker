@@ -4,7 +4,8 @@ Install from PyPI with `uv add topology-checker`, or use
 `uv add 'topology-checker[geopandas]'` for GeoDataFrame exports and file loading
 through GeoPandas. Python 3.10 through 3.14 on regular CPython are supported.
 The base package uses Shapely and pyproj. It does not require GeoPandas or a
-separate Rust installation when a compatible wheel is available.
+separate Rust installation when a compatible wheel is available. See the
+[API reference](python-api.md) for every class and function.
 
 ## Register and validate
 

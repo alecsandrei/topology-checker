@@ -1,6 +1,6 @@
 # topology-checker
 
-topology-checker checks map data for duplicate points, gaps, overlaps, and disconnected lines. Use it with Python, the command line, or the local web app. See the [documentation](docs/README.md).
+topology-checker checks map data for duplicate points, gaps, overlaps, and disconnected lines. Use it with Python, the command line, or the local web app. See the [documentation](https://alecsandrei.github.io/topology-checker/).
 
 ![Measured validation runtime against QGIS Topology Checker](benchmarks/qgis/results/comparison.png)
 
@@ -18,7 +18,7 @@ topology.add_rule(Rule.MUST_NOT_HAVE_DANGLES, roads_gdf)
 errors = topology.validate().to_geodataframe()
 ```
 
-[More Python examples](python/README.md) and [usage guide](docs/python-usage.md).
+[More Python examples](python/README.md), the [usage guide](https://alecsandrei.github.io/topology-checker/python-usage/) and the [API reference](https://alecsandrei.github.io/topology-checker/python-api/).
 
 ## CLI
 
@@ -47,7 +47,7 @@ topology-checker utilities explode-lines roads.gpkg --layer roads -o segments.gp
 topology-checker line must-not-have-dangles --help
 ```
 
-`-o` writes `errors_point`, `errors_line` and `errors_polygon` layers with `violation_id`, `rule`, `error_type` and the origin and destination layer, FID and part of each violation. The web app's dataset exports use the same columns. See [CLI](docs/cli.md) and [Rules](docs/rules.md).
+`-o` writes `errors_point`, `errors_line` and `errors_polygon` layers with `violation_id`, `rule`, `error_type` and the origin and destination layer, FID and part of each violation. The web app's dataset exports use the same columns. See [CLI](https://alecsandrei.github.io/topology-checker/cli/) and [Rules](https://alecsandrei.github.io/topology-checker/rules/).
 
 `topology.toml`:
 
@@ -122,6 +122,6 @@ npm run build --prefix web
 cargo run -p topology-checker-web --release --locked
 ```
 
-Open <http://127.0.0.1:8080>, or pass `--port` (or set `TOPOLOGY_WEB_PORT`) to use another port. Release builds embed the frontend, so `target/release/topology-checker-web` runs on its own. Workspaces idle for four hours are discarded. See [Web app](docs/web-app.md).
+Open <http://127.0.0.1:8080>, or pass `--port` (or set `TOPOLOGY_WEB_PORT`) to use another port. Release builds embed the frontend, so `target/release/topology-checker-web` runs on its own. Workspaces idle for four hours are discarded. See [Web app](https://alecsandrei.github.io/topology-checker/web-app/).
 
 The TypeScript API types in `web/src/generated` are generated from the server by `cargo test`.
