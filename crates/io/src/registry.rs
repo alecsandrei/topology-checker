@@ -75,6 +75,8 @@ pub fn for_path(path: &Path) -> Option<Format> {
     let all = formats();
     all.iter()
         .find(|f| f.native && f.extensions.contains(&ext))
+        // GPSBabel also lists Garmin .gdb; prefer drivers whose primary extension matches.
+        .or_else(|| all.iter().find(|f| f.extensions.first() == Some(&ext)))
         .or_else(|| all.iter().find(|f| f.extensions.contains(&ext)))
         .cloned()
 }

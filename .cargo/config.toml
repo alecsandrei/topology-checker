@@ -6,3 +6,6 @@ CMAKE_POLICY_VERSION_MINIMUM = "3.5"
 # plain numbers; 64-bit FIDs are already serialized as strings.
 TS_RS_EXPORT_DIR = { value = "web/src/generated", relative = true }
 TS_RS_LARGE_INT = "number"
+# Distro GDAL closes SpatiaLite-enabled GPKG/SQLite datasets with libxml2's global
+# cleanup, which double-frees when tests close datasets on parallel threads.
+SPATIALITE_LOAD = "NO"
