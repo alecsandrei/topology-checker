@@ -18,7 +18,7 @@ topology.add_rule(Rule.MUST_NOT_HAVE_DANGLES, roads_gdf)
 errors = topology.validate().to_geodataframe()
 ```
 
-[More Python examples](python/README.md), [usage guide](docs/python-usage.md), and [manual release guide](docs/python-release.md).
+[More Python examples](python/README.md) and [usage guide](docs/python-usage.md).
 
 ## CLI
 

@@ -214,7 +214,6 @@ def check_sdist(path: Path, project: dict[str, Any], version: str, root: Path) -
                 "tests/test_api.py",
                 "tests/test_registration.py",
                 "docs/python-usage.md",
-                "docs/python-release.md",
             ],
             root,
         )
