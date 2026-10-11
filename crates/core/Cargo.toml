@@ -8,6 +8,10 @@ license.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Derive TypeScript bindings for rule, error and geometry-kind names.
+ts = ["dep:ts-rs"]
+
 [dependencies]
 geo.workspace = true
 rstar.workspace = true
@@ -16,10 +20,12 @@ serde.workspace = true
 thiserror.workspace = true
 num-rational = "0.4"
 num-traits = "0.2"
+ts-rs = { workspace = true, optional = true }
 
 [dev-dependencies]
 proptest = "1"
 criterion = "0.7"
+serde_json = "1"
 
 [[bench]]
 name = "rules"

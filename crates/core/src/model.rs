@@ -11,7 +11,7 @@ use std::{collections::HashSet, sync::OnceLock};
 
 /// A registration index scoped to the topology that returned it.
 /// IDs from another topology must not be reused, even if their indices match.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[serde(transparent)]
 pub struct LayerId(pub(crate) usize);
 impl LayerId {
@@ -23,7 +23,8 @@ impl LayerId {
 }
 
 /// Feature provenance within a topology, including an optional original part index.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[non_exhaustive]
 pub struct FeatureRef {
     /// Topology-scoped layer ID.
     pub layer: LayerId,
@@ -44,9 +45,47 @@ impl FeatureRef {
     }
 }
 
+/// Layer-local part provenance, cached independently of any topology.
+///
+/// It deliberately has no equality or ordering: parts from different layers may
+/// share FIDs, so callers attach a `LayerId` with [`PartRef::at`] before comparing
+/// references that are not known to come from one layer.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PartRef {
+    pub fid: i64,
+    pub part: Option<u32>,
+}
+impl PartRef {
+    pub(crate) fn at(self, layer: LayerId) -> FeatureRef {
+        FeatureRef {
+            layer,
+            fid: self.fid,
+            part: self.part,
+        }
+    }
+}
+
+/// A cached layer validation failure, independent of the layer's registration ID.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Invalid {
+    DuplicateFid(i64),
+    NonFinite(i64),
+}
+impl Invalid {
+    pub(crate) fn at(self, layer: LayerId, name: &str) -> Error {
+        let name = name.to_string();
+        match self {
+            Self::DuplicateFid(fid) => Error::DuplicateFid { layer, name, fid },
+            Self::NonFinite(fid) => Error::NonFinite { layer, name, fid },
+        }
+    }
+}
+
 /// Broad input geometry families used to check rule compatibility.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum GeometryKind {
     /// Points and multipoints.
     Point,
@@ -75,9 +114,19 @@ impl GeometryKind {
             Geometry::GeometryCollection(_) => Self::Collection,
         }
     }
+    /// Return whether geometry of this family can be a rule input requiring `required`.
+    /// Collections are classified by their children, so they never satisfy a family.
+    #[must_use]
+    pub fn satisfies(self, required: Self) -> bool {
+        required == Self::Any || self == required
+    }
 }
 
 /// An owned planar layer. Cached views cannot be invalidated through mutation.
+///
+/// Caches do not depend on a topology or `LayerId`, so one `Arc<Layer>` can be
+/// registered in several topologies and its cleaned parts, indexes, polygon
+/// union and cross-geometry views are built once and reused.
 ///
 /// Construction defers finite-coordinate and duplicate-FID checks until rule
 /// registration, warnings or validation. Cleaning removes consecutive duplicate
@@ -91,7 +140,7 @@ pub struct Layer {
     name: String,
     fids: Vec<i64>,
     geometries: Vec<Geometry>,
-    parts: OnceLock<Result<Parts, Error>>,
+    parts: OnceLock<Result<Parts, Invalid>>,
 }
 impl Layer {
     /// Own geometries in input order, assigning signed FIDs starting at zero.
@@ -131,6 +180,11 @@ impl Layer {
     pub fn features(&self) -> impl ExactSizeIterator<Item = (i64, &Geometry)> {
         self.fids.iter().copied().zip(&self.geometries)
     }
+    /// Return the original feature at a zero-based input position.
+    #[must_use]
+    pub fn feature(&self, index: usize) -> Option<(i64, &Geometry)> {
+        Some((*self.fids.get(index)?, self.geometries.get(index)?))
+    }
     /// Return the number of original features, including degenerate geometries.
     #[must_use]
     pub fn len(&self) -> usize {
@@ -141,7 +195,7 @@ impl Layer {
     pub fn is_empty(&self) -> bool {
         self.fids.is_empty()
     }
-    pub(crate) fn check_kind(&self, expected: GeometryKind) -> Result<(), Error> {
+    pub(crate) fn check_kind(&self, id: LayerId, expected: GeometryKind) -> Result<(), Error> {
         fn check(g: &Geometry, expected: GeometryKind) -> Option<GeometryKind> {
             if expected == GeometryKind::Any {
                 return None;
@@ -150,12 +204,13 @@ impl Layer {
                 return c.iter().find_map(|g| check(g, expected));
             }
             let found = GeometryKind::of(g);
-            (found != expected).then_some(found)
+            (!found.satisfies(expected)).then_some(found)
         }
         for (fid, g) in self.features() {
             if let Some(found) = check(g, expected) {
                 return Err(Error::GeometryKind {
-                    layer: self.name.clone(),
+                    layer: id,
+                    name: self.name.clone(),
                     fid,
                     expected,
                     found,
@@ -164,39 +219,25 @@ impl Layer {
         }
         Ok(())
     }
-    pub(crate) fn parts(&self, id: LayerId) -> Result<&Parts, Error> {
+    pub(crate) fn parts(&self) -> Result<&Parts, Invalid> {
         self.parts
-            .get_or_init(|| self.make_parts(id))
+            .get_or_init(|| self.make_parts())
             .as_ref()
-            .map_err(Clone::clone)
+            .map_err(|e| *e)
     }
-    fn make_parts(&self, id: LayerId) -> Result<Parts, Error> {
+    fn make_parts(&self) -> Result<Parts, Invalid> {
         let mut out = Parts::default();
         let mut seen = HashSet::new();
         for (fid, g) in self.features() {
             if !seen.insert(fid) {
-                return Err(Error::DuplicateFid {
-                    layer: self.name.clone(),
-                    fid,
-                });
+                return Err(Invalid::DuplicateFid(fid));
             }
             if g.coords_iter()
                 .any(|c| !c.x.is_finite() || !c.y.is_finite())
             {
-                return Err(Error::NonFinite {
-                    layer: self.name.clone(),
-                    fid,
-                });
+                return Err(Invalid::NonFinite(fid));
             }
-            out.add(
-                g,
-                FeatureRef {
-                    layer: id,
-                    fid,
-                    part: Some(0),
-                },
-                &mut 0,
-            );
+            out.add(g, PartRef { fid, part: Some(0) }, &mut 0);
         }
         out.point_index = index::build(
             out.points
@@ -221,7 +262,7 @@ impl Layer {
 }
 #[derive(Debug)]
 pub(crate) struct Part<G> {
-    pub reference: FeatureRef,
+    pub reference: PartRef,
     pub geometry: G,
 }
 #[derive(Debug, Default)]
@@ -252,20 +293,20 @@ fn ring_valid(ring: &LineString) -> bool {
             >= 3
 }
 impl Parts {
-    fn next_reference(mut reference: FeatureRef, part: &mut u32) -> FeatureRef {
+    fn next_reference(mut reference: PartRef, part: &mut u32) -> PartRef {
         reference.part = Some(*part);
         *part += 1;
         reference
     }
 
-    fn add_point(&mut self, p: &Point, reference: FeatureRef, part: &mut u32) {
+    fn add_point(&mut self, p: &Point, reference: PartRef, part: &mut u32) {
         self.points.push(Part {
             reference: Self::next_reference(reference, part),
             geometry: *p,
         });
     }
 
-    fn add_line(&mut self, l: &LineString, reference: FeatureRef, part: &mut u32) {
+    fn add_line(&mut self, l: &LineString, reference: PartRef, part: &mut u32) {
         let reference = Self::next_reference(reference, part);
         let geometry = clean_line(l);
         if geometry.0.len() < 2 {
@@ -278,7 +319,7 @@ impl Parts {
         }
     }
 
-    fn add_polygon(&mut self, p: &Polygon, reference: FeatureRef, part: &mut u32) {
+    fn add_polygon(&mut self, p: &Polygon, reference: PartRef, part: &mut u32) {
         let reference = Self::next_reference(reference, part);
         let exterior = clean_line(p.exterior());
         if !ring_valid(&exterior) {
@@ -303,7 +344,7 @@ impl Parts {
         });
     }
 
-    fn add(&mut self, g: &Geometry, reference: FeatureRef, part: &mut u32) {
+    fn add(&mut self, g: &Geometry, reference: PartRef, part: &mut u32) {
         match g {
             Geometry::MultiPoint(m) => {
                 for p in m {
@@ -360,7 +401,7 @@ mod tests {
             Point::new(4., 5.).into(),
         ]));
         let layer = Layer::from_features("parts", [(-12, geometry.clone())]);
-        let parts = layer.parts(LayerId(3)).unwrap();
+        let parts = layer.parts().unwrap();
         assert_eq!(parts.skipped, 3);
         assert_eq!(
             parts.lines[0].geometry,
@@ -374,7 +415,7 @@ mod tests {
             (parts.points[0].reference, 4),
         ] {
             assert_eq!(
-                reference,
+                reference.at(LayerId(3)),
                 FeatureRef {
                     layer: LayerId(3),
                     fid: -12,
@@ -394,9 +435,6 @@ mod tests {
                 MultiLineString(vec![LineString::from(vec![(f64::NAN, 0.)])]).into(),
             )],
         );
-        assert!(matches!(
-            layer.parts(LayerId(0)),
-            Err(Error::NonFinite { fid: 42, .. })
-        ));
+        assert_eq!(layer.parts().err(), Some(Invalid::NonFinite(42)));
     }
 }

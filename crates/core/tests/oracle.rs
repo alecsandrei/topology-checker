@@ -4,19 +4,13 @@ use geo::{
 };
 use proptest::prelude::*;
 use std::collections::BTreeSet;
-use topology_checker_core::{ErrorType, Layer, Report, Rule, Topology};
+use topology_checker_core::{Layer, Report, Rule, Topology, ViolationKind};
 
-type Pairs = BTreeSet<(i64, i64, ErrorType)>;
+type Pairs = BTreeSet<(i64, i64, ViolationKind)>;
 fn pairs(report: &Report) -> Pairs {
     report
-        .errors()
-        .map(|e| {
-            (
-                e.origin.unwrap().fid,
-                e.destination.unwrap().fid,
-                e.error_type,
-            )
-        })
+        .violations()
+        .map(|e| (e.origin.unwrap().fid, e.destination.unwrap().fid, e.kind))
         .collect()
 }
 fn check(input: Vec<Geometry>, other: Option<Vec<Geometry>>, rule: Rule, tolerance: f64) -> Report {
@@ -31,10 +25,10 @@ fn line() -> impl Strategy<Value = LineString> {
         .prop_filter("distinct endpoints", |&(x, y, u, v)| x != u || y != v)
         .prop_map(|(x, y, u, v)| LineString::from(vec![(x as f64, y as f64), (u as f64, v as f64)]))
 }
-fn relation(a: &LineString, b: &LineString) -> Option<ErrorType> {
+fn relation(a: &LineString, b: &LineString) -> Option<ViolationKind> {
     match a.relate(b).get(CoordPos::Inside, CoordPos::Inside) {
-        Dimensions::OneDimensional => Some(ErrorType::Overlap),
-        Dimensions::ZeroDimensional => Some(ErrorType::Crossing),
+        Dimensions::OneDimensional => Some(ViolationKind::Overlap),
+        Dimensions::ZeroDimensional => Some(ViolationKind::Crossing),
         _ => None,
     }
 }
@@ -62,7 +56,7 @@ proptest! {
     fn point_pairs_match_distance(points in prop::collection::vec((-4i32..5, -4i32..5), 0..25), tolerance in prop_oneof![Just(0.), Just(0.1), Just(1.), Just(1.5)]) {
         let mut expected = Pairs::new();
         for i in 0..points.len() { for j in i + 1..points.len() {
-            if ((points[i].0 - points[j].0) as f64).hypot((points[i].1 - points[j].1) as f64) <= tolerance { expected.insert((i as i64, j as i64, ErrorType::Overlap)); }
+            if ((points[i].0 - points[j].0) as f64).hypot((points[i].1 - points[j].1) as f64) <= tolerance { expected.insert((i as i64, j as i64, ViolationKind::Overlap)); }
         }}
         let report = check(points.into_iter().map(|(x, y)| Geometry::Point(Point::new(x as f64, y as f64))).collect(), None, Rule::PointMustNotOverlap, tolerance);
         prop_assert_eq!(pairs(&report), expected);
@@ -72,7 +66,7 @@ proptest! {
         let polygons = rectangles.into_iter().map(|(x,y,w,h)| Rect::new(coord! { x:x as f64,y:y as f64 },coord! { x:(x+w) as f64,y:(y+h) as f64 }).to_polygon()).collect::<Vec<_>>();
         let mut expected = Pairs::new();
         for i in 0..polygons.len() { for j in i + 1..polygons.len() {
-            if polygons[i].relate(&polygons[j]).get(CoordPos::Inside, CoordPos::Inside) == Dimensions::TwoDimensional { expected.insert((i as i64,j as i64,ErrorType::Overlap)); }
+            if polygons[i].relate(&polygons[j]).get(CoordPos::Inside, CoordPos::Inside) == Dimensions::TwoDimensional { expected.insert((i as i64,j as i64,ViolationKind::Overlap)); }
         }}
         let report = check(polygons.into_iter().map(Geometry::Polygon).collect(), None, Rule::PolygonMustNotOverlap, 0.);
         prop_assert_eq!(pairs(&report), expected);
@@ -83,7 +77,7 @@ proptest! {
         let polygons = rectangles.into_iter().map(|(x,y,w,h)| Rect::new(coord! { x:x as f64,y:y as f64 },coord! { x:(x+w) as f64,y:(y+h) as f64 }).to_polygon()).collect::<Vec<_>>();
         let expected = points.iter().enumerate().filter(|(_,point)| !polygons.iter().any(|polygon| polygon.contains(*point))).map(|(i,_)| i as i64).collect::<BTreeSet<_>>();
         let report = check(points.into_iter().map(Geometry::Point).collect(), Some(polygons.into_iter().map(Geometry::Polygon).collect()), Rule::PointMustBeInside, 0.);
-        let actual = report.errors().map(|e| e.origin.unwrap().fid).collect::<BTreeSet<_>>();
+        let actual = report.violations().map(|e| e.origin.unwrap().fid).collect::<BTreeSet<_>>();
         prop_assert_eq!(actual, expected);
     }
 }
@@ -94,7 +88,7 @@ proptest! {
     fn cross_layer_points_match_distance(a in prop::collection::vec((-4i32..5, -4i32..5), 0..20), b in prop::collection::vec((-4i32..5, -4i32..5), 0..20), tolerance in prop_oneof![Just(0.), Just(1.), Just(1.5)]) {
         let mut expected = Pairs::new();
         for (i,x) in a.iter().enumerate() { for (j,y) in b.iter().enumerate() {
-            if ((x.0-y.0) as f64).hypot((x.1-y.1) as f64) <= tolerance { expected.insert((i as i64,j as i64,ErrorType::Overlap)); }
+            if ((x.0-y.0) as f64).hypot((x.1-y.1) as f64) <= tolerance { expected.insert((i as i64,j as i64,ViolationKind::Overlap)); }
         }}
         let points = |input: Vec<(i32,i32)>| input.into_iter().map(|(x,y)| Geometry::Point(Point::new(x as f64,y as f64))).collect();
         prop_assert_eq!(pairs(&check(points(a),Some(points(b)),Rule::PointMustNotOverlapWith,tolerance)),expected);
@@ -105,9 +99,9 @@ proptest! {
         for i in 0..lines.len() { for j in i + 1..lines.len() {
             let matrix = lines[i].relate(&lines[j]);
             let kind = match matrix.get(CoordPos::Inside,CoordPos::Inside) {
-                Dimensions::OneDimensional => Some(ErrorType::Overlap),
-                Dimensions::ZeroDimensional => Some(ErrorType::Crossing),
-                _ if matrix.get(CoordPos::Inside,CoordPos::OnBoundary) == Dimensions::ZeroDimensional || matrix.get(CoordPos::OnBoundary,CoordPos::Inside) == Dimensions::ZeroDimensional => Some(ErrorType::TouchInterior),
+                Dimensions::OneDimensional => Some(ViolationKind::Overlap),
+                Dimensions::ZeroDimensional => Some(ViolationKind::Crossing),
+                _ if matrix.get(CoordPos::Inside,CoordPos::OnBoundary) == Dimensions::ZeroDimensional || matrix.get(CoordPos::OnBoundary,CoordPos::Inside) == Dimensions::ZeroDimensional => Some(ViolationKind::TouchInterior),
                 _ => None,
             };
             if let Some(kind) = kind { expected.insert((i as i64,j as i64,kind)); }
@@ -137,10 +131,10 @@ proptest! {
         for rule in [Rule::PointMustBeCoveredByLines,Rule::PointMustBeCoveredByLineEndpoints] {
             let expected = points.iter().enumerate().filter(|(_,p)| !lines.iter().any(|l| if rule == Rule::PointMustBeCoveredByLines { Euclidean.distance(l,*p) <= tolerance } else { l.0.iter().any(|c| Euclidean.distance(&Point(*c),*p) <= tolerance) })).map(|(i,_)| i as i64).collect::<BTreeSet<_>>();
             let r = check(points.iter().copied().map(Geometry::Point).collect(),Some(lines.iter().cloned().map(Geometry::LineString).collect()),rule,tolerance);
-            prop_assert_eq!(r.errors().map(|e| e.origin.unwrap().fid).collect::<BTreeSet<_>>(),expected);
+            prop_assert_eq!(r.violations().map(|e| e.origin.unwrap().fid).collect::<BTreeSet<_>>(),expected);
         }
         let mut expected = Pairs::new();
-        for (i,p) in points.iter().enumerate() { for (j,l) in lines.iter().enumerate() { if Euclidean.distance(l,p) <= tolerance { expected.insert((i as i64,j as i64,ErrorType::Intersection)); } } }
+        for (i,p) in points.iter().enumerate() { for (j,l) in lines.iter().enumerate() { if Euclidean.distance(l,p) <= tolerance { expected.insert((i as i64,j as i64,ViolationKind::Intersection)); } } }
         prop_assert_eq!(pairs(&check(points.into_iter().map(Geometry::Point).collect(),Some(lines.into_iter().map(Geometry::LineString).collect()),Rule::PointMustNotIntersectLines,tolerance)),expected);
     }
     #[test]
@@ -153,10 +147,10 @@ proptest! {
         let mut crossings = Pairs::new();
         for (i,l) in lines.iter().enumerate() { for (j,p) in polygons.iter().enumerate() {
             let matrix = l.relate(p);
-            if matrix.is_intersects() { expected.insert((i as i64,j as i64,ErrorType::Intersection)); }
-            if matrix.is_crosses() { crossings.insert((i as i64,j as i64,ErrorType::Crossing)); }
-            if matrix.get(CoordPos::Inside,CoordPos::OnBoundary) == Dimensions::OneDimensional { boundary_overlap.insert((i as i64,j as i64,ErrorType::Overlap)); }
-            if matrix.get(CoordPos::Inside,CoordPos::Inside) == Dimensions::OneDimensional || matrix.get(CoordPos::Inside,CoordPos::OnBoundary) == Dimensions::OneDimensional { overlap.insert((i as i64,j as i64,ErrorType::Overlap)); }
+            if matrix.is_intersects() { expected.insert((i as i64,j as i64,ViolationKind::Intersection)); }
+            if matrix.is_crosses() { crossings.insert((i as i64,j as i64,ViolationKind::Crossing)); }
+            if matrix.get(CoordPos::Inside,CoordPos::OnBoundary) == Dimensions::OneDimensional { boundary_overlap.insert((i as i64,j as i64,ViolationKind::Overlap)); }
+            if matrix.get(CoordPos::Inside,CoordPos::Inside) == Dimensions::OneDimensional || matrix.get(CoordPos::Inside,CoordPos::OnBoundary) == Dimensions::OneDimensional { overlap.insert((i as i64,j as i64,ViolationKind::Overlap)); }
         } }
         let input = lines.iter().cloned().map(Geometry::LineString).collect::<Vec<_>>();
         let target = polygons.iter().cloned().map(Geometry::Polygon).collect::<Vec<_>>();
@@ -169,14 +163,14 @@ proptest! {
         if let Some(p) = polygons.first() {
             let expected = lines.iter().enumerate().filter(|(_,l)| !(p.contains(*l) && Euclidean.distance(p.exterior(),*l) > 0.)).map(|(i,_)| i as i64).collect::<BTreeSet<_>>();
             let r = check(input,Some(vec![p.clone().into()]),Rule::LineMustBeProperlyInsidePolygons,0.);
-            prop_assert_eq!(r.errors().map(|e| e.origin.unwrap().fid).collect::<BTreeSet<_>>(),expected);
+            prop_assert_eq!(r.violations().map(|e| e.origin.unwrap().fid).collect::<BTreeSet<_>>(),expected);
         }
     }
     #[test]
     fn cross_geometry_feature_containment_matches_brute_force(
         lines in prop::collection::vec(line(),0..10), polygons in prop::collection::vec(polygon_strategy(),0..8)) {
         let mut expected = Pairs::new();
-        for (i,l) in lines.iter().enumerate() { for (j,p) in polygons.iter().enumerate() { if p.contains(l) && !l.relate(p).is_contains() { expected.insert((i as i64,j as i64,ErrorType::Contained)); } } }
+        for (i,l) in lines.iter().enumerate() { for (j,p) in polygons.iter().enumerate() { if p.contains(l) && !l.relate(p).is_contains() { expected.insert((i as i64,j as i64,ViolationKind::Contained)); } } }
         prop_assert_eq!(pairs(&check(lines.into_iter().map(Geometry::LineString).collect(),Some(polygons.into_iter().map(Geometry::Polygon).collect()),Rule::GeometryMustNotBeContainedBy,1.)),expected);
     }
     #[test]
@@ -190,8 +184,8 @@ proptest! {
             }).map(|(i,_)| i as i64).collect::<BTreeSet<_>>();
             let expected_points = if rule == Rule::PolygonMustContainPoint { BTreeSet::new() } else { points.iter().enumerate().filter(|(_,q)| polygons.iter().filter(|p| p.contains(*q)).count() != 1).map(|(i,_)| i as i64).collect() };
             let r = check(polygons.iter().cloned().map(Geometry::Polygon).collect(),Some(points.iter().copied().map(Geometry::Point).collect()),rule,0.);
-            prop_assert_eq!(r.errors().filter_map(|e| e.origin.map(|r| r.fid)).collect::<BTreeSet<_>>(),expected_polygons);
-            prop_assert_eq!(r.errors().filter(|e| e.origin.is_none()).map(|e| e.destination.unwrap().fid).collect::<BTreeSet<_>>(),expected_points);
+            prop_assert_eq!(r.violations().filter_map(|e| e.origin.map(|r| r.fid)).collect::<BTreeSet<_>>(),expected_polygons);
+            prop_assert_eq!(r.violations().filter(|e| e.origin.is_none()).map(|e| e.destination.unwrap().fid).collect::<BTreeSet<_>>(),expected_points);
         }
     }
 }

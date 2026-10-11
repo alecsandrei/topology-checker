@@ -1,5 +1,5 @@
 use geo::{Geometry, LineString, MultiLineString, MultiPolygon, Rect, coord};
-use topology_checker_core::{Layer, Rule, Topology, merge_lines};
+use topology_checker_core::{Layer, Rule, Topology, Warning, merge_lines};
 
 pub fn multipart() -> Vec<Geometry> {
     (0..100)
@@ -49,7 +49,7 @@ pub fn long_lines() -> Vec<LineString> {
     ]
 }
 
-pub fn clean(input: Vec<Geometry>) -> Vec<String> {
+pub fn clean(input: Vec<Geometry>) -> Vec<Warning> {
     let mut t = Topology::new(0.).unwrap();
     t.add_layer(Layer::from_geometries("multipart", input));
     t.warnings().unwrap()

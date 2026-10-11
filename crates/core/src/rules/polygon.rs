@@ -1,23 +1,25 @@
 use crate::{
-    Error, ErrorType, RuleSpec, Topology, TopologyError,
+    Error, LayerId, RuleSpec, Topology, Violation, ViolationKind,
+    aggregate::{Merge, aggregate},
     engine::{index, polygons},
-    topology::aggregate,
 };
 use geo::{
     BooleanOps, BoundingRect, Euclidean, Geometry, Length, MultiLineString, MultiPolygon, Polygon,
 };
 use rayon::prelude::*;
 
-pub(crate) fn overlap(t: &Topology, spec: RuleSpec) -> Result<Vec<TopologyError>, Error> {
-    let a = t.parts(spec.layer)?;
-    let b = t.parts(spec.other.unwrap_or(spec.layer))?;
+pub(crate) fn overlap(t: &Topology, spec: RuleSpec) -> Result<Vec<Violation>, Error> {
+    let (a_layer, b_layer) = (spec.layer, spec.other.unwrap_or(spec.layer));
+    let a = t.parts(a_layer)?;
+    let b = t.parts(b_layer)?;
     let pairs = index::pairs(&a.polygon_index, &b.polygon_index, 0., spec.other.is_none());
     let errors = pairs
         .par_iter()
         .flat_map_iter(|&(i, j)| {
             let a = &a.polygons[i];
             let b = &b.polygons[j];
-            let intersection = if a.reference.feature() != b.reference.feature() {
+            let (origin, destination) = (a.reference.at(a_layer), b.reference.at(b_layer));
+            let intersection = if origin.feature() != destination.feature() {
                 a.geometry.intersection(&b.geometry)
             } else {
                 MultiPolygon(Vec::new())
@@ -26,34 +28,34 @@ pub(crate) fn overlap(t: &Topology, spec: RuleSpec) -> Result<Vec<TopologyError>
                 .0
                 .into_iter()
                 .filter(|p| polygons::substantial(p, t.tolerance()))
-                .map(|p| TopologyError {
+                .map(|p| Violation {
                     rule: spec.rule,
-                    error_type: ErrorType::Overlap,
+                    kind: ViolationKind::Overlap,
                     geometry: p.into(),
-                    origin: Some(a.reference),
-                    destination: Some(b.reference),
+                    origin: Some(origin),
+                    destination: Some(destination),
                 })
                 .collect::<Vec<_>>()
         })
         .collect();
-    Ok(aggregate(errors))
+    Ok(aggregate(errors, Merge::HighestDimension))
 }
-pub(crate) fn gaps(t: &Topology, spec: RuleSpec) -> Result<Vec<TopologyError>, Error> {
+pub(crate) fn gaps(t: &Topology, spec: RuleSpec) -> Result<Vec<Violation>, Error> {
     let union = polygons::union(t.parts(spec.layer)?);
     let mut errors = Vec::new();
     for p in &union.geometry {
-        errors.push(TopologyError {
+        errors.push(Violation {
             rule: spec.rule,
-            error_type: ErrorType::OuterBoundary,
+            kind: ViolationKind::OuterBoundary,
             geometry: p.exterior().clone().into(),
             origin: None,
             destination: None,
         });
         for hole in p.interiors() {
             if polygons::substantial(&Polygon::new(hole.clone(), Vec::new()), t.tolerance()) {
-                errors.push(TopologyError {
+                errors.push(Violation {
                     rule: spec.rule,
-                    error_type: ErrorType::Gap,
+                    kind: ViolationKind::Gap,
                     geometry: hole.clone().into(),
                     origin: None,
                     destination: None,
@@ -63,12 +65,12 @@ pub(crate) fn gaps(t: &Topology, spec: RuleSpec) -> Result<Vec<TopologyError>, E
     }
     Ok(errors)
 }
-pub(crate) fn line_inside(t: &Topology, spec: RuleSpec) -> Result<Vec<TopologyError>, Error> {
+pub(crate) fn line_inside(
+    t: &Topology,
+    spec: RuleSpec,
+    other: LayerId,
+) -> Result<Vec<Violation>, Error> {
     let a = t.parts(spec.layer)?;
-    let other = spec.other.ok_or(Error::Inputs {
-        rule: spec.rule,
-        expected: 2,
-    })?;
     let union = polygons::union(t.parts(other)?);
     Ok(a.lines
         .par_iter()
@@ -97,11 +99,11 @@ pub(crate) fn line_inside(t: &Topology, spec: RuleSpec) -> Result<Vec<TopologyEr
                 .0
                 .into_iter()
                 .filter(|piece| Euclidean.length(piece) > t.tolerance())
-                .map(|piece| TopologyError {
+                .map(|piece| Violation {
                     rule: spec.rule,
-                    error_type: ErrorType::Outside,
+                    kind: ViolationKind::Outside,
                     geometry: Geometry::LineString(piece),
-                    origin: Some(line.reference),
+                    origin: Some(line.reference.at(spec.layer)),
                     destination: None,
                 })
                 .collect::<Vec<_>>()

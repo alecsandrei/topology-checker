@@ -1,5 +1,5 @@
 use crate::{
-    Error, ErrorType, FeatureRef, LayerId, Rule, RuleSpec, Topology, TopologyError,
+    Error, FeatureRef, LayerId, RuleSpec, Topology, Violation, ViolationKind,
     engine::line_graph::LineGraph, merge::merge_edges,
 };
 use geo::{
@@ -21,51 +21,63 @@ struct Meeting {
     endpoints: usize,
 }
 
-pub(crate) fn run(t: &Topology, spec: RuleSpec) -> Result<Vec<TopologyError>, Error> {
+/// Which noded line graph structures are violations.
+#[derive(Debug, Clone, Copy)]
+pub(super) enum LineCheck {
+    /// Part endpoints with one incident use.
+    Dangles,
+    /// Nodes joining exactly two distinct features at their endpoints.
+    PseudoNodes,
+    /// Linework shared by distinct features.
+    Overlap,
+    /// Linework traversed repeatedly by one feature.
+    SelfOverlap,
+    /// Self-overlaps and true self-crossings.
+    SelfIntersect,
+    /// Overlaps and interior crossings between distinct features; with `touch`,
+    /// also meetings where one feature is interior.
+    Intersect { touch: bool },
+}
+
+pub(super) fn run(t: &Topology, spec: RuleSpec, check: LineCheck) -> Result<Vec<Violation>, Error> {
     let mut layers = vec![spec.layer];
     if let Some(other) = spec.other {
         layers.push(other);
     }
     let graph = t.graph(layers)?;
-    match spec.rule {
-        Rule::LineMustNotHaveDangles => Ok(dangles(&graph, spec)),
-        Rule::LineMustNotHavePseudoNodes => Ok(pseudos(&graph, spec)),
-        _ => {
-            let self_rule = matches!(
-                spec.rule,
-                Rule::LineMustNotSelfOverlap | Rule::LineMustNotSelfIntersect
-            );
-            let mut errors = overlaps(&graph, spec, self_rule);
-            match spec.rule {
-                Rule::LineMustNotSelfIntersect => errors.extend(self_crossings(&graph, spec)),
-                Rule::LineMustNotIntersect
-                | Rule::LineMustNotIntersectWith
-                | Rule::LineMustNotIntersectOrTouchInterior
-                | Rule::LineMustNotIntersectOrTouchInteriorWith => {
-                    errors.extend(meetings(&graph, spec))
-                }
-                _ => {}
-            }
-            Ok(errors)
+    Ok(match check {
+        LineCheck::Dangles => dangles(&graph, spec),
+        LineCheck::PseudoNodes => pseudos(&graph, spec),
+        LineCheck::Overlap => overlaps(&graph, spec, false),
+        LineCheck::SelfOverlap => overlaps(&graph, spec, true),
+        LineCheck::SelfIntersect => {
+            let mut violations = overlaps(&graph, spec, true);
+            violations.extend(self_crossings(&graph, spec));
+            violations
         }
-    }
+        LineCheck::Intersect { touch } => {
+            let mut violations = overlaps(&graph, spec, false);
+            violations.extend(meetings(&graph, spec, touch));
+            violations
+        }
+    })
 }
 fn point(
     spec: RuleSpec,
-    kind: ErrorType,
+    kind: ViolationKind,
     coordinate: Coord,
     a: FeatureRef,
     b: Option<FeatureRef>,
-) -> TopologyError {
-    TopologyError {
+) -> Violation {
+    Violation {
         rule: spec.rule,
-        error_type: kind,
+        kind,
         geometry: Point(coordinate).into(),
         origin: Some(a),
         destination: b,
     }
 }
-fn dangles(g: &LineGraph, spec: RuleSpec) -> Vec<TopologyError> {
+fn dangles(g: &LineGraph, spec: RuleSpec) -> Vec<Violation> {
     let mut out = Vec::new();
     for part in &g.parts {
         if part.closed() || part.nodes.len() < 2 {
@@ -78,7 +90,7 @@ fn dangles(g: &LineGraph, spec: RuleSpec) -> Vec<TopologyError> {
             if g.incident[node].len() == 1 {
                 out.push(point(
                     spec,
-                    ErrorType::Dangle,
+                    ViolationKind::Dangle,
                     g.coords[node],
                     part.reference,
                     None,
@@ -88,7 +100,7 @@ fn dangles(g: &LineGraph, spec: RuleSpec) -> Vec<TopologyError> {
     }
     out
 }
-fn pseudos(g: &LineGraph, spec: RuleSpec) -> Vec<TopologyError> {
+fn pseudos(g: &LineGraph, spec: RuleSpec) -> Vec<Violation> {
     let mut out = Vec::new();
     for (node, uses) in g.incident.iter().enumerate() {
         if uses.len() != 2 {
@@ -104,7 +116,7 @@ fn pseudos(g: &LineGraph, spec: RuleSpec) -> Vec<TopologyError> {
             };
             out.push(point(
                 spec,
-                ErrorType::PseudoNode,
+                ViolationKind::PseudoNode,
                 g.coords[node],
                 a,
                 Some(b),
@@ -131,7 +143,7 @@ fn selected(spec: RuleSpec, a: FeatureRef, b: FeatureRef) -> Option<(FeatureRef,
         Some((b, a))
     }
 }
-fn overlaps(g: &LineGraph, spec: RuleSpec, self_rule: bool) -> Vec<TopologyError> {
+fn overlaps(g: &LineGraph, spec: RuleSpec, self_rule: bool) -> Vec<Violation> {
     let mut groups: BTreeMap<(Feature, Option<Feature>), Overlap> = BTreeMap::new();
     for (edge_id, edge) in g.edges.iter().enumerate() {
         let mut features: BTreeMap<Feature, (FeatureRef, usize)> = BTreeMap::new();
@@ -194,12 +206,12 @@ fn overlaps(g: &LineGraph, spec: RuleSpec, self_rule: bool) -> Vec<TopologyError
             } else {
                 MultiLineString(lines).into()
             };
-            TopologyError {
+            Violation {
                 rule: spec.rule,
-                error_type: if self_rule {
-                    ErrorType::SelfOverlap
+                kind: if self_rule {
+                    ViolationKind::SelfOverlap
                 } else {
-                    ErrorType::Overlap
+                    ViolationKind::Overlap
                 },
                 geometry,
                 origin: Some(group.a),
@@ -208,11 +220,7 @@ fn overlaps(g: &LineGraph, spec: RuleSpec, self_rule: bool) -> Vec<TopologyError
         })
         .collect()
 }
-fn meetings(g: &LineGraph, spec: RuleSpec) -> Vec<TopologyError> {
-    let touch = matches!(
-        spec.rule,
-        Rule::LineMustNotIntersectOrTouchInterior | Rule::LineMustNotIntersectOrTouchInteriorWith
-    );
+fn meetings(g: &LineGraph, spec: RuleSpec, touch: bool) -> Vec<Violation> {
     let mut out = Vec::new();
     for (node, uses) in g.incident.iter().enumerate() {
         let mut features: BTreeMap<Feature, Meeting> = BTreeMap::new();
@@ -262,9 +270,9 @@ fn meetings(g: &LineGraph, spec: RuleSpec) -> Vec<TopologyError> {
                 out.push(point(
                     spec,
                     if a.interior && b.interior {
-                        ErrorType::Crossing
+                        ViolationKind::Crossing
                     } else {
-                        ErrorType::TouchInterior
+                        ViolationKind::TouchInterior
                     },
                     g.coords[node],
                     origin,
@@ -296,7 +304,7 @@ fn crosses(origin: Coord, a: [Coord; 2], b: [Coord; 2]) -> bool {
     });
     (0..4).all(|i| rays[i].1 != rays[(i + 1) % 4].1)
 }
-fn self_crossings(g: &LineGraph, spec: RuleSpec) -> Vec<TopologyError> {
+fn self_crossings(g: &LineGraph, spec: RuleSpec) -> Vec<Violation> {
     type Passage = (FeatureRef, [usize; 2]);
     let mut visits: BTreeMap<(usize, Feature), Vec<Passage>> = BTreeMap::new();
     for part in &g.parts {
@@ -337,7 +345,7 @@ fn self_crossings(g: &LineGraph, spec: RuleSpec) -> Vec<TopologyError> {
         if let Some(origin) = origin {
             out.push(point(
                 spec,
-                ErrorType::SelfCrossing,
+                ViolationKind::SelfCrossing,
                 g.coords[node],
                 origin,
                 None,

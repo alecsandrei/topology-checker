@@ -1,62 +1,121 @@
 use crate::engine::line_graph::{InputMode, LineGraph};
 use crate::{
-    Error, ErrorType, FeatureRef, Layer, LayerId, Rule, RuleSpec, TopologyError, model::Parts,
-    rules,
+    Error, Layer, LayerId, Rule, RuleId, RuleSpec, Violation, ViolationKind, model::Parts, rules,
 };
-use geo::{Geometry, MultiLineString, MultiPoint, MultiPolygon};
 use rayon::prelude::*;
 use serde::Serialize;
 use std::{
     collections::BTreeMap,
+    fmt,
     sync::{Arc, Mutex, OnceLock},
 };
 type GraphSlot = Arc<OnceLock<Result<Arc<LineGraph>, Error>>>;
 
 /// One rule's violations, with deterministic counts and feature provenance.
 #[derive(Debug, Clone, Serialize)]
+#[non_exhaustive]
 pub struct RuleReport {
-    /// Registered rule and topology-scoped layer IDs.
+    /// Registered rule with its topology-scoped rule and layer IDs.
     pub spec: RuleSpec,
     /// Primary input layer name.
     pub layer: String,
     /// Secondary input layer name for a binary rule.
     pub other: Option<String>,
-    /// Number of aggregated violations per error type, in error-type order.
-    pub counts: BTreeMap<ErrorType, usize>,
-    /// Deterministically ordered violations; several parts may contribute to one.
-    pub errors: Vec<TopologyError>,
+    /// Number of aggregated violations per kind, in kind order.
+    pub counts: BTreeMap<ViolationKind, usize>,
+    /// Deterministically ordered violations, serialized as `errors`.
+    /// Several parts may contribute to one violation.
+    #[serde(rename = "errors")]
+    pub violations: Vec<Violation>,
+}
+impl RuleReport {
+    /// Return the name of one of this rule's input layers, as referenced by its violations.
+    #[must_use]
+    pub fn layer_name(&self, id: LayerId) -> Option<&str> {
+        if id == self.spec.layer {
+            Some(&self.layer)
+        } else if Some(id) == self.spec.other {
+            self.other.as_deref()
+        } else {
+            None
+        }
+    }
+}
+/// A non-fatal input condition found while preparing a registered layer.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+#[non_exhaustive]
+pub enum Warning {
+    /// Degenerate parts or rings were skipped while cleaning a layer.
+    DegenerateParts {
+        /// Topology-scoped layer ID.
+        layer: LayerId,
+        /// Caller-supplied layer name, which need not be unique.
+        name: String,
+        /// Number of skipped parts and rings.
+        skipped: usize,
+    },
+}
+impl fmt::Display for Warning {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DegenerateParts { name, skipped, .. } => {
+                write!(
+                    f,
+                    "layer {name}: skipped {skipped} degenerate parts or rings"
+                )
+            }
+        }
+    }
 }
 /// A successful validation result, which may contain topology violations.
 #[derive(Debug, Clone, Serialize)]
+#[non_exhaustive]
 pub struct Report {
     /// Planar tolerance in input coordinate units.
     pub tolerance: f64,
     /// Degenerate-part warnings in layer registration order.
-    pub warnings: Vec<String>,
+    pub warnings: Vec<Warning>,
     /// Rule results in rule registration order, independent of parallel scheduling.
+    /// The result for `RuleId` `i` is at index `i`.
     pub rules: Vec<RuleReport>,
 }
 impl Report {
     /// Return whether every registered rule has no violations.
     #[must_use]
     pub fn is_valid(&self) -> bool {
-        self.rules.iter().all(|r| r.errors.is_empty())
+        self.rules.iter().all(|r| r.violations.is_empty())
     }
     /// Count aggregated violations across all registered rules.
     #[must_use]
-    pub fn error_count(&self) -> usize {
-        self.rules.iter().map(|r| r.errors.len()).sum()
+    pub fn violation_count(&self) -> usize {
+        self.rules.iter().map(|r| r.violations.len()).sum()
     }
     /// Iterate violations in rule order and then each rule's deterministic order.
-    pub fn errors(&self) -> impl Iterator<Item = &TopologyError> {
-        self.rules.iter().flat_map(|r| &r.errors)
+    pub fn violations(&self) -> impl Iterator<Item = &Violation> {
+        self.rules.iter().flat_map(|r| &r.violations)
+    }
+    /// Return one rule's result. IDs must originate from the topology that
+    /// produced this report.
+    #[must_use]
+    pub fn rule(&self, id: RuleId) -> Option<&RuleReport> {
+        self.rules.get(id.0)
     }
 }
-/// Owned planar layers and ordered rules with reusable, thread-safe geometry caches.
+/// An existing layer identity or an owned layer to register atomically with a rule.
+#[derive(Debug)]
+pub enum LayerInput {
+    /// Reuse a layer registered in this topology.
+    Existing(LayerId),
+    /// Register a fresh owned snapshot.
+    New(Box<Layer>),
+}
+
+/// Shared planar layers and ordered rules with reusable, thread-safe geometry caches.
 #[derive(Debug)]
 pub struct Topology {
     tolerance: f64,
-    layers: Vec<Layer>,
+    layers: Vec<Arc<Layer>>,
     specs: Vec<RuleSpec>,
     graphs: Mutex<BTreeMap<Vec<(LayerId, InputMode)>, GraphSlot>>,
 }
@@ -82,10 +141,11 @@ impl Topology {
     pub fn tolerance(&self) -> f64 {
         self.tolerance
     }
-    /// Register an owned layer without validating it, returning a topology-scoped ID.
-    pub fn add_layer(&mut self, layer: Layer) -> LayerId {
+    /// Register a layer without validating it, returning a topology-scoped ID.
+    /// Pass an `Arc<Layer>` to share one layer, and its cached views, between topologies.
+    pub fn add_layer(&mut self, layer: impl Into<Arc<Layer>>) -> LayerId {
         let id = LayerId(self.layers.len());
-        self.layers.push(layer);
+        self.layers.push(layer.into());
         id
     }
     /// Borrow a registered layer. IDs must originate from this topology.
@@ -93,14 +153,31 @@ impl Topology {
     /// # Errors
     /// Returns [`Error::UnknownLayer`] when the index is not registered.
     pub fn layer(&self, id: LayerId) -> Result<&Layer, Error> {
-        self.layers.get(id.0).ok_or(Error::UnknownLayer(id))
+        self.layers
+            .get(id.0)
+            .map(AsRef::as_ref)
+            .ok_or(Error::UnknownLayer(id))
     }
     /// Iterate layers and their IDs in registration order.
     pub fn layers(&self) -> impl Iterator<Item = (LayerId, &Layer)> {
-        self.layers.iter().enumerate().map(|(i, l)| (LayerId(i), l))
+        self.layers
+            .iter()
+            .enumerate()
+            .map(|(i, l)| (LayerId(i), l.as_ref()))
+    }
+    /// Iterate registered rules in registration order.
+    pub fn rules(&self) -> impl ExactSizeIterator<Item = RuleSpec> {
+        self.specs.iter().copied()
+    }
+    /// Remove every registered rule, keeping layers and their cached line graphs, so a
+    /// different rule set can be validated without rebuilding them. Rule IDs restart at
+    /// zero; IDs from earlier registrations must not be reused.
+    pub fn clear_rules(&mut self) {
+        self.specs.clear();
     }
     pub(crate) fn parts(&self, id: LayerId) -> Result<&Parts, Error> {
-        self.layer(id)?.parts(id)
+        let layer = self.layer(id)?;
+        layer.parts().map_err(|e| e.at(id, layer.name()))
     }
     pub(crate) fn graph(&self, layers: Vec<LayerId>) -> Result<Arc<LineGraph>, Error> {
         self.graph_inputs(
@@ -133,46 +210,92 @@ impl Topology {
     /// Register a rule after validating input families, finite coordinates and FIDs.
     /// Unary rules require no secondary layer; binary rules require a distinct one.
     /// Rules run in parallel, but reports retain registration order.
+    /// The returned spec's `id` locates this rule's result with [`Report::rule`].
     ///
     /// # Errors
-    /// Returns input-count, unknown-layer, geometry-kind, duplicate-FID or
-    /// non-finite-coordinate errors. Failed registration does not add a rule.
+    /// Returns input-count, same-layer, unknown-layer, geometry-kind, duplicate-FID
+    /// or non-finite-coordinate errors. Failed registration does not add a rule.
     pub fn add_rule(
         &mut self,
         rule: Rule,
         layer: LayerId,
         other: Option<LayerId>,
-    ) -> Result<(), Error> {
-        let (a, b) = rule.inputs();
-        if other.is_some() != b.is_some() || other == Some(layer) {
-            return Err(Error::Inputs {
-                rule,
-                expected: if b.is_some() { 2 } else { 1 },
-            });
+    ) -> Result<RuleSpec, Error> {
+        self.register_rule(
+            rule,
+            LayerInput::Existing(layer),
+            other.map(LayerInput::Existing),
+        )
+    }
+    /// Validate and commit owned inputs and a rule as one transaction.
+    /// Layer caches do not depend on registration IDs, so validation work done
+    /// here is reused after commit.
+    ///
+    /// # Errors
+    /// Returns arity, same-layer, unknown-layer, geometry-kind, duplicate-FID or
+    /// coordinate errors before committing any new layer or rule.
+    pub fn register_rule(
+        &mut self,
+        rule: Rule,
+        layer: LayerInput,
+        other: Option<LayerInput>,
+    ) -> Result<RuleSpec, Error> {
+        let (primary_kind, other_kind) = rule.inputs();
+        rule.check_input_count(other.is_some())?;
+        if let (LayerInput::Existing(a), Some(LayerInput::Existing(b))) = (&layer, &other)
+            && a == b
+        {
+            return Err(Error::SameLayer { rule, layer: *a });
         }
-        self.layer(layer)?.check_kind(a)?;
-        self.parts(layer)?;
-        if let (Some(id), Some(kind)) = (other, b) {
-            self.layer(id)?.check_kind(kind)?;
-            self.parts(id)?;
+        let mut next = self.layers.len();
+        let mut check = |input: &LayerInput, kind| -> Result<LayerId, Error> {
+            let (id, value) = match input {
+                LayerInput::Existing(id) => (*id, self.layer(*id)?),
+                LayerInput::New(value) => {
+                    let id = LayerId(next);
+                    next += 1;
+                    (id, value.as_ref())
+                }
+            };
+            value.check_kind(id, kind)?;
+            value.parts().map_err(|e| e.at(id, value.name()))?;
+            Ok(id)
+        };
+        let primary_id = check(&layer, primary_kind)?;
+        let other_id = other
+            .as_ref()
+            .zip(other_kind)
+            .map(|(input, kind)| check(input, kind))
+            .transpose()?;
+        for input in [Some(layer), other].into_iter().flatten() {
+            if let LayerInput::New(value) = input {
+                self.layers.push(Arc::from(value));
+            }
         }
-        self.specs.push(RuleSpec { rule, layer, other });
-        Ok(())
+        let spec = RuleSpec {
+            id: RuleId(self.specs.len()),
+            rule,
+            layer: primary_id,
+            other: other_id,
+        };
+        self.specs.push(spec);
+        Ok(spec)
     }
     /// Validate cached part views and report skipped degenerate parts without running rules.
     ///
     /// # Errors
     /// Returns duplicate-FID or non-finite-coordinate errors from any registered layer,
     /// including layers that are not used by a rule.
-    pub fn warnings(&self) -> Result<Vec<String>, Error> {
+    pub fn warnings(&self) -> Result<Vec<Warning>, Error> {
         let mut warnings = Vec::new();
         for (id, layer) in self.layers() {
-            let n = self.parts(id)?.skipped;
-            if n > 0 {
-                warnings.push(format!(
-                    "layer {}: skipped {n} degenerate parts or rings",
-                    layer.name()
-                ));
+            let skipped = self.parts(id)?.skipped;
+            if skipped > 0 {
+                warnings.push(Warning::DegenerateParts {
+                    layer: id,
+                    name: layer.name().into(),
+                    skipped,
+                });
             }
         }
         Ok(warnings)
@@ -189,10 +312,10 @@ impl Topology {
             .specs
             .par_iter()
             .map(|&spec| {
-                let errors = rules::run(self, spec)?;
+                let violations = rules::run(self, spec)?;
                 let mut counts = BTreeMap::new();
-                for e in &errors {
-                    *counts.entry(e.error_type).or_default() += 1;
+                for v in &violations {
+                    *counts.entry(v.kind).or_default() += 1;
                 }
                 Ok(RuleReport {
                     spec,
@@ -202,7 +325,7 @@ impl Topology {
                         .map(|id| self.layer(id).map(|l| l.name().to_string()))
                         .transpose()?,
                     counts,
-                    errors,
+                    violations,
                 })
             })
             .collect::<Result<Vec<_>, Error>>()?;
@@ -214,133 +337,79 @@ impl Topology {
     }
 }
 
-/// Aggregate pair errors across parts without inventing a single part identity.
-pub(crate) fn aggregate(errors: Vec<TopologyError>) -> Vec<TopologyError> {
-    type Key = (
-        Rule,
-        ErrorType,
-        Option<(LayerId, i64)>,
-        Option<(LayerId, i64)>,
-    );
-    let mut groups: BTreeMap<Key, Vec<TopologyError>> = BTreeMap::new();
-    for e in errors {
-        groups
-            .entry((
-                e.rule,
-                e.error_type,
-                e.origin.map(FeatureRef::feature),
-                e.destination.map(FeatureRef::feature),
-            ))
-            .or_default()
-            .push(e);
-    }
-    groups
-        .into_values()
-        .map(|group| {
-            let mut group = group.into_iter();
-            let mut first = group.next().expect("aggregation groups are nonempty");
-            // Keep an unsupported first geometry as the fallback, as before.
-            let geometry = std::mem::replace(
-                &mut first.geometry,
-                Geometry::MultiPoint(MultiPoint(Vec::new())),
-            );
-            let mut points = Vec::new();
-            let mut lines = Vec::new();
-            let mut polygons = Vec::new();
-            let mut add_geometry = |geometry| {
-                match geometry {
-                    Geometry::Point(g) => points.push(g),
-                    Geometry::MultiPoint(g) if !g.0.is_empty() => points.extend(g.0),
-                    Geometry::Line(g) => lines.push(g.into()),
-                    Geometry::LineString(g) => lines.push(g),
-                    Geometry::MultiLineString(g) if !g.0.is_empty() => lines.extend(g.0),
-                    Geometry::Polygon(g) => polygons.push(g),
-                    Geometry::MultiPolygon(g) if !g.0.is_empty() => polygons.extend(g.0),
-                    other => return Some(other),
-                }
-                None
-            };
-            if let Some(fallback) = add_geometry(geometry) {
-                first.geometry = fallback;
-            }
-            for e in group {
-                if let (Some(a), Some(b)) = (&mut first.origin, e.origin) {
-                    a.aggregate(b);
-                }
-                if let (Some(a), Some(b)) = (&mut first.destination, e.destination) {
-                    a.aggregate(b);
-                }
-                // Unsupported later geometries never replace the first fallback.
-                let _ = add_geometry(e.geometry);
-            }
-            if !points.is_empty() {
-                points.sort_by(|a, b| a.x().total_cmp(&b.x()).then(a.y().total_cmp(&b.y())));
-                points.dedup();
-                first.geometry = if points.len() == 1 {
-                    Geometry::Point(points[0])
-                } else {
-                    Geometry::MultiPoint(MultiPoint(points))
-                };
-            }
-            if !lines.is_empty() {
-                first.geometry = if lines.len() == 1 {
-                    Geometry::LineString(lines.remove(0))
-                } else {
-                    Geometry::MultiLineString(MultiLineString(lines))
-                };
-            }
-            if !polygons.is_empty() {
-                first.geometry = if polygons.len() == 1 {
-                    Geometry::Polygon(polygons.remove(0))
-                } else {
-                    Geometry::MultiPolygon(MultiPolygon(polygons))
-                };
-            }
-            first
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use geo::{LineString, Point, Rect, coord};
+    use geo::{LineString, Point};
 
     #[test]
-    fn aggregation_retains_provenance_deduplication_and_geometry_priority() {
-        let origin = |part| {
-            Some(FeatureRef {
-                layer: LayerId(0),
-                fid: -4,
-                part: Some(part),
-            })
-        };
-        let error = |geometry, part| TopologyError {
-            rule: Rule::LineMustNotIntersect,
-            error_type: ErrorType::Crossing,
-            geometry,
-            origin: origin(part),
-            destination: Some(FeatureRef {
-                layer: LayerId(1),
-                fid: 8,
-                part: Some(2),
-            }),
-        };
-        let point = Point::new(1., 0.);
-        let points = aggregate(vec![error(point.into(), 0), error(point.into(), 1)]);
-        assert_eq!(points.len(), 1);
-        assert_eq!(points[0].geometry, Geometry::Point(point));
-        assert_eq!(points[0].origin.unwrap().part, None);
-        assert_eq!(points[0].destination.unwrap().part, Some(2));
-        let line = LineString::from(vec![(0., 0.), (1., 0.)]);
-        let polygon = Rect::new(coord! {x:0.,y:0.}, coord! {x:1.,y:1.}).to_polygon();
-        let mixed = aggregate(vec![
-            error(point.into(), 0),
-            error(line.into(), 0),
-            error(polygon.clone().into(), 1),
-        ]);
-        assert_eq!(mixed[0].geometry, Geometry::Polygon(polygon));
-        let empty = Geometry::MultiLineString(MultiLineString(Vec::new()));
-        assert_eq!(aggregate(vec![error(empty.clone(), 0)])[0].geometry, empty);
+    fn transactions_reject_invalid_layers_without_consuming_ids_or_rules() {
+        for bad in [
+            Layer::from_features("duplicates", vec![(4, Point::new(0., 0.).into()); 2]),
+            Layer::from_geometries("nonfinite", [Point::new(f64::INFINITY, 0.).into()]),
+            Layer::from_geometries(
+                "wrong kind",
+                [LineString::from(vec![(0., 0.), (1., 0.)]).into()],
+            ),
+        ] {
+            let mut topology = Topology::new(0.).unwrap();
+            let original = topology.add_layer(Layer::from_geometries("original", []));
+            let new = LayerInput::New(Box::new(Layer::from_geometries(
+                "pending",
+                [Point::new(0., 0.).into()],
+            )));
+            assert!(
+                topology
+                    .register_rule(
+                        Rule::PointMustNotOverlapWith,
+                        new,
+                        Some(LayerInput::New(Box::new(bad))),
+                    )
+                    .is_err()
+            );
+            assert_eq!(topology.layers().count(), 1);
+            assert!(topology.validate().unwrap().rules.is_empty());
+            assert!(topology.warnings().unwrap().is_empty());
+            let spec = topology
+                .register_rule(
+                    Rule::PointMustNotOverlapWith,
+                    LayerInput::Existing(original),
+                    Some(LayerInput::New(Box::new(Layer::from_geometries(
+                        "next",
+                        [],
+                    )))),
+                )
+                .unwrap();
+            assert_eq!(spec.other.unwrap().index(), 1);
+        }
+    }
+
+    #[test]
+    fn transaction_caches_keep_final_ids_for_each_input_order() {
+        for reuse_primary in [false, true] {
+            let mut topology = Topology::new(0.).unwrap();
+            topology.add_layer(Layer::from_geometries("unused", []));
+            let existing = topology.add_layer(Layer::from_geometries(
+                "existing",
+                [Point::new(0., 0.).into()],
+            ));
+            let fresh = LayerInput::New(Box::new(Layer::from_geometries(
+                "fresh",
+                [Point::new(0., 0.).into()],
+            )));
+            let (primary, other) = if reuse_primary {
+                (LayerInput::Existing(existing), fresh)
+            } else {
+                (fresh, LayerInput::Existing(existing))
+            };
+            let spec = topology
+                .register_rule(Rule::PointMustNotOverlapWith, primary, Some(other))
+                .unwrap();
+            let report = topology.validate().unwrap();
+            let error = &report.rules[0].violations[0];
+            assert_eq!(error.origin.unwrap().layer, spec.layer);
+            assert_eq!(error.destination.unwrap().layer, spec.other.unwrap());
+            assert_eq!(topology.layers().count(), 3);
+        }
     }
 }

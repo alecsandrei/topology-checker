@@ -1,13 +1,24 @@
 use crate::{
-    Error, Layer, LayerId,
+    Error, Layer,
     engine::{
         cluster::{Cluster, distance},
         index,
         line_graph::projection,
     },
+    model::Invalid,
 };
 use geo::{BoundingRect, Coord, Geometry, LineString};
 use std::collections::BTreeMap;
+
+/// Report a line utility input by position. Inputs receive sequential FIDs, so
+/// only the coordinate check can fail.
+fn line_error(invalid: Invalid) -> Error {
+    match invalid {
+        Invalid::NonFinite(fid) | Invalid::DuplicateFid(fid) => Error::NonFiniteLine {
+            index: usize::try_from(fid).unwrap_or_default(),
+        },
+    }
+}
 
 /// Merge original line parts through degree-two endpoint joins, preserving interior junctions.
 ///
@@ -21,7 +32,7 @@ use std::collections::BTreeMap;
 ///
 /// # Errors
 /// Returns [`Error::Tolerance`] for negative or non-finite tolerance and
-/// [`Error::NonFinite`] for non-finite input coordinates.
+/// [`Error::NonFiniteLine`] for non-finite input coordinates.
 pub fn merge_lines(
     lines: impl IntoIterator<Item = LineString>,
     tolerance: f64,
@@ -29,8 +40,8 @@ pub fn merge_lines(
     if !tolerance.is_finite() || tolerance < 0. {
         return Err(Error::Tolerance(tolerance));
     }
-    let layer = Layer::from_geometries("merge-lines", lines.into_iter().map(Geometry::LineString));
-    let parts = layer.parts(LayerId(0))?;
+    let layer = Layer::from_geometries("lines", lines.into_iter().map(Geometry::LineString));
+    let parts = layer.parts().map_err(line_error)?;
     let lines = parts.lines.iter().map(|p| &p.geometry).collect::<Vec<_>>();
     let mut cluster = Cluster::new(tolerance);
     let edges = lines
@@ -159,14 +170,14 @@ pub fn merge_lines(
 /// carry no feature provenance.
 ///
 /// # Errors
-/// Returns [`Error::NonFinite`] for non-finite input coordinates.
+/// Returns [`Error::NonFiniteLine`] for non-finite input coordinates.
 pub fn explode_lines(
     lines: impl IntoIterator<Item = LineString>,
 ) -> Result<Vec<LineString>, Error> {
-    let layer =
-        Layer::from_geometries("explode-lines", lines.into_iter().map(Geometry::LineString));
+    let layer = Layer::from_geometries("lines", lines.into_iter().map(Geometry::LineString));
     Ok(layer
-        .parts(LayerId(0))?
+        .parts()
+        .map_err(line_error)?
         .lines
         .iter()
         .flat_map(|p| p.geometry.lines())

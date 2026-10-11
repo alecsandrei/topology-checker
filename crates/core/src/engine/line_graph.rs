@@ -130,7 +130,8 @@ impl LineGraph {
             for p in lines {
                 let id = parts.len();
                 parts.push(GraphPart {
-                    reference: p.reference,
+                    // Graphs belong to one topology, so parts carry final layer IDs.
+                    reference: p.reference.at(layer),
                     nodes: Vec::new(),
                 });
                 endpoints.push([p.geometry.0[0], p.geometry.0[p.geometry.0.len() - 1]]);

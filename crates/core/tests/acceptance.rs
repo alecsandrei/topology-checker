@@ -1,5 +1,5 @@
 use topology_checker_core::{
-    Error, ErrorType, Layer, Rule, Topology,
+    Error, Layer, Rule, Topology, ViolationKind,
     geo::{Geometry, MultiPoint, MultiPolygon, Point, polygon},
 };
 
@@ -23,15 +23,15 @@ fn three_coincident_points_produce_three_feature_pairs() {
         None,
         0.,
     );
-    assert_eq!(r.error_count(), 3);
-    assert!(r.errors().all(|e| e.origin != e.destination));
+    assert_eq!(r.violation_count(), 3);
+    assert!(r.violations().all(|e| e.origin != e.destination));
 }
 #[test]
 fn overlap_aggregates_multipart_features() {
     let g = Geometry::MultiPoint(MultiPoint(vec![Point::new(0., 0.), Point::new(1., 0.)]));
     let r = run(Rule::PointMustNotOverlap, vec![g.clone(), g], None, 0.);
-    assert_eq!(r.error_count(), 1);
-    assert_eq!(r.errors().next().unwrap().origin.unwrap().part, None);
+    assert_eq!(r.violation_count(), 1);
+    assert_eq!(r.violations().next().unwrap().origin.unwrap().part, None);
 }
 #[test]
 fn single_part_multi_polygon_is_valid() {
@@ -53,8 +53,8 @@ fn point_boundary_is_outside() {
         Some(vec![p.into()]),
         0.,
     );
-    assert_eq!(r.error_count(), 1);
-    assert_eq!(r.errors().next().unwrap().error_type, ErrorType::Outside);
+    assert_eq!(r.violation_count(), 1);
+    assert_eq!(r.violations().next().unwrap().kind, ViolationKind::Outside);
 }
 #[test]
 fn invalid_inputs_are_typed_errors() {
@@ -86,9 +86,9 @@ fn polygon_overlaps_report_each_feature_pair_once() {
         None,
         0.,
     );
-    assert_eq!(r.error_count(), 1);
+    assert_eq!(r.violation_count(), 1);
     use topology_checker_core::geo::Area;
-    let Geometry::Polygon(p) = &r.errors().next().unwrap().geometry else {
+    let Geometry::Polygon(p) = &r.violations().next().unwrap().geometry else {
         panic!("expected polygon");
     };
     assert_eq!(p.unsigned_area(), 2.);
@@ -103,20 +103,20 @@ fn adjacent_polygons_with_unmatched_vertices_have_no_gap() {
         None,
         0.,
     );
-    assert_eq!(r.error_count(), 1);
+    assert_eq!(r.violation_count(), 1);
     assert_eq!(
-        r.errors().next().unwrap().error_type,
-        ErrorType::OuterBoundary
+        r.violations().next().unwrap().kind,
+        ViolationKind::OuterBoundary
     );
 }
 #[test]
 fn gap_holes_and_outer_boundaries_are_distinct() {
     let p = polygon!(exterior: [(x:0.,y:0.),(x:5.,y:0.),(x:5.,y:5.),(x:0.,y:5.)],interiors:[[(x:1.,y:1.),(x:2.,y:1.),(x:2.,y:2.),(x:1.,y:2.)]]);
     let r = run(Rule::PolygonMustNotHaveGaps, vec![p.into()], None, 0.);
-    assert_eq!(r.error_count(), 2);
+    assert_eq!(r.violation_count(), 2);
     assert_eq!(
-        r.errors()
-            .filter(|e| e.error_type == ErrorType::Gap)
+        r.violations()
+            .filter(|e| e.kind == ViolationKind::Gap)
             .count(),
         1
     );
@@ -132,7 +132,7 @@ fn polygon_slivers_are_filtered_but_outer_boundaries_remain() {
     assert!(r.is_valid());
     let p = polygon!(exterior:[(x:0.,y:0.),(x:2.,y:0.),(x:2.,y:2.),(x:0.,y:2.)],interiors:[[(x:1.,y:1.),(x:1.0001,y:1.),(x:1.0001,y:1.5),(x:1.,y:1.5)]]);
     let r = run(Rule::PolygonMustNotHaveGaps, vec![p.into()], None, 0.001);
-    assert_eq!(r.error_count(), 1);
+    assert_eq!(r.violation_count(), 1);
 }
 #[test]
 fn line_inside_uses_union_and_accepts_boundaries() {
@@ -147,7 +147,7 @@ fn line_inside_uses_union_and_accepts_boundaries() {
         Some(vec![square(0., 0., 1.), square(1., 0., 1.)]),
         0.,
     );
-    assert!(r.is_valid(), "{:?}", r.errors().collect::<Vec<_>>());
+    assert!(r.is_valid(), "{:?}", r.violations().collect::<Vec<_>>());
 }
 #[test]
 fn line_outside_error_is_only_the_uncovered_piece() {
@@ -158,8 +158,8 @@ fn line_outside_error_is_only_the_uncovered_piece() {
         Some(vec![square(0., 0., 1.)]),
         0.,
     );
-    assert_eq!(r.error_count(), 1);
-    let Geometry::LineString(l) = &r.errors().next().unwrap().geometry else {
+    assert_eq!(r.violation_count(), 1);
+    let Geometry::LineString(l) = &r.violations().next().unwrap().geometry else {
         panic!("line error");
     };
     assert!((Euclidean.length(l) - 1.).abs() < 1e-8);
@@ -199,8 +199,8 @@ fn identical_and_reversed_lines_overlap_once() {
             None,
             0.,
         );
-        assert_eq!(r.error_count(), 1);
-        let Geometry::LineString(l) = &r.errors().next().unwrap().geometry else {
+        assert_eq!(r.violation_count(), 1);
+        let Geometry::LineString(l) = &r.violations().next().unwrap().geometry else {
             panic!("line");
         };
         assert_eq!(Euclidean.length(l), 2.);
@@ -217,9 +217,9 @@ fn partial_line_overlap_reports_only_shared_piece() {
         Some(vec![b.into()]),
         0.,
     );
-    assert_eq!(r.error_count(), 1);
+    assert_eq!(r.violation_count(), 1);
     assert_eq!(
-        r.errors().next().unwrap().geometry,
+        r.violations().next().unwrap().geometry,
         Geometry::LineString(line_string![(x:1.,y:0.),(x:2.,y:0.)])
     );
 }
@@ -234,9 +234,9 @@ fn partial_self_overlap_is_separate_from_other_feature_rules() {
         None,
         0.,
     );
-    assert_eq!(r.error_count(), 1);
+    assert_eq!(r.violation_count(), 1);
     assert_eq!(
-        r.errors().next().unwrap().geometry,
+        r.violations().next().unwrap().geometry,
         Geometry::LineString(line_string![(x:1.,y:0.),(x:2.,y:0.)])
     );
     for rule in [Rule::LineMustNotOverlap, Rule::LineMustNotIntersect] {
@@ -251,11 +251,11 @@ fn tolerance_connects_endpoints_and_cracks_t_junctions() {
         line_string![(x:1.000000001,y:0.),(x:2.,y:0.)].into(),
     ];
     assert_eq!(
-        run(Rule::LineMustNotHaveDangles, lines.clone(), None, 0.).error_count(),
+        run(Rule::LineMustNotHaveDangles, lines.clone(), None, 0.).violation_count(),
         4
     );
     assert_eq!(
-        run(Rule::LineMustNotHaveDangles, lines, None, 0.001).error_count(),
+        run(Rule::LineMustNotHaveDangles, lines, None, 0.001).violation_count(),
         2
     );
     let lines = vec![
@@ -263,7 +263,7 @@ fn tolerance_connects_endpoints_and_cracks_t_junctions() {
         line_string![(x:1.,y:0.0001),(x:1.,y:1.)].into(),
     ];
     assert_eq!(
-        run(Rule::LineMustNotHaveDangles, lines, None, 0.001).error_count(),
+        run(Rule::LineMustNotHaveDangles, lines, None, 0.001).violation_count(),
         3
     );
 }
@@ -277,10 +277,10 @@ fn self_crossings_closed_loops_and_self_touches_have_distinct_semantics() {
         None,
         0.,
     );
-    assert_eq!(r.error_count(), 1);
+    assert_eq!(r.violation_count(), 1);
     assert_eq!(
-        r.errors().next().unwrap().error_type,
-        ErrorType::SelfCrossing
+        r.violations().next().unwrap().kind,
+        ViolationKind::SelfCrossing
     );
     let closed = line_string![(x:0.,y:0.),(x:1.,y:0.),(x:1.,y:1.),(x:0.,y:1.),(x:0.,y:0.)];
     for rule in [
@@ -298,7 +298,7 @@ fn self_crossings_closed_loops_and_self_touches_have_distinct_semantics() {
             None,
             0.
         )
-        .error_count(),
+        .violation_count(),
         1
     );
     let touch = line_string![(x:0.,y:0.),(x:-1.,y:1.),(x:-2.,y:0.),(x:-1.,y:-1.),(x:0.,y:0.),(x:1.,y:-1.),(x:2.,y:0.),(x:1.,y:1.),(x:0.,y:0.)];
@@ -324,10 +324,10 @@ fn crossing_and_endpoint_interior_touch_are_separate() {
         None,
         0.,
     );
-    assert_eq!(r.error_count(), 1);
+    assert_eq!(r.violation_count(), 1);
     assert_eq!(
-        r.errors().next().unwrap().error_type,
-        ErrorType::TouchInterior
+        r.violations().next().unwrap().kind,
+        ViolationKind::TouchInterior
     );
     let cross = line_string![(x:1.,y:-1.),(x:1.,y:1.)];
     let r = run(
@@ -336,8 +336,8 @@ fn crossing_and_endpoint_interior_touch_are_separate() {
         Some(vec![cross.into()]),
         0.,
     );
-    assert_eq!(r.error_count(), 1);
-    assert_eq!(r.errors().next().unwrap().error_type, ErrorType::Crossing);
+    assert_eq!(r.violation_count(), 1);
+    assert_eq!(r.violations().next().unwrap().kind, ViolationKind::Crossing);
 }
 #[test]
 fn pseudo_nodes_require_distinct_features() {
@@ -351,7 +351,7 @@ fn pseudo_nodes_require_distinct_features() {
             None,
             0.
         )
-        .error_count(),
+        .violation_count(),
         1
     );
     assert!(
@@ -380,7 +380,7 @@ fn unrelated_layers_do_not_change_single_layer_graph_results() {
     t.add_rule(Rule::LineMustNotIntersectWith, a, Some(b))
         .unwrap();
     let r = t.validate().unwrap();
-    assert_eq!(r.rules[0].errors.len(), 2);
+    assert_eq!(r.rules[0].violations.len(), 2);
     assert_eq!(
         serde_free_signature(&r),
         serde_free_signature(&t.validate().unwrap())
@@ -417,8 +417,8 @@ fn multipart_line_overlap_aggregates_disconnected_pieces() {
         None,
         0.,
     );
-    assert_eq!(r.error_count(), 1);
-    let e = r.errors().next().unwrap();
+    assert_eq!(r.violation_count(), 1);
+    let e = r.violations().next().unwrap();
     assert_eq!(e.origin.unwrap().part, None);
     assert!(matches!(e.geometry, Geometry::MultiLineString(_)));
 }
@@ -435,8 +435,8 @@ fn concurrent_crossings_do_not_create_roundoff_overlaps() {
         ]),
         0.,
     );
-    assert_eq!(r.error_count(), 2);
-    assert!(r.errors().all(|e| e.error_type == ErrorType::Crossing));
-    let coordinates = r.errors().map(|e| &e.geometry).collect::<Vec<_>>();
+    assert_eq!(r.violation_count(), 2);
+    assert!(r.violations().all(|e| e.kind == ViolationKind::Crossing));
+    let coordinates = r.violations().map(|e| &e.geometry).collect::<Vec<_>>();
     assert_eq!(coordinates[0], coordinates[1]);
 }

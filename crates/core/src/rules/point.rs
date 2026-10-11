@@ -1,14 +1,15 @@
 use crate::{
-    Error, ErrorType, RuleSpec, Topology, TopologyError,
+    Error, LayerId, RuleSpec, Topology, Violation, ViolationKind,
+    aggregate::{Merge, aggregate},
     engine::{cluster::distance, index},
-    topology::aggregate,
 };
 use geo::{Contains, Distance, Euclidean, Geometry};
 use rayon::prelude::*;
 
-pub(crate) fn overlap(t: &Topology, spec: RuleSpec) -> Result<Vec<TopologyError>, Error> {
-    let a = t.parts(spec.layer)?;
-    let b = t.parts(spec.other.unwrap_or(spec.layer))?;
+pub(crate) fn overlap(t: &Topology, spec: RuleSpec) -> Result<Vec<Violation>, Error> {
+    let (a_layer, b_layer) = (spec.layer, spec.other.unwrap_or(spec.layer));
+    let a = t.parts(a_layer)?;
+    let b = t.parts(b_layer)?;
     let candidates = index::pairs(
         &a.point_index,
         &b.point_index,
@@ -20,28 +21,29 @@ pub(crate) fn overlap(t: &Topology, spec: RuleSpec) -> Result<Vec<TopologyError>
         .filter_map(|&(i, j)| {
             let a = &a.points[i];
             let b = &b.points[j];
-            if a.reference.feature() == b.reference.feature()
+            let (origin, destination) = (a.reference.at(a_layer), b.reference.at(b_layer));
+            if origin.feature() == destination.feature()
                 || distance(a.geometry.0, b.geometry.0) > t.tolerance()
             {
                 return None;
             }
-            Some(TopologyError {
+            Some(Violation {
                 rule: spec.rule,
-                error_type: ErrorType::Overlap,
+                kind: ViolationKind::Overlap,
                 geometry: Geometry::Point(a.geometry),
-                origin: Some(a.reference),
-                destination: Some(b.reference),
+                origin: Some(origin),
+                destination: Some(destination),
             })
         })
         .collect();
-    Ok(aggregate(errors))
+    Ok(aggregate(errors, Merge::HighestDimension))
 }
-pub(crate) fn inside(t: &Topology, spec: RuleSpec) -> Result<Vec<TopologyError>, Error> {
+pub(crate) fn inside(
+    t: &Topology,
+    spec: RuleSpec,
+    other: LayerId,
+) -> Result<Vec<Violation>, Error> {
     let a = t.parts(spec.layer)?;
-    let other = spec.other.ok_or(Error::Inputs {
-        rule: spec.rule,
-        expected: 2,
-    })?;
     let b = t.parts(other)?;
     Ok(a.points
         .par_iter()
@@ -58,11 +60,11 @@ pub(crate) fn inside(t: &Topology, spec: RuleSpec) -> Result<Vec<TopologyError>,
                             .iter()
                             .all(|ring| Euclidean.distance(ring, &p.geometry) > t.tolerance())
                 });
-            (!inside).then_some(TopologyError {
+            (!inside).then_some(Violation {
                 rule: spec.rule,
-                error_type: ErrorType::Outside,
+                kind: ViolationKind::Outside,
                 geometry: Geometry::Point(p.geometry),
-                origin: Some(p.reference),
+                origin: Some(p.reference.at(spec.layer)),
                 destination: None,
             })
         })

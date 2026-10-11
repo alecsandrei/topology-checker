@@ -1,5 +1,5 @@
 use topology_checker_core::{
-    ErrorType, Layer, Rule, Topology, TopologyError,
+    Layer, Rule, Topology, Violation, ViolationKind,
     geo::{
         Geometry, GeometryCollection, LineString, MultiLineString, MultiPoint, MultiPolygon, Point,
         Polygon, Rect, coord,
@@ -24,7 +24,7 @@ fn hole() -> Geometry {
     )
     .into()
 }
-fn run(rule: Rule, a: Vec<Geometry>, b: Vec<Geometry>, tolerance: f64) -> Vec<TopologyError> {
+fn run(rule: Rule, a: Vec<Geometry>, b: Vec<Geometry>, tolerance: f64) -> Vec<Violation> {
     let mut t = Topology::new(tolerance).unwrap();
     let a = t.add_layer(Layer::from_features(
         "origin",
@@ -35,7 +35,7 @@ fn run(rule: Rule, a: Vec<Geometry>, b: Vec<Geometry>, tolerance: f64) -> Vec<To
         b.into_iter().enumerate().map(|(i, g)| (i as i64 - 40, g)),
     ));
     t.add_rule(rule, a, Some(b)).unwrap();
-    t.validate().unwrap().rules.remove(0).errors
+    t.validate().unwrap().rules.remove(0).violations
 }
 #[test]
 fn every_new_rule_has_valid_and_invalid_examples() {
@@ -532,7 +532,7 @@ fn cardinality_counts_features_and_preserves_input_roles() {
     assert_eq!(errors.len(), 1);
     assert_eq!(errors[0].origin.unwrap().fid, -20);
     assert!(errors[0].destination.is_none());
-    assert_eq!(errors[0].error_type, ErrorType::PointCount);
+    assert_eq!(errors[0].kind, ViolationKind::PointCount);
     let multi = Geometry::MultiPoint(MultiPoint(vec![Point::new(1., 1.), Point::new(2., 2.)]));
     assert!(
         run(
@@ -576,8 +576,8 @@ fn cardinality_counts_features_and_preserves_input_roles() {
         .is_empty()
     );
     assert_eq!(
-        run(Rule::PolygonMustContainPoint, vec![square()], vec![], 0.)[0].error_type,
-        ErrorType::MissingPoint
+        run(Rule::PolygonMustContainPoint, vec![square()], vec![], 0.)[0].kind,
+        ViolationKind::MissingPoint
     );
     assert_eq!(
         run(
@@ -738,8 +738,8 @@ fn graph_modes_and_unrelated_layers_do_not_change_results() {
         .unwrap();
     for _ in 0..4 {
         let report = topology.validate().unwrap();
-        assert_eq!(first.rules[0].errors, report.rules[0].errors);
-        assert_eq!(first.rules[1].errors, report.rules[1].errors);
+        assert_eq!(first.rules[0].violations, report.rules[0].violations);
+        assert_eq!(first.rules[1].violations, report.rules[1].violations);
     }
 }
 
