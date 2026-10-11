@@ -1,0 +1,21 @@
+# Preview: uv run --only-group docs mkdocs serve
+site_name: topology-checker
+site_url: https://alecsandrei.github.io/topology-checker/
+repo_url: https://github.com/alecsandrei/topology-checker
+edit_uri: edit/master/docs/
+theme:
+  name: material
+  features:
+    - content.code.copy
+nav:
+  - Home: README.md
+  - Install: install.md
+  - CLI: cli.md
+  - Rules: rules.md
+  - Web app: web-app.md
+  - Python: python-usage.md
+markdown_extensions:
+  - toc:
+      permalink: true
+  - pymdownx.highlight
+  - pymdownx.superfences

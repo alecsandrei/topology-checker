@@ -104,7 +104,7 @@ the export CRS is unset. `Report.to_dict()` works without GeoPandas;
 
 ## Geometry-dependent semantics
 
-The 24 public constraints resolve to 38 concrete Rust rules using the ordered
+The 24 public constraints resolve to the 38 concrete [rules](rules.md) using the ordered
 geometry families and whether `other=` is supplied. These examples illustrate
 why the concrete variant matters:
 

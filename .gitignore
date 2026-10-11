@@ -21,3 +21,4 @@ builds
 /web/test-results/
 /web/playwright-report/
 /web/*.tsbuildinfo
+/site/

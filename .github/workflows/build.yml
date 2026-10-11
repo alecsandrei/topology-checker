@@ -45,13 +45,13 @@ jobs:
         run: cargo build --workspace --release --locked
       - name: Test
         run: cargo test --workspace --release --locked
-      - name: Generated TypeScript bindings are current
+      - name: Generated files are current
         if: runner.os == 'Linux'
         run: |
-          changes=$(git status --porcelain -- web/src/generated)
+          changes=$(git status --porcelain -- web/src/generated docs/rules.md)
           if [ -n "$changes" ]; then
             echo "$changes"
-            echo "Run cargo test and commit web/src/generated."
+            echo "Run cargo test and commit the generated files."
             exit 1
           fi
       - name: Clippy
