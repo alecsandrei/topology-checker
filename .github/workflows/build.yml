@@ -15,6 +15,21 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Frontend install
+        run: npm ci --prefix web
+      - name: Verify bundled example data
+        run: node scripts/prepare-examples.mjs --check
+      - name: Frontend type check, component tests and build
+        run: |
+          npm run format:check --prefix web
+          npm run typecheck --prefix web
+          npm test --prefix web
+          npm run build --prefix web
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -38,12 +53,32 @@ jobs:
       - name: Smoke test
         shell: bash
         run: ./target/release/topology-checker rules
+      - name: Browser dependencies
+        if: runner.os == 'Linux'
+        working-directory: web
+        run: npx playwright install --with-deps chromium
+      - name: Browser tests
+        if: runner.os == 'Linux'
+        env:
+          TOPOLOGY_WEB_EXECUTABLE: ./target/release/topology-checker-web
+        run: npm run test:browser --prefix web
+      - name: Package local application
+        shell: bash
+        run: |
+          mkdir -p builds/package/web
+          cp -R web/dist/. builds/package/web/
+          cp README.md builds/package/README.md
+          cp crates/server/examples/DATA-LICENSE.md builds/package/DATA-LICENSE.md
+          if [[ -f target/release/topology-checker.exe ]]; then
+            cp target/release/topology-checker.exe target/release/topology-checker-web.exe builds/package/
+          else
+            cp target/release/topology-checker target/release/topology-checker-web builds/package/
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: topology-checker-${{ runner.os }}-${{ runner.arch }}
           path: |
-            target/release/topology-checker
-            target/release/topology-checker.exe
+            builds/package/
           if-no-files-found: error
   msrv:
     runs-on: ubuntu-latest

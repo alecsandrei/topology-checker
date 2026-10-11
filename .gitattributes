@@ -1,0 +1,2 @@
+# Preserve upstream source snapshots exactly, including trailing spaces.
+crates/server/examples/sources/*.geojson whitespace=-blank-at-eol

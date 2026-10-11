@@ -1,0 +1,238 @@
+[
+  {
+    "id": "world-cities",
+    "title": "World cities",
+    "description": "243 populated places and country groups made from their original points.",
+    "datasets": [
+      {
+        "filename": "ne_110m_populated_places.geojson",
+        "asset": "sources/ne_110m_populated_places.geojson",
+        "feature_count": 243,
+        "imported_feature_count": 243,
+        "geometry_types": [
+          "Point"
+        ],
+        "provenance": {
+          "provider": "Natural Earth",
+          "source_urls": [
+            "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/ca96624a56bd078437bca8184e78163e5039ad19/geojson/ne_110m_populated_places.geojson"
+          ],
+          "revision": "ca96624a56bd078437bca8184e78163e5039ad19",
+          "sha256": "a86028b083182b68c7620fc6e1a8a47ee547cb9cd2fb62ccbb78bea786440899",
+          "download_date": "2026-10-10",
+          "license": "Public domain",
+          "license_url": "https://www.naturalearthdata.com/about/terms-of-use/",
+          "grouping": null
+        },
+        "visible": true,
+        "checks": [
+          "point/must-not-overlap"
+        ]
+      },
+      {
+        "filename": "cities_by_country.geojson",
+        "asset": "generated/cities_by_country.geojson",
+        "feature_count": 198,
+        "imported_feature_count": 198,
+        "geometry_types": [
+          "MultiPoint"
+        ],
+        "provenance": {
+          "provider": "Natural Earth",
+          "source_urls": [
+            "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/ca96624a56bd078437bca8184e78163e5039ad19/geojson/ne_110m_populated_places.geojson"
+          ],
+          "revision": "ca96624a56bd078437bca8184e78163e5039ad19",
+          "sha256": "caa2e7b26be5e6848c9fb313ebd4d6399b4145523fece3e7558f1ec0f5884918",
+          "download_date": "2026-10-10",
+          "license": "Public domain",
+          "license_url": "https://www.naturalearthdata.com/about/terms-of-use/",
+          "grouping": "Group cities by ADM0_A3 in sorted country-code order. Coordinates and original member attributes are preserved without clipping, simplification, merging or movement.",
+          "inputs": [
+            {
+              "filename": "ne_110m_populated_places.geojson",
+              "sha256": "a86028b083182b68c7620fc6e1a8a47ee547cb9cd2fb62ccbb78bea786440899"
+            }
+          ]
+        },
+        "visible": false,
+        "checks": [
+          "geometry/must-not-be-multipart"
+        ]
+      }
+    ],
+    "note": ""
+  },
+  {
+    "id": "major-rivers",
+    "title": "Major rivers",
+    "description": "River centerlines at 110m and 50m scales, checked separately.",
+    "datasets": [
+      {
+        "filename": "ne_110m_rivers_lake_centerlines.geojson",
+        "asset": "sources/ne_110m_rivers_lake_centerlines.geojson",
+        "feature_count": 13,
+        "imported_feature_count": 13,
+        "geometry_types": [
+          "LineString"
+        ],
+        "provenance": {
+          "provider": "Natural Earth",
+          "source_urls": [
+            "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/ca96624a56bd078437bca8184e78163e5039ad19/geojson/ne_110m_rivers_lake_centerlines.geojson"
+          ],
+          "revision": "ca96624a56bd078437bca8184e78163e5039ad19",
+          "sha256": "55aa4497405afc07cdc931b7fbe062c4d6693ba2a550c0d24899953f5d507c8d",
+          "download_date": "2026-10-10",
+          "license": "Public domain",
+          "license_url": "https://www.naturalearthdata.com/about/terms-of-use/",
+          "grouping": null
+        },
+        "visible": false,
+        "checks": [
+          "line/must-not-have-dangles",
+          "line/must-not-self-intersect"
+        ]
+      },
+      {
+        "filename": "ne_50m_rivers_lake_centerlines.geojson",
+        "asset": "sources/ne_50m_rivers_lake_centerlines.geojson",
+        "feature_count": 462,
+        "imported_feature_count": 461,
+        "geometry_types": [
+          "MultiLineString"
+        ],
+        "provenance": {
+          "provider": "Natural Earth",
+          "source_urls": [
+            "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/ca96624a56bd078437bca8184e78163e5039ad19/geojson/ne_50m_rivers_lake_centerlines.geojson"
+          ],
+          "revision": "ca96624a56bd078437bca8184e78163e5039ad19",
+          "sha256": "f286e0ce978fde999ca2d7a78c764be08542e19b63cded52b05c12d5173ccc51",
+          "download_date": "2026-10-10",
+          "license": "Public domain",
+          "license_url": "https://www.naturalearthdata.com/about/terms-of-use/",
+          "grouping": null
+        },
+        "visible": true,
+        "checks": [
+          "line/must-not-have-dangles",
+          "line/must-not-self-intersect"
+        ]
+      }
+    ],
+    "note": "The 50m source has 462 records; one empty Loire geometry is skipped on import, leaving 461 usable features. River endpoints are useful inspection findings. Their suitability depends on the selected rule and network purpose."
+  },
+  {
+    "id": "countries-islands",
+    "title": "Countries and islands",
+    "description": "177 countries, including 148 Polygons and 29 MultiPolygons.",
+    "datasets": [
+      {
+        "filename": "ne_110m_admin_0_countries.geojson",
+        "asset": "sources/ne_110m_admin_0_countries.geojson",
+        "feature_count": 177,
+        "imported_feature_count": 177,
+        "geometry_types": [
+          "MultiPolygon",
+          "Polygon"
+        ],
+        "provenance": {
+          "provider": "Natural Earth",
+          "source_urls": [
+            "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/ca96624a56bd078437bca8184e78163e5039ad19/geojson/ne_110m_admin_0_countries.geojson"
+          ],
+          "revision": "ca96624a56bd078437bca8184e78163e5039ad19",
+          "sha256": "6866c877d39cba9c357620878839b336d569f8c662d3cfab4cb1dbe2d39c977f",
+          "download_date": "2026-10-10",
+          "license": "Public domain",
+          "license_url": "https://www.naturalearthdata.com/about/terms-of-use/",
+          "grouping": null
+        },
+        "visible": true,
+        "checks": [
+          "polygon/must-not-overlap",
+          "geometry/must-not-be-multipart"
+        ]
+      }
+    ],
+    "note": "Multipart countries represent islands and separated territories. Their suitability depends on the selected rule."
+  },
+  {
+    "id": "lakes-reservoirs",
+    "title": "Lakes and reservoirs",
+    "description": "24 lake and reservoir polygons at 110m scale.",
+    "datasets": [
+      {
+        "filename": "ne_110m_lakes.geojson",
+        "asset": "sources/ne_110m_lakes.geojson",
+        "feature_count": 24,
+        "imported_feature_count": 24,
+        "geometry_types": [
+          "Polygon"
+        ],
+        "provenance": {
+          "provider": "Natural Earth",
+          "source_urls": [
+            "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/ca96624a56bd078437bca8184e78163e5039ad19/geojson/ne_110m_lakes.geojson"
+          ],
+          "revision": "ca96624a56bd078437bca8184e78163e5039ad19",
+          "sha256": "eb02ecc86c82004fccbf979058bfabbbd6c2d07968c7844d38eb1c9152d2ffc9",
+          "download_date": "2026-10-10",
+          "license": "Public domain",
+          "license_url": "https://www.naturalearthdata.com/about/terms-of-use/",
+          "grouping": null
+        },
+        "visible": true,
+        "checks": [
+          "polygon/must-not-overlap"
+        ]
+      }
+    ],
+    "note": ""
+  },
+  {
+    "id": "country-city-atlas",
+    "title": "Country and city atlas",
+    "description": "177 country collections with original country geometry and cities matched by country code.",
+    "datasets": [
+      {
+        "filename": "country_city_atlas.geojson",
+        "asset": "generated/country_city_atlas.geojson",
+        "feature_count": 177,
+        "imported_feature_count": 177,
+        "geometry_types": [
+          "GeometryCollection"
+        ],
+        "provenance": {
+          "provider": "Natural Earth",
+          "source_urls": [
+            "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/ca96624a56bd078437bca8184e78163e5039ad19/geojson/ne_110m_admin_0_countries.geojson",
+            "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/ca96624a56bd078437bca8184e78163e5039ad19/geojson/ne_110m_populated_places.geojson"
+          ],
+          "revision": "ca96624a56bd078437bca8184e78163e5039ad19",
+          "sha256": "85f81561d1cc9e1420a9a6c8d6a8dce4c1c822c5a210a10ad7b7aa2c41de6dce",
+          "download_date": "2026-10-10",
+          "license": "Public domain",
+          "license_url": "https://www.naturalearthdata.com/about/terms-of-use/",
+          "grouping": "One GeometryCollection per country in source order, containing the original country geometry followed by cities whose ADM0_A3 matches. Matching uses country codes, not spatial containment. All coordinates and member attributes are preserved.",
+          "inputs": [
+            {
+              "filename": "ne_110m_admin_0_countries.geojson",
+              "sha256": "6866c877d39cba9c357620878839b336d569f8c662d3cfab4cb1dbe2d39c977f"
+            },
+            {
+              "filename": "ne_110m_populated_places.geojson",
+              "sha256": "a86028b083182b68c7620fc6e1a8a47ee547cb9cd2fb62ccbb78bea786440899"
+            }
+          ]
+        },
+        "visible": true,
+        "checks": [
+          "geometry/must-not-be-multipart"
+        ]
+      }
+    ],
+    "note": "Collections preserve country and city members. Multipart findings are reported against the parent feature."
+  }
+]

@@ -1,0 +1,36 @@
+[package]
+name = "topology-checker-web"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+default = ["bundled"]
+bundled = ["topology-checker-io/bundled"]
+
+[dependencies]
+topology-checker-core = { path = "../core" }
+topology-checker-io = { path = "../io", default-features = false }
+geo.workspace = true
+rstar.workspace = true
+serde.workspace = true
+serde_json = "1"
+anyhow = "1"
+gdal = "0.19"
+axum = { version = "0.8", features = ["multipart"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "fs", "io-util", "sync"] }
+tower-http = { version = "0.6", features = ["fs", "set-header"] }
+tempfile = "3"
+uuid = { version = "1", features = ["v4", "serde"] }
+zip = { version = "2.4", default-features = false, features = ["deflate"] }
+geojson = { version = "0.24", features = ["geo-types"] }
+tokio-util = { version = "0.7", features = ["io"] }
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"

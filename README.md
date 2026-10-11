@@ -1,5 +1,7 @@
 # topology-checker
 
+You can also use the local web app to import datasets, run topology checks, and inspect results on an interactive map. Try five bundled real-data examples covering every GeoJSON geometry type. See [Local web app](#local-web-app) for startup instructions.
+
 ## Installation
 
 Prerequisites: Rust **1.88 or newer**, CMake, a C/C++ compiler and `sqlite3` on PATH.
@@ -72,10 +74,8 @@ Points (10)
 ...
 ```
 
-See [Cross-geometry topology checks](docs/cross-geometry-checks.md) for ArcGIS and
-QGIS support, input types, boundary semantics, acceptance-test traceability, and
-this checker's coverage of mixed-geometry relationships. The 38 rules are grouped
-as Points (10), Lines (19), Polygons (7), and All geometries (2).
+The 38 rules are grouped as Points (10), Lines (19), Polygons (7), and All
+geometries (2).
 
 Save a topology definition as `topology.toml`:
 
@@ -150,3 +150,22 @@ fn main() -> Result<(), Error> {
     Ok(())
 }
 ```
+
+## Local web app
+
+Inspect datasets in a browser with the local Axum server and Vue/OpenLayers app:
+
+```sh
+npm ci --prefix web
+npm run build --prefix web
+cargo run -p topology-checker-web --locked
+```
+
+Open <http://127.0.0.1:8080>. Import vector data, select a working CRS and topology
+rules, inspect highlighted violations, and download reports or portable projects.
+
+Run `./scripts/package-web.sh` to create a portable bundle in
+`builds/topology-checker-web`. On a machine with the same operating system and
+architecture, launch the bundled `topology-checker-web` executable (`.exe` on
+Windows) and open <http://127.0.0.1:8080>. Keep the adjacent `web` directory with
+the executable.

@@ -1,0 +1,56 @@
+import type { Workspace } from "../src/types";
+export const fixture = (): Workspace => ({
+  id: "workspace",
+  revision: 1,
+  working_crs_info: null,
+  config: {
+    working_crs: null,
+    tolerance: 0,
+    layers: [
+      {
+        id: "lines",
+        selected: true,
+        visible: true,
+        color: "#28786f",
+        source_crs: null,
+      },
+      {
+        id: "points",
+        selected: true,
+        visible: true,
+        color: "#577ec0",
+        source_crs: null,
+      },
+    ],
+    checks: [],
+    view: { basemap: false, center: null, resolution: null },
+  },
+  layers: [
+    {
+      id: "lines",
+      dataset: "d",
+      selector: "lines",
+      name: "Streets",
+      feature_count: 2,
+      kinds: ["line"],
+      source_crs: null,
+      warnings: [],
+      extent: [0, 0, 1, 1],
+      display_extent: null,
+    },
+    {
+      id: "points",
+      dataset: "p",
+      selector: "points",
+      name: "Stops",
+      feature_count: 1,
+      kinds: ["point"],
+      source_crs: null,
+      warnings: [],
+      extent: [0, 0, 1, 1],
+      display_extent: null,
+    },
+  ],
+  job: null,
+  result: null,
+});

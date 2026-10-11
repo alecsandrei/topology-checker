@@ -10,10 +10,11 @@ workspace = true
 
 [features]
 default = ["bundled"]
-bundled = ["gdal-sys/bundled", "dep:gdal-src"]
+bundled = ["topology-checker-io/bundled"]
 
 [dependencies]
 topology-checker-core = { path = "../core" }
+topology-checker-io = { path = "../io", default-features = false }
 geo.workspace = true
 serde.workspace = true
 serde_json = "1"
@@ -22,12 +23,8 @@ anyhow = "1"
 anstream = "0.6"
 toml = "0.8"
 gdal = "0.19"
-gdal-sys = "0.12"
-gdal-src = { version = "0.3", optional = true, features = [
-    "driver_gpkg", "driver_shape", "driver_geojson", "driver_flatgeobuf",
-    "driver_csv", "driver_openfilegdb", "driver_tab", "driver_vrt", "driver_mem",
-] }
 
 [dev-dependencies]
+gdal-sys = "0.12"
 assert_cmd = "2"
 tempfile = "3"

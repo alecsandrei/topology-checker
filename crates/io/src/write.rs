@@ -149,6 +149,10 @@ fn fields(e: &TopologyError, t: &Topology) -> Result<Attributes> {
         destination_fid: e.destination.map(|r| r.fid),
     })
 }
+/// Write CLI violations, grouping geometry families for driver compatibility.
+///
+/// # Errors
+/// Returns an error for unavailable drivers, conflicting outputs or GDAL write failures.
 pub fn report(
     path: &Path,
     explicit: Option<&str>,
@@ -166,6 +170,10 @@ pub fn report(
     }
     write(path, explicit, overwrite, srs, groups, "errors")
 }
+/// Write utility geometries using the requested or inferred vector driver.
+///
+/// # Errors
+/// Returns an error for invalid drivers, existing outputs or GDAL write failures.
 pub fn geometries(
     path: &Path,
     explicit: Option<&str>,

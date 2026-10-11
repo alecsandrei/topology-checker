@@ -1,9 +1,7 @@
 mod cli;
 mod config;
-mod read;
 mod report;
 mod rules;
-mod write;
 use anyhow::Result;
 use clap::ArgMatches;
 use serde::Serialize;
@@ -14,6 +12,7 @@ use std::{
     process::ExitCode,
 };
 use topology_checker_core::{LayerId, Rule, Topology};
+use topology_checker_io::{read, write};
 
 fn main() -> ExitCode {
     let stdout = io::stdout();
