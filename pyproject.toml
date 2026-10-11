@@ -1,0 +1,80 @@
+[build-system]
+requires = ["maturin==1.15.0"]
+build-backend = "maturin"
+
+[project]
+name = "topology-checker"
+dynamic = ["version"]
+description = "Native planar topology validation with typed Python rules and Shapely geometries"
+readme = "python/README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0 AND Apache-2.0 WITH LLVM-exception AND MIT AND Unicode-DFS-2016"
+license-files = ["LICENSE", "THIRD-PARTY-NOTICES.txt"]
+authors = [{ name = "Alex-Andrei Cuvuliuc" }]
+keywords = ["GIS", "topology", "validation", "geospatial", "shapely", "geopandas"]
+dependencies = ["shapely>=2,<3", "pyproj>=3.4,<4"]
+classifiers = [
+  "Development Status :: 5 - Production/Stable",
+  "Topic :: Scientific/Engineering :: GIS",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Programming Language :: Python :: Implementation :: CPython",
+  "Programming Language :: Rust",
+  "Typing :: Typed",
+]
+
+[project.urls]
+Repository = "https://github.com/alecsandrei/topology-checker"
+Issues = "https://github.com/alecsandrei/topology-checker/issues"
+Documentation = "https://github.com/alecsandrei/topology-checker/blob/master/docs/python-usage.md"
+
+[project.optional-dependencies]
+geopandas = ["geopandas>=0.14,<2"]
+
+[dependency-groups]
+release = ["packaging>=24", "tomli>=2", "twine>=6"]
+dev = [
+    "maturin==1.15.0",
+    "pytest>=8",
+    "ruff>=0.11",
+    "pyright>=1.1.400",
+    "geopandas>=0.14,<2",
+    "pandas-stubs",
+    "types-shapely>=2",
+    "types-geopandas>=1.1.4.20261006",
+]
+
+[tool.maturin]
+manifest-path = "crates/python/Cargo.toml"
+python-source = "python"
+module-name = "topology_checker._native"
+features = ["extension-module"]
+include = [
+    "python/topology_checker/py.typed",
+    "python/topology_checker/*.pyi",
+    { path = "tests/**/*.py", format = "sdist" },
+    { path = "Cargo.lock", format = "sdist" },
+    { path = "docs/*.md", format = "sdist" },
+    { path = "scripts/*.py", format = "sdist" },
+    { path = "about.toml", format = "sdist" },
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 88
+include = ["python/**/*.py", "python/**/*.pyi", "tests/**/*.py", "scripts/*.py", "pyproject.toml"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pyright]
+include = ["python/topology_checker", "tests", "scripts/*.py"]
+pythonVersion = "3.10"
+typeCheckingMode = "strict"

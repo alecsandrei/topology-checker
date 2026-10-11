@@ -1,4 +1,17 @@
 /target
+/.venv/
+/.ruff_cache/
+/.pytest_cache/
+/dist/
+/.wheel-test/
+/.minimum-test/
+/.base-test/
+/.sdist-test/
+/release-bundle/
+__pycache__/
+*.pyc
+*.so
+*.pyd
 assets/
 System Volume Information
 builds
