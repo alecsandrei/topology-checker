@@ -11,8 +11,12 @@ static INITIALIZED: OnceLock<Result<(), String>> = OnceLock::new();
 extern "C" fn cleanup() {
     // Exit callbacks cannot unwind. Removing an absent directory is harmless.
     if let Ok(mut data) = DATA.lock() {
-        // SAFETY: process exit has begun. Clear GDAL's CRS cache so Windows can
-        // close the database handles before deleting the temporary directory.
+        // Unix destroys C++ thread-local PROJ caches before atexit callbacks.
+        // Calling OSRCleanup there would access an already destroyed cache.
+        // Windows uses GDAL's TLS storage instead and needs database handles
+        // closed before the temporary directory can be deleted.
+        #[cfg(windows)]
+        // SAFETY: process exit has begun and Windows' GDAL TLS is still live.
         unsafe {
             gdal_sys::OSRCleanup();
         }
