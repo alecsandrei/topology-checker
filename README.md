@@ -22,10 +22,10 @@ errors = topology.validate().to_geodataframe()
 
 ## CLI
 
-Requires Rust 1.88 or newer. Install from the repository root:
+Requires Rust 1.88 or newer.
 
 ```sh
-cargo install --path crates/cli --locked
+cargo install topology-checker --locked
 ```
 
 ```sh

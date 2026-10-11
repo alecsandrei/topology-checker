@@ -14,7 +14,7 @@ authors = [{ name = "Alex-Andrei Cuvuliuc" }]
 keywords = ["GIS", "topology", "validation", "geospatial", "shapely", "geopandas"]
 dependencies = ["shapely>=2,<3", "pyproj>=3.4,<4"]
 classifiers = [
-  "Development Status :: 5 - Production/Stable",
+  "Development Status :: 4 - Beta",
   "Topic :: Scientific/Engineering :: GIS",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.10",

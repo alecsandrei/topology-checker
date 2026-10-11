@@ -4,6 +4,13 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "Check GIS vector data for topology errors such as overlaps, gaps and dangles"
+readme = "README.md"
+keywords = ["gis", "topology", "geospatial", "validation", "geometry"]
+categories = ["science::geo", "command-line-utilities"]
 
 [lints]
 workspace = true
@@ -15,8 +22,8 @@ gdal-system = ["topology-checker-io/gdal-system", "dep:gdal", "dep:gdal-sys"]
 bundled = ["gdal"]
 
 [dependencies]
-topology-checker-core = { path = "../core" }
-topology-checker-io = { path = "../io", default-features = false }
+topology-checker-core.workspace = true
+topology-checker-io.workspace = true
 geo.workspace = true
 serde.workspace = true
 serde_json = "1"

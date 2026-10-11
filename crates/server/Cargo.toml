@@ -4,6 +4,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+publish = false
 
 [lints]
 workspace = true
@@ -15,8 +16,8 @@ gdal-system = ["topology-checker-io/gdal-system", "dep:gdal"]
 bundled = ["gdal"]
 
 [dependencies]
-topology-checker-core = { path = "../core", features = ["ts"] }
-topology-checker-io = { path = "../io", default-features = false, features = ["ts"] }
+topology-checker-core = { workspace = true, features = ["ts"] }
+topology-checker-io = { workspace = true, features = ["ts"] }
 geo.workspace = true
 rstar.workspace = true
 serde.workspace = true

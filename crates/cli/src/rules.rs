@@ -126,8 +126,13 @@ mod tests {
                 );
             }
         }
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/rules.md");
-        let current = std::fs::read_to_string(path).map(|t| t.replace("\r\n", "\n"));
+        let docs = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs"));
+        // The published crate has no docs/ to keep current.
+        if !docs.is_dir() {
+            return;
+        }
+        let path = docs.join("rules.md");
+        let current = std::fs::read_to_string(&path).map(|t| t.replace("\r\n", "\n"));
         if current.ok().as_ref() != Some(&text) {
             std::fs::write(path, text).unwrap();
         }

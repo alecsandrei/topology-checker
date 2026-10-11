@@ -2,19 +2,19 @@
 
 ## CLI
 
-Requires Rust 1.88 or newer. From the repository root:
+Requires Rust 1.88 or newer.
 
 ```sh
-cargo install --path crates/cli --locked
+cargo install topology-checker --locked
 ```
 
 This build reads and writes GeoJSON, GeoPackage, Shapefile, FlatGeobuf, GeoParquet, KML and GPX without GDAL. For other formats, add GDAL:
 
 ```sh
 # Build GDAL from source (needs CMake, a C/C++ compiler and sqlite3)
-cargo install --path crates/cli --locked --features gdal
+CMAKE_POLICY_VERSION_MINIMUM=3.5 cargo install topology-checker --locked --features gdal
 # Use an installed GDAL
-cargo install --path crates/cli --locked --features gdal-system
+cargo install topology-checker --locked --features gdal-system
 ```
 
 ## Python
@@ -41,7 +41,7 @@ The frontend is embedded in `target/release/topology-checker-web`. See [Web app]
 
 ```toml
 [dependencies]
-topology-checker-core = { path = "/path/to/topology-checker/crates/core" }
+topology-checker-core = "0.1"
 ```
 
 See the [Rust API](https://alecsandrei.github.io/topology-checker/rust/topology_checker_core/).

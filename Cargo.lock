@@ -3714,7 +3714,7 @@ checksum = "5d99f8c9a7727884afe522e9bd5edbfc91a3312b36a77b5fb8926e4c31a41801"
 
 [[package]]
 name = "topology-checker"
-version = "0.1.0-alpha"
+version = "0.1.0"
 dependencies = [
  "anstream",
  "anyhow",
@@ -3733,7 +3733,7 @@ dependencies = [
 
 [[package]]
 name = "topology-checker-core"
-version = "0.1.0-alpha"
+version = "0.1.0"
 dependencies = [
  "criterion",
  "geo",
@@ -3750,7 +3750,7 @@ dependencies = [
 
 [[package]]
 name = "topology-checker-io"
-version = "0.1.0-alpha"
+version = "0.1.0"
 dependencies = [
  "aegis",
  "anyhow",
@@ -3794,7 +3794,7 @@ dependencies = [
 
 [[package]]
 name = "topology-checker-web"
-version = "0.1.0-alpha"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
