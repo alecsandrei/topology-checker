@@ -9,3 +9,12 @@ targets = [
 ignore-build-dependencies = true
 ignore-dev-dependencies = true
 ignore-transitive-dependencies = false
+
+# cfg_block declares only a license-file: an Apache-2.0 notice.
+[cfg_block.clarify]
+license = "Apache-2.0"
+
+[[cfg_block.clarify.files]]
+path = "LICENSE"
+license = "Apache-2.0"
+checksum = "408bbc4d10bdf74d8c9b74b64ea4910603257e24133da18edc4d16198e3b4010"

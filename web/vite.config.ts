@@ -9,6 +9,8 @@ export default defineConfig({
     proxy: { "/api": "http://127.0.0.1:8080" },
   },
   build: {
+    // Emits .vite/license.md with the bundled packages' licenses for releases.
+    license: true,
     rollupOptions: {
       output: {
         manualChunks: {
