@@ -29,6 +29,27 @@ pub fn safe_path(name: &str) -> Result<PathBuf> {
     }
     Ok(path.to_path_buf())
 }
+
+/// Convert a validated local relative path to a portable archive member name.
+pub(crate) fn member_name(path: &Path) -> Result<String> {
+    let name = path
+        .components()
+        .map(|component| match component {
+            Component::Normal(name) => name.to_str().context("invalid filename"),
+            _ => bail!("unsafe archive path"),
+        })
+        .collect::<Result<Vec<_>>>()?
+        .join("/");
+    safe_path(&name)?;
+    Ok(name)
+}
+
+pub(crate) fn serialize_path<S: serde::Serializer>(
+    path: &Path,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&member_name(path).map_err(serde::ser::Error::custom)?)
+}
 /// Extract only expected local vector files, never links or virtual GDAL paths.
 /// Extract an archive of supported vector files or project sources.
 ///
@@ -125,8 +146,7 @@ fn pack_with_limit(
     zip.start_file("manifest.json", options)?;
     zip.write_all(manifest)?;
     for (name, path) in files {
-        safe_path(name.to_str().context("invalid filename")?)?;
-        zip.start_file(name.to_str().unwrap(), options)?;
+        zip.start_file(member_name(name)?, options)?;
         io::copy(&mut File::open(path)?, &mut zip)?;
     }
     if zip.finish()?.metadata()?.len() > limit {
@@ -199,7 +219,12 @@ mod tests {
         let output = directory.path().join("project.zip");
         let source = directory.path().join("source.geojson");
         fs::write(&source, b"{\"type\":\"FeatureCollection\",\"features\":[]}").unwrap();
-        let files = [(PathBuf::from("sources/example/source.geojson"), source)];
+        let files = [(
+            PathBuf::from("sources")
+                .join("example")
+                .join("source.geojson"),
+            source,
+        )];
         let manifest = b"{\"version\":1}";
         pack_with_limit(&output, manifest, &files, 4096).unwrap();
         let mut zip = ZipArchive::new(File::open(&output).unwrap()).unwrap();

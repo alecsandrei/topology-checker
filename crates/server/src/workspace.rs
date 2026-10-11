@@ -407,6 +407,7 @@ pub fn append(
 struct SavedLayer {
     id: String,
     dataset: String,
+    #[serde(serialize_with = "archive::serialize_path")]
     member: PathBuf,
     selector: String,
 }
@@ -582,6 +583,29 @@ mod tests {
     use super::*;
     use std::io::Write;
     use zip::{ZipWriter, write::SimpleFileOptions};
+
+    #[test]
+    fn project_paths_use_portable_separators_and_reopen() {
+        let mut ws = Workspace::new().unwrap();
+        let incoming = tempfile::tempdir().unwrap();
+        let path = incoming.path().join("streets.geojson");
+        fs::write(&path, include_str!("../example.geojson")).unwrap();
+        let pending = PendingImport::copy(ws.root(), "streets.geojson".into(), &path).unwrap();
+        let source = pending.commit();
+        let layers = import(&source, ws.root()).unwrap();
+        append(&mut ws, source.clone(), layers).unwrap();
+        let snapshot = project_parts(&ws).unwrap();
+        let manifest: serde_json::Value = serde_json::from_slice(&snapshot.manifest).unwrap();
+        let expected = format!("sources/{}/streets.geojson", source.id);
+        assert_eq!(manifest["sources"][0]["path"], expected);
+        assert_eq!(manifest["layers"][0]["member"], expected);
+        let output = incoming.path().join("project.zip");
+        save(&ws, &output).unwrap();
+        let restored = reopen(&output).unwrap();
+        assert_eq!(restored.sources()[0].id, source.id);
+        assert_eq!(restored.config(), ws.config());
+        assert_eq!(restored.layers()[0].id, ws.layers()[0].id);
+    }
 
     #[test]
     fn failed_import_removes_original_and_partially_extracted_files() {

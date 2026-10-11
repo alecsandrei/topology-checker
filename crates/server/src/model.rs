@@ -103,6 +103,7 @@ impl Config {
 pub struct DatasetSource {
     pub id: String,
     pub filename: String,
+    #[serde(serialize_with = "crate::archive::serialize_path")]
     pub path: PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provenance: Option<Provenance>,
