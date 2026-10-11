@@ -94,8 +94,9 @@ jobs:
             echo "JavaScript packages are listed in THIRD-PARTY-NOTICES-web.md."
             echo
             cargo about generate --workspace --config about.toml --locked --fail --format json \
-              --target x86_64-unknown-linux-gnu aarch64-unknown-linux-gnu x86_64-apple-darwin \
-              aarch64-apple-darwin x86_64-pc-windows-msvc | jq -r '
+              --target x86_64-unknown-linux-gnu --target aarch64-unknown-linux-gnu \
+              --target x86_64-apple-darwin --target aarch64-apple-darwin \
+              --target x86_64-pc-windows-msvc | jq -r '
               .licenses | sort_by(.id, .text)[]
               | ([.used_by[].crate | select(.name | startswith("topology-checker") | not) | "\(.name) \(.version)"] | sort) as $crates
               | select($crates | length > 0)
