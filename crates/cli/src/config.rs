@@ -43,9 +43,7 @@ impl Config {
             {
                 bail!("unknown layer alias {other}");
             }
-            if check.other.is_some() != check.rule.inputs().1.is_some() {
-                bail!("{} has the wrong number of inputs", check.rule);
-            }
+            check.rule.check_input_count(check.other.is_some())?;
         }
         let parent = path.parent().unwrap_or(Path::new("."));
         for input in config.layers.values_mut() {

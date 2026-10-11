@@ -1,3 +1,4 @@
+#[cfg(feature = "gdal-system")]
 use gdal::{
     DriverManager,
     spatial_ref::SpatialRef,
@@ -25,6 +26,7 @@ fn attributes_ids_and_import_warnings_survive_geojson_reading() {
     assert!(data.warnings.iter().any(|w| w.contains("empty geometries")));
     assert!(data.warnings.iter().any(|w| w.contains("Z/M")));
 }
+#[cfg(feature = "gdal-system")]
 #[test]
 fn every_vector_format_and_multilayer_selection_is_readable() {
     let dir = tempfile::tempdir().unwrap();
@@ -79,7 +81,7 @@ fn every_vector_format_and_multilayer_selection_is_readable() {
 fn transformations_use_xy_axis_order_and_keep_collection_parts() {
     let source = crs::parse("EPSG:4326").unwrap();
     let target = crs::parse("EPSG:3857").unwrap();
-    let transform = gdal::spatial_ref::CoordTransform::new(&source, &target).unwrap();
+    let transform = topology_checker_io::Transform::new(&source, &target).unwrap();
     let g = Geometry::GeometryCollection(GeometryCollection(vec![
         Point::new(5., 52.).into(),
         LineString::from(vec![(5., 52.), (6., 53.)]).into(),

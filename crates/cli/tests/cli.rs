@@ -1,3 +1,5 @@
+#![cfg(feature = "gdal-system")]
+
 use assert_cmd::{Command, cargo::cargo_bin_cmd};
 use gdal::{Dataset, vector::LayerAccess};
 use std::path::Path;
@@ -568,7 +570,15 @@ fn shapefile_aliases_and_unknown_extensions_are_handled() {
     assert!(report["warnings"].to_string().contains("orig_layer"));
     let ds = Dataset::open(&path).unwrap();
     let layer = ds.layer(0).unwrap();
-    for name in ["orig_layer", "origin_fid", "dest_layer", "dest_fid"] {
+    for name in [
+        "viol_id",
+        "orig_layer",
+        "origin_fid",
+        "orig_part",
+        "dest_layer",
+        "dest_fid",
+        "dest_part",
+    ] {
         assert!(layer.defn().field_index(name).is_ok());
     }
     cli()
@@ -775,12 +785,15 @@ fn negative_gdal_feature_ids_are_preserved() {
     assert_eq!(
         layer.defn().fields().map(|f| f.name()).collect::<Vec<_>>(),
         [
+            "violation_id",
             "rule",
             "error_type",
             "origin_layer",
             "origin_fid",
+            "origin_part",
             "destination_layer",
-            "destination_fid"
+            "destination_fid",
+            "destination_part"
         ]
     );
     assert_eq!(
@@ -909,10 +922,9 @@ fn generated_ids_do_not_collide_with_real_negative_ids() {
         .iter()
         .map(|e| e["origin"]["fid"].as_i64().unwrap())
         .collect::<std::collections::BTreeSet<_>>();
-    assert!(ids.contains(&-2));
-    assert_eq!(ids.len(), 2);
+    assert_eq!(ids, [-2, -1].into_iter().collect());
     assert!(
-        report["warnings"]
+        !report["warnings"]
             .to_string()
             .contains("assigned negative FIDs")
     );

@@ -9,8 +9,10 @@ license.workspace = true
 workspace = true
 
 [features]
-default = ["bundled"]
-bundled = ["topology-checker-io/bundled"]
+default = []
+gdal = ["topology-checker-io/gdal", "gdal-system"]
+gdal-system = ["topology-checker-io/gdal-system", "dep:gdal", "dep:gdal-sys"]
+bundled = ["gdal"]
 
 [dependencies]
 topology-checker-core = { path = "../core" }
@@ -22,9 +24,9 @@ clap = { version = "4.5", features = ["derive"] }
 anyhow = "1"
 anstream = "0.6"
 toml = "0.8"
-gdal = "0.19"
+gdal = { version = "0.19", optional = true }
+gdal-sys = { version = "0.12", optional = true }
 
 [dev-dependencies]
-gdal-sys = "0.12"
 assert_cmd = "2"
 tempfile = "3"

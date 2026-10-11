@@ -258,17 +258,20 @@ fn finish(
     matches: &ArgMatches,
     args: &ArgMatches,
     topology: &Topology,
-    srs: Option<&gdal::spatial_ref::SpatialRef>,
-    warnings: Vec<String>,
+    srs: Option<&topology_checker_io::Crs>,
+    input_warnings: Vec<String>,
     output: &mut impl Write,
     diagnostics: &mut impl Write,
 ) -> Result<u8> {
-    let mut result = topology.validate()?;
-    result.warnings.extend(warnings);
+    let result = topology.validate()?;
+    let mut warnings = result
+        .warnings
+        .iter()
+        .map(ToString::to_string)
+        .chain(input_warnings)
+        .collect::<Vec<_>>();
     if srs.is_some_and(|s| s.is_geographic()) && result.tolerance > 0. {
-        result
-            .warnings
-            .push("tolerance is in angular units; calculations are planar".into());
+        warnings.push("tolerance is in angular units; calculations are planar".into());
     }
     if let Some(path) = args.get_one::<PathBuf>("output") {
         write::report(
@@ -277,7 +280,7 @@ fn finish(
             matches.get_flag("overwrite"),
             srs,
             &result,
-            topology,
+            write::ReportLayout::ByFamily,
         )?;
         if !result.is_valid()
             && matches.get_one::<String>("driver").map_or_else(
@@ -288,10 +291,16 @@ fn finish(
                 |s| s == "ESRI Shapefile",
             )
         {
-            result.warnings.push("Shapefile fields use orig_layer, dest_layer and dest_fid to fit the 10-character limit".into());
+            warnings.push("Shapefile fields use viol_id, orig_layer, orig_part, dest_layer, dest_fid and dest_part to fit the 10-character limit".into());
         }
     }
-    report::print(&result, matches.get_flag("json"), output, diagnostics)?;
+    report::print(
+        &result,
+        &warnings,
+        matches.get_flag("json"),
+        output,
+        diagnostics,
+    )?;
     Ok(if result.is_valid() { 0 } else { 1 })
 }
 
@@ -341,7 +350,7 @@ fn utility(
         };
         geometries.extend(output.into_iter().map(geo::Geometry::LineString));
     }
-    warnings.extend(t.warnings()?);
+    warnings.extend(t.warnings()?.iter().map(ToString::to_string));
     if srs.as_ref().is_some_and(|s| s.is_geographic()) && tolerance > 0. {
         warnings.push("tolerance is in angular units; calculations are planar".into());
     }
@@ -521,13 +530,10 @@ mod tests {
             ),
             2
         );
-        let report = topology_checker_core::Report {
-            tolerance: 0.,
-            warnings: vec!["test warning".into()],
-            rules: Vec::new(),
-        };
+        let report = Topology::new(0.).unwrap().validate().unwrap();
+        let warnings = ["test warning".to_string()];
         for json in [false, true] {
-            report::print(&report, json, &mut Vec::new(), &mut diagnostics).unwrap();
+            report::print(&report, &warnings, json, &mut Vec::new(), &mut diagnostics).unwrap();
         }
     }
 }

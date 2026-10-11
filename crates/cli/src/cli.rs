@@ -42,7 +42,7 @@ pub fn command() -> Command {
             Arg::new("driver")
                 .long("driver")
                 .global(true)
-                .help("Explicit GDAL output driver"),
+                .help("Explicit vector output format or optional GDAL driver"),
         )
         .arg(
             Arg::new("tolerance")
@@ -93,7 +93,7 @@ pub fn command() -> Command {
         .subcommand(Command::new("rules").about("List rule definitions and GIS equivalents"))
         .subcommand(
             Command::new("drivers")
-                .about("List GDAL vector drivers")
+                .about("List vector formats and optional GDAL drivers")
                 .arg(Arg::new("read").long("read").action(ArgAction::SetTrue))
                 .arg(Arg::new("write").long("write").action(ArgAction::SetTrue)),
         )

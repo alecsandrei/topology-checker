@@ -9,8 +9,12 @@ license.workspace = true
 workspace = true
 
 [features]
-default = ["bundled"]
-bundled = ["gdal-sys/bundled", "dep:gdal-src"]
+default = []
+gdal = ["gdal-system", "gdal-sys/bundled", "dep:gdal-src", "dep:proj-sys", "dep:libc"]
+gdal-system = ["dep:gdal", "dep:gdal-sys"]
+bundled = ["gdal"]
+# Derive TypeScript bindings for the format registry.
+ts = ["dep:ts-rs", "topology-checker-core/ts"]
 
 [dependencies]
 topology-checker-core = { path = "../core" }
@@ -18,8 +22,29 @@ geo.workspace = true
 serde.workspace = true
 serde_json = "1"
 anyhow = "1"
-gdal = "0.19"
-gdal-sys = "0.12"
+geojson = { version = "0.24", features = ["geo-types"] }
+shapefile = { version = "0.9", features = ["geo-types", "encoding_rs"] }
+encoding_rs = "0.8"
+flatgeobuf = { version = "6", default-features = false }
+flatbuffers = "24"
+geozero = { version = "0.15", default-features = false, features = ["with-geo", "with-wkb"] }
+turso_core = { version = "=0.8.3-pre.1", default-features = false, features = ["fs", "uuid", "json", "pure-rust-crypto"] }
+# Turso depends on AEGIS even with encryption disabled. Unify its Rust backend.
+aegis = { version = "0.9", default-features = false, features = ["pure-rust"] }
+proj-core = { version = "0.11", default-features = false }
+proj-wkt = "0.11"
+parquet = { version = "56", default-features = false, features = ["arrow", "json", "snap", "brotli", "flate2-zlib-rs", "lz4"] }
+arrow-array = "56"
+arrow-schema = "56"
+kml = { version = "0.14", default-features = false, features = ["geo-types"] }
+gpx = "0.10"
+zip = { version = "2.4", default-features = false, features = ["deflate"] }
+tempfile = "3"
+ts-rs = { workspace = true, optional = true }
+gdal = { version = "0.19", optional = true }
+gdal-sys = { version = "0.12", optional = true }
+proj-sys = { version = "0.27", optional = true, features = ["bundled_proj"] }
+libc = { version = "0.2", optional = true }
 gdal-src = { version = "0.3", optional = true, features = [
     "driver_gpkg", "driver_shape", "driver_geojson", "driver_flatgeobuf",
     "driver_csv", "driver_openfilegdb", "driver_tab", "driver_vrt", "driver_mem",
@@ -27,3 +52,7 @@ gdal-src = { version = "0.3", optional = true, features = [
 
 [dev-dependencies]
 tempfile = "3"
+
+[[example]]
+name = "qgis_benchmark"
+required-features = ["gdal-system"]

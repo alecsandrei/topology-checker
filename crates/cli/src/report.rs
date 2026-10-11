@@ -1,6 +1,15 @@
 use anyhow::Result;
+use serde::Serialize;
 use std::io::Write;
-use topology_checker_core::Report;
+use topology_checker_core::{Report, RuleReport};
+
+/// The established JSON report shape, with core and input warnings as text.
+#[derive(Serialize)]
+struct JsonReport<'a> {
+    tolerance: f64,
+    warnings: &'a [String],
+    rules: &'a [RuleReport],
+}
 
 pub fn json(output: &mut impl Write, value: &impl serde::Serialize) -> Result<()> {
     serde_json::to_writer(&mut *output, value)?;
@@ -10,12 +19,20 @@ pub fn json(output: &mut impl Write, value: &impl serde::Serialize) -> Result<()
 
 pub fn print(
     report: &Report,
+    warnings: &[String],
     as_json: bool,
     output: &mut impl Write,
     diagnostics: &mut impl Write,
 ) -> Result<()> {
     if as_json {
-        json(output, report)?;
+        json(
+            output,
+            &JsonReport {
+                tolerance: report.tolerance,
+                warnings,
+                rules: &report.rules,
+            },
+        )?;
     } else {
         writeln!(output, "Tolerance: {}", report.tolerance)?;
         writeln!(output, "{:<55} {:<30} Errors", "Rule", "Layers")?;
@@ -41,9 +58,9 @@ pub fn print(
                 counts
             )?;
         }
-        writeln!(output, "{} topology errors", report.error_count())?;
+        writeln!(output, "{} topology errors", report.violation_count())?;
     }
-    for warning in &report.warnings {
+    for warning in warnings {
         let _ = writeln!(diagnostics, "warning: {warning}");
     }
     Ok(())
