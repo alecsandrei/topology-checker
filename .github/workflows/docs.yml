@@ -14,6 +14,14 @@ jobs:
       - uses: astral-sh/setup-uv@v6
       - name: Build
         run: uv run --locked --only-group docs mkdocs build --strict
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Rust API
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: |
+          cargo doc -p topology-checker-core --no-deps --locked
+          cp -r target/doc site/rust
       - if: github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@v3
         with:

@@ -6,4 +6,4 @@
 - [Web app](web-app.md)
 - [Python usage](python-usage.md)
 - [Python API](python-api.md)
-- [Rust API](https://github.com/alecsandrei/topology-checker/blob/master/crates/core/README.md)
+- [Rust API](https://alecsandrei.github.io/topology-checker/rust/topology_checker_core/)

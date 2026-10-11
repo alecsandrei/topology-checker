@@ -16,6 +16,7 @@ nav:
   - Python:
       - Usage: python-usage.md
       - API reference: python-api.md
+  - Rust API: https://alecsandrei.github.io/topology-checker/rust/topology_checker_core/
 plugins:
   - search
   - mkdocstrings:

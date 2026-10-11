@@ -44,4 +44,4 @@ The frontend is embedded in `target/release/topology-checker-web`. See [Web app]
 topology-checker-core = { path = "/path/to/topology-checker/crates/core" }
 ```
 
-See the [core README](https://github.com/alecsandrei/topology-checker/blob/master/crates/core/README.md).
+See the [Rust API](https://alecsandrei.github.io/topology-checker/rust/topology_checker_core/).
