@@ -104,7 +104,7 @@
           "size": 1000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-not-overlap/1000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-not-overlap/1000/input.geojson",
               "sha256": "b937e9fdfc046bb80865c12b860845cc647e4ba1891fefd3204d3822155fc99f",
               "features": 1000,
               "coordinates": 1000
@@ -447,7 +447,7 @@
           "size": 10000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-not-overlap/10000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-not-overlap/10000/input.geojson",
               "sha256": "037e7062c1fae33aa3abaac8f7e85385726c1bc730730e71b6350986792ef709",
               "features": 10000,
               "coordinates": 10000
@@ -790,7 +790,7 @@
           "size": 100000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-not-overlap/100000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-not-overlap/100000/input.geojson",
               "sha256": "56b4ab1fb11656a810a75bfe5cd2628f507bdc3ace9315234d62096b1534e39d",
               "features": 100000,
               "coordinates": 100000
@@ -1135,7 +1135,7 @@
           "name": "clean",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-not-overlap/probe-0/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-not-overlap/probe-0/input.geojson",
               "sha256": "7564f830add4efb73e11909bc2d5971ef825f0ca82177377610d6a2002637842",
               "features": 2,
               "coordinates": 2
@@ -1160,7 +1160,7 @@
           "name": "violation",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-not-overlap/probe-1/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-not-overlap/probe-1/input.geojson",
               "sha256": "e600ecc77bb54407bc5739a091403d99cebffc8bd510e921af72f7f0e4f57e01",
               "features": 2,
               "coordinates": 2
@@ -1198,7 +1198,7 @@
           "name": "three coincident points",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-not-overlap/probe-2/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-not-overlap/probe-2/input.geojson",
               "sha256": "6f84c7f15045e6a2ea1430b41cf2455da896b92b10222800e49ee2f72a4ca6ff",
               "features": 3,
               "coordinates": 3
@@ -1261,13 +1261,13 @@
           "size": 1000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-not-overlap-with/1000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-not-overlap-with/1000/input.geojson",
               "sha256": "71626fe9b220a6f08bd9849fa9e781ed136a46967882df12631bc9f77313104c",
               "features": 1000,
               "coordinates": 1000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-not-overlap-with/1000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-not-overlap-with/1000/other.geojson",
               "sha256": "a40cace9dc53af60c22d656ca6015388711bb77dbf65d22dedf3d743c197faea",
               "features": 1000,
               "coordinates": 1000
@@ -1451,13 +1451,13 @@
           "size": 10000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-not-overlap-with/10000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-not-overlap-with/10000/input.geojson",
               "sha256": "c3e9ed1d72d510f55c552b1f70ced59564e0681c335bcf252b76c0c791c66a3d",
               "features": 10000,
               "coordinates": 10000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-not-overlap-with/10000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-not-overlap-with/10000/other.geojson",
               "sha256": "6cad8a66c0d9470885add14a775a408192086656af9510fea3337a2ea949994c",
               "features": 10000,
               "coordinates": 10000
@@ -1641,13 +1641,13 @@
           "size": 100000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-not-overlap-with/100000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-not-overlap-with/100000/input.geojson",
               "sha256": "f9f9f24a11cfe709a774083ee284b193d29c8f94aae1307cf59c3e07818fa0cc",
               "features": 100000,
               "coordinates": 100000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-not-overlap-with/100000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-not-overlap-with/100000/other.geojson",
               "sha256": "f7a382c445fc2a29525546182a69fffcc3c12e4df2c9e55a62ce3c4031d1c00c",
               "features": 100000,
               "coordinates": 100000
@@ -1833,13 +1833,13 @@
           "name": "clean",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-not-overlap-with/probe-0/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-not-overlap-with/probe-0/input.geojson",
               "sha256": "483bc701f30b40724e3b12bc537bbb72aa4c39d2251d29b3962f0b81d0c3c5ec",
               "features": 1,
               "coordinates": 1
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-not-overlap-with/probe-0/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-not-overlap-with/probe-0/other.geojson",
               "sha256": "c517cc0d6cd939918c5f9341dca1073e3f5db1e1a4f1697615db9377c2dadc04",
               "features": 1,
               "coordinates": 1
@@ -1858,13 +1858,13 @@
           "name": "violation",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-not-overlap-with/probe-1/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-not-overlap-with/probe-1/input.geojson",
               "sha256": "483bc701f30b40724e3b12bc537bbb72aa4c39d2251d29b3962f0b81d0c3c5ec",
               "features": 1,
               "coordinates": 1
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-not-overlap-with/probe-1/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-not-overlap-with/probe-1/other.geojson",
               "sha256": "2b257c2e2c8757984fe91d41a969f41f466e4d87789a5423458e640e5cd0b979",
               "features": 1,
               "coordinates": 1
@@ -1901,13 +1901,13 @@
           "size": 1000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-inside/1000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-inside/1000/input.geojson",
               "sha256": "956cd24efb7006bbd50c4d16158c473cfded3dc21dec5609ec8d15757c52a2f8",
               "features": 1000,
               "coordinates": 1000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-inside/1000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-inside/1000/other.geojson",
               "sha256": "130c9ecba8e0a8bd676c8ee5cbefa78539a780458b79b4263af3169d052c3d9d",
               "features": 1000,
               "coordinates": 5000
@@ -2250,13 +2250,13 @@
           "size": 10000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-inside/10000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-inside/10000/input.geojson",
               "sha256": "5c1a3b8219c58ed35e906dd3e754fef050a34117714df1401306c4e04602e7bc",
               "features": 10000,
               "coordinates": 10000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-inside/10000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-inside/10000/other.geojson",
               "sha256": "acecd8231f14458fcbf206014977526c8506f61982facf3ce44f1d176c5042a5",
               "features": 10000,
               "coordinates": 50000
@@ -2599,13 +2599,13 @@
           "size": 100000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-inside/100000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-inside/100000/input.geojson",
               "sha256": "3b9dc9e5591da21194d9b06e6136586ae653abacb894d85e688d5914ea5c3755",
               "features": 100000,
               "coordinates": 100000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-inside/100000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-inside/100000/other.geojson",
               "sha256": "31ffc8321ff60606ed53e3186540cd908916bb6ba5023309a40986a3df8e0128",
               "features": 100000,
               "coordinates": 500000
@@ -2950,13 +2950,13 @@
           "name": "clean",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-inside/probe-0/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-inside/probe-0/input.geojson",
               "sha256": "483bc701f30b40724e3b12bc537bbb72aa4c39d2251d29b3962f0b81d0c3c5ec",
               "features": 1,
               "coordinates": 1
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-inside/probe-0/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-inside/probe-0/other.geojson",
               "sha256": "2e9eff212922d8294d9f366b68deff9147704dea4aead1590061bf45a14e28b7",
               "features": 1,
               "coordinates": 5
@@ -2981,13 +2981,13 @@
           "name": "violation",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-inside/probe-1/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-inside/probe-1/input.geojson",
               "sha256": "46301a65d64989e5ddb5d92e438a0a8dc11cde7642d0b1151233fae938ede41e",
               "features": 1,
               "coordinates": 1
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-inside/probe-1/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-inside/probe-1/other.geojson",
               "sha256": "2e9eff212922d8294d9f366b68deff9147704dea4aead1590061bf45a14e28b7",
               "features": 1,
               "coordinates": 5
@@ -3025,13 +3025,13 @@
           "name": "point on polygon boundary",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-inside/probe-2/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-inside/probe-2/input.geojson",
               "sha256": "d4d374291f1d07ce295a593df0614ff6b1503a9e3c297f4a7d5a1b5897d6ee4e",
               "features": 1,
               "coordinates": 1
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-inside/probe-2/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-inside/probe-2/other.geojson",
               "sha256": "2e9eff212922d8294d9f366b68deff9147704dea4aead1590061bf45a14e28b7",
               "features": 1,
               "coordinates": 5
@@ -3080,7 +3080,7 @@
           "size": 1000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-have-dangles/1000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-have-dangles/1000/input.geojson",
               "sha256": "c30ef8c5343cd67146a1f2e425a589c62aef72b0bddb34cc1f49d9c1e2863e5f",
               "features": 1000,
               "coordinates": 3980
@@ -3423,7 +3423,7 @@
           "size": 10000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-have-dangles/10000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-have-dangles/10000/input.geojson",
               "sha256": "a90f311767dc00f897fcb955d1c830e4c3eb5d152f66dac051ead602a4f94d78",
               "features": 10000,
               "coordinates": 39800
@@ -3766,7 +3766,7 @@
           "size": 100000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-have-dangles/100000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-have-dangles/100000/input.geojson",
               "sha256": "05d550943f5bac9b04c461517bfc65cc0581af5a6bb2e245211174abaf8425ce",
               "features": 100000,
               "coordinates": 398000
@@ -4111,7 +4111,7 @@
           "name": "clean",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-have-dangles/probe-0/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-have-dangles/probe-0/input.geojson",
               "sha256": "d751cd4b184adf6535c9f9f31e7697ca33176d17b7696e0ef49f8b1c6a14a6c6",
               "features": 1,
               "coordinates": 4
@@ -4136,7 +4136,7 @@
           "name": "violation",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-have-dangles/probe-1/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-have-dangles/probe-1/input.geojson",
               "sha256": "5dda2cf68e66d3d747b13c63ee369dd5f1f5a2feb0aa98e11e2a774be331a80f",
               "features": 1,
               "coordinates": 2
@@ -4185,7 +4185,7 @@
           "name": "endpoint on another line interior",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-have-dangles/probe-2/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-have-dangles/probe-2/input.geojson",
               "sha256": "63c2132b287ab8dd05a2f33a8ca0cc138200f0ce0f918e13ba5758327d59d7b0",
               "features": 2,
               "coordinates": 4
@@ -4250,7 +4250,7 @@
           "name": "interior-noded connection across closed ring",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-have-dangles/probe-3/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-have-dangles/probe-3/input.geojson",
               "sha256": "51d3052e53f67929b3ca35637c8faeba3eede1545dd8bcdcf8404f7bdd964956",
               "features": 2,
               "coordinates": 7
@@ -4286,7 +4286,7 @@
           "name": "closed line",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-have-dangles/probe-4/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-have-dangles/probe-4/input.geojson",
               "sha256": "d751cd4b184adf6535c9f9f31e7697ca33176d17b7696e0ef49f8b1c6a14a6c6",
               "features": 1,
               "coordinates": 4
@@ -4322,7 +4322,7 @@
           "size": 1000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-have-pseudo-nodes/1000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-have-pseudo-nodes/1000/input.geojson",
               "sha256": "0249e5b0fe16aad443b3606d0d1b68a8c3a4ca3bd5bbf2d3c4de372b03dc5824",
               "features": 1000,
               "coordinates": 3980
@@ -4665,7 +4665,7 @@
           "size": 10000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-have-pseudo-nodes/10000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-have-pseudo-nodes/10000/input.geojson",
               "sha256": "ae305cc7541a9c99e76506624d5af11cf447827910732ec7337b0d558ae2fda3",
               "features": 10000,
               "coordinates": 39800
@@ -5008,7 +5008,7 @@
           "size": 100000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-have-pseudo-nodes/100000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-have-pseudo-nodes/100000/input.geojson",
               "sha256": "c10ab98ca85596f4fb1c3d0489717ab0d70af19aa75dd751c13792680e783609",
               "features": 100000,
               "coordinates": 398000
@@ -5353,7 +5353,7 @@
           "name": "clean",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-have-pseudo-nodes/probe-0/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-have-pseudo-nodes/probe-0/input.geojson",
               "sha256": "d751cd4b184adf6535c9f9f31e7697ca33176d17b7696e0ef49f8b1c6a14a6c6",
               "features": 1,
               "coordinates": 4
@@ -5384,7 +5384,7 @@
           "name": "violation",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-have-pseudo-nodes/probe-1/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-have-pseudo-nodes/probe-1/input.geojson",
               "sha256": "3e8dee76fd9080a62be6e36452968e8988be5ce9c35a9f64ca2427f0edd8ea9a",
               "features": 2,
               "coordinates": 4
@@ -5422,7 +5422,7 @@
           "name": "closed line",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-have-pseudo-nodes/probe-2/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-have-pseudo-nodes/probe-2/input.geojson",
               "sha256": "d751cd4b184adf6535c9f9f31e7697ca33176d17b7696e0ef49f8b1c6a14a6c6",
               "features": 1,
               "coordinates": 4
@@ -5461,7 +5461,7 @@
           "size": 1000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-overlap/1000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-overlap/1000/input.geojson",
               "sha256": "2c9744e9d60a6daae3684113004f3c6341985822691701e3af1f046896446562",
               "features": 1000,
               "coordinates": 2000
@@ -5645,7 +5645,7 @@
           "size": 10000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-overlap/10000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-overlap/10000/input.geojson",
               "sha256": "219f7b47122bd7c67335cc2d366f67268a1ba86ee643175269f5815b7e9727d6",
               "features": 10000,
               "coordinates": 20000
@@ -5829,7 +5829,7 @@
           "size": 100000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-overlap/100000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-overlap/100000/input.geojson",
               "sha256": "3dfcb0c477cec1e0dab2b8509a4e65fec8a9321177ff7124563cfcd7f93ff496",
               "features": 100000,
               "coordinates": 200000
@@ -6015,7 +6015,7 @@
           "name": "clean",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-overlap/probe-0/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-overlap/probe-0/input.geojson",
               "sha256": "5dda2cf68e66d3d747b13c63ee369dd5f1f5a2feb0aa98e11e2a774be331a80f",
               "features": 1,
               "coordinates": 2
@@ -6034,7 +6034,7 @@
           "name": "violation",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-overlap/probe-1/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-overlap/probe-1/input.geojson",
               "sha256": "c48a1be3a519ff042d515cba66ea07691d0e304c150d8577a586102f55a67693",
               "features": 2,
               "coordinates": 4
@@ -6068,13 +6068,13 @@
           "size": 1000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-overlap-with/1000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-overlap-with/1000/input.geojson",
               "sha256": "3a7e124965243259a3fd1b2f8e4c52a827ab994c59910eeb6cc0f91924a15a36",
               "features": 1000,
               "coordinates": 2000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-overlap-with/1000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-overlap-with/1000/other.geojson",
               "sha256": "845f9a7678e3ed94c19e4a7cfe3b7d6a7ab0402a3e7fe40f898764980de6daec",
               "features": 1000,
               "coordinates": 2000
@@ -6258,13 +6258,13 @@
           "size": 10000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-overlap-with/10000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-overlap-with/10000/input.geojson",
               "sha256": "5ee3defbfd3e54ce440705acbbe7ee3f14f292475f6979ec320765d34efea6d3",
               "features": 10000,
               "coordinates": 20000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-overlap-with/10000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-overlap-with/10000/other.geojson",
               "sha256": "30ce696a3231f0c5e934da8f0b57487eb52bba0b11128afea4e5b8812beba7f6",
               "features": 10000,
               "coordinates": 20000
@@ -6448,13 +6448,13 @@
           "size": 100000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-overlap-with/100000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-overlap-with/100000/input.geojson",
               "sha256": "c96b61429d6061b52169f044dd02251344a29da2832221b28fd91186dacb5dcf",
               "features": 100000,
               "coordinates": 200000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-overlap-with/100000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-overlap-with/100000/other.geojson",
               "sha256": "42ae2d40f3c0dfc11de0e55244db522fbeb0b2bb3966b657c2ec21e6d1c3a566",
               "features": 100000,
               "coordinates": 200000
@@ -6640,13 +6640,13 @@
           "name": "clean",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-overlap-with/probe-0/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-overlap-with/probe-0/input.geojson",
               "sha256": "5dda2cf68e66d3d747b13c63ee369dd5f1f5a2feb0aa98e11e2a774be331a80f",
               "features": 1,
               "coordinates": 2
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-overlap-with/probe-0/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-overlap-with/probe-0/other.geojson",
               "sha256": "f821255406d265ecfed62b21412e326f6f902183326cd6a94105a430fc6716bc",
               "features": 1,
               "coordinates": 2
@@ -6665,13 +6665,13 @@
           "name": "violation",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-overlap-with/probe-1/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-overlap-with/probe-1/input.geojson",
               "sha256": "5dda2cf68e66d3d747b13c63ee369dd5f1f5a2feb0aa98e11e2a774be331a80f",
               "features": 1,
               "coordinates": 2
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-overlap-with/probe-1/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-overlap-with/probe-1/other.geojson",
               "sha256": "911570ddb8e26b4ef8593b4d99ae3894dfdb4a0f728979d27af837d8016b7dbe",
               "features": 1,
               "coordinates": 2
@@ -6705,7 +6705,7 @@
           "size": 1000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-self-overlap/1000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-self-overlap/1000/input.geojson",
               "sha256": "553cf35bb425a4ab8d295fa8e13157409f1b533fd1e67a14b0cd9c3db92009be",
               "features": 1000,
               "coordinates": 2010
@@ -6889,7 +6889,7 @@
           "size": 10000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-self-overlap/10000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-self-overlap/10000/input.geojson",
               "sha256": "061e18029b93b9d08cf397cb5b421fc40af541dbf455e7de7961ac4608670098",
               "features": 10000,
               "coordinates": 20100
@@ -7073,7 +7073,7 @@
           "size": 100000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-self-overlap/100000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-self-overlap/100000/input.geojson",
               "sha256": "7d7b543a4f1159b86e7f67d66f663899b2317a26c837df51c7e9483ba21e3583",
               "features": 100000,
               "coordinates": 201000
@@ -7259,7 +7259,7 @@
           "name": "clean",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-self-overlap/probe-0/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-self-overlap/probe-0/input.geojson",
               "sha256": "5dda2cf68e66d3d747b13c63ee369dd5f1f5a2feb0aa98e11e2a774be331a80f",
               "features": 1,
               "coordinates": 2
@@ -7278,7 +7278,7 @@
           "name": "violation",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-self-overlap/probe-1/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-self-overlap/probe-1/input.geojson",
               "sha256": "327f494da29c215f362223f8807228ebe0d20c02115fa2662ac994f5a308f855",
               "features": 1,
               "coordinates": 3
@@ -7312,7 +7312,7 @@
           "size": 1000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-intersect/1000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-intersect/1000/input.geojson",
               "sha256": "e87459cdf082a110dc82cce99ff53fda427a46b5ebb1359edfaa5b7181890d91",
               "features": 1000,
               "coordinates": 2000
@@ -7496,7 +7496,7 @@
           "size": 10000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-intersect/10000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-intersect/10000/input.geojson",
               "sha256": "9edcbda7ad60760ce1fe2916f5b7b3261de256b0d901d655d344e9b5cbc0d2d7",
               "features": 10000,
               "coordinates": 20000
@@ -7680,7 +7680,7 @@
           "size": 100000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-intersect/100000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-intersect/100000/input.geojson",
               "sha256": "1e089fc09ecbb29553a0ad4eef0fbb9d41178e920eb6b15b44631764e8c5185a",
               "features": 100000,
               "coordinates": 200000
@@ -7866,7 +7866,7 @@
           "name": "clean",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-intersect/probe-0/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-intersect/probe-0/input.geojson",
               "sha256": "5dda2cf68e66d3d747b13c63ee369dd5f1f5a2feb0aa98e11e2a774be331a80f",
               "features": 1,
               "coordinates": 2
@@ -7885,7 +7885,7 @@
           "name": "violation",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-intersect/probe-1/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-intersect/probe-1/input.geojson",
               "sha256": "2f06d8fcb64cc77228adbcf556def990095a8ff7e84c1441b68bb751b566d5b7",
               "features": 2,
               "coordinates": 4
@@ -7911,7 +7911,7 @@
           "name": "endpoint meeting",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-intersect/probe-2/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-intersect/probe-2/input.geojson",
               "sha256": "3e8dee76fd9080a62be6e36452968e8988be5ce9c35a9f64ca2427f0edd8ea9a",
               "features": 2,
               "coordinates": 4
@@ -7930,7 +7930,7 @@
           "name": "overlapping segments",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-intersect/probe-3/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-intersect/probe-3/input.geojson",
               "sha256": "c48a1be3a519ff042d515cba66ea07691d0e304c150d8577a586102f55a67693",
               "features": 2,
               "coordinates": 4
@@ -7964,13 +7964,13 @@
           "size": 1000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-intersect-with/1000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-intersect-with/1000/input.geojson",
               "sha256": "3a7e124965243259a3fd1b2f8e4c52a827ab994c59910eeb6cc0f91924a15a36",
               "features": 1000,
               "coordinates": 2000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-intersect-with/1000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-intersect-with/1000/other.geojson",
               "sha256": "6e67fbfe2ab1a5f2f05a1591f304f843ef30c7ae6267643a669beb6f5fb5094f",
               "features": 1000,
               "coordinates": 2000
@@ -8154,13 +8154,13 @@
           "size": 10000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-intersect-with/10000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-intersect-with/10000/input.geojson",
               "sha256": "5ee3defbfd3e54ce440705acbbe7ee3f14f292475f6979ec320765d34efea6d3",
               "features": 10000,
               "coordinates": 20000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-intersect-with/10000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-intersect-with/10000/other.geojson",
               "sha256": "73cf9c6918f59114510682b7b5638df994ba76c09f96fba0df0384ace3edcc00",
               "features": 10000,
               "coordinates": 20000
@@ -8344,13 +8344,13 @@
           "size": 100000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-intersect-with/100000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-intersect-with/100000/input.geojson",
               "sha256": "c96b61429d6061b52169f044dd02251344a29da2832221b28fd91186dacb5dcf",
               "features": 100000,
               "coordinates": 200000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-intersect-with/100000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-intersect-with/100000/other.geojson",
               "sha256": "21961887efa49ab2644d329375551ab6885e079c46d7396fbf9f0569efd30106",
               "features": 100000,
               "coordinates": 200000
@@ -8536,13 +8536,13 @@
           "name": "clean",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-intersect-with/probe-0/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-intersect-with/probe-0/input.geojson",
               "sha256": "5dda2cf68e66d3d747b13c63ee369dd5f1f5a2feb0aa98e11e2a774be331a80f",
               "features": 1,
               "coordinates": 2
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-intersect-with/probe-0/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-intersect-with/probe-0/other.geojson",
               "sha256": "f821255406d265ecfed62b21412e326f6f902183326cd6a94105a430fc6716bc",
               "features": 1,
               "coordinates": 2
@@ -8561,13 +8561,13 @@
           "name": "violation",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-intersect-with/probe-1/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-intersect-with/probe-1/input.geojson",
               "sha256": "5dda2cf68e66d3d747b13c63ee369dd5f1f5a2feb0aa98e11e2a774be331a80f",
               "features": 1,
               "coordinates": 2
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-intersect-with/probe-1/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-intersect-with/probe-1/other.geojson",
               "sha256": "fa302c02e97010f903abb6182e5d0833ba44660f1b31e2d230346162a23ef484",
               "features": 1,
               "coordinates": 2
@@ -8601,7 +8601,7 @@
           "size": 1000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-intersect-or-touch-interior/1000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-intersect-or-touch-interior/1000/input.geojson",
               "sha256": "36ec589dc680d275e1314a8ee92fb7de94e281c503e1c1a8217a381124f6d02f",
               "features": 1000,
               "coordinates": 2000
@@ -8785,7 +8785,7 @@
           "size": 10000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-intersect-or-touch-interior/10000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-intersect-or-touch-interior/10000/input.geojson",
               "sha256": "608bbfa2179705ba66d4fc5b960cc902ea2fef5ef8fdf365f667606a8533901f",
               "features": 10000,
               "coordinates": 20000
@@ -8969,7 +8969,7 @@
           "size": 100000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-intersect-or-touch-interior/100000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-intersect-or-touch-interior/100000/input.geojson",
               "sha256": "114ad63ae67646252b87f1170a235234f55665426ee1e699b0a00349595dcae0",
               "features": 100000,
               "coordinates": 200000
@@ -9155,7 +9155,7 @@
           "name": "clean",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-intersect-or-touch-interior/probe-0/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-intersect-or-touch-interior/probe-0/input.geojson",
               "sha256": "5dda2cf68e66d3d747b13c63ee369dd5f1f5a2feb0aa98e11e2a774be331a80f",
               "features": 1,
               "coordinates": 2
@@ -9174,7 +9174,7 @@
           "name": "violation",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-intersect-or-touch-interior/probe-1/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-intersect-or-touch-interior/probe-1/input.geojson",
               "sha256": "751b8b9b12f61b805a0db5f8c735b32eb9173a930a07d4f8bb0bb5ce7ae83d02",
               "features": 2,
               "coordinates": 4
@@ -9200,7 +9200,7 @@
           "name": "endpoint meeting",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-intersect-or-touch-interior/probe-2/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-intersect-or-touch-interior/probe-2/input.geojson",
               "sha256": "3e8dee76fd9080a62be6e36452968e8988be5ce9c35a9f64ca2427f0edd8ea9a",
               "features": 2,
               "coordinates": 4
@@ -9227,13 +9227,13 @@
           "size": 1000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-intersect-or-touch-interior-with/1000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-intersect-or-touch-interior-with/1000/input.geojson",
               "sha256": "3a7e124965243259a3fd1b2f8e4c52a827ab994c59910eeb6cc0f91924a15a36",
               "features": 1000,
               "coordinates": 2000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-intersect-or-touch-interior-with/1000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-intersect-or-touch-interior-with/1000/other.geojson",
               "sha256": "f578c90ee40cf12865b01f592b8693d07bafbcf33f78f4d7ef3cba99176c0934",
               "features": 1000,
               "coordinates": 2000
@@ -9417,13 +9417,13 @@
           "size": 10000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-intersect-or-touch-interior-with/10000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-intersect-or-touch-interior-with/10000/input.geojson",
               "sha256": "5ee3defbfd3e54ce440705acbbe7ee3f14f292475f6979ec320765d34efea6d3",
               "features": 10000,
               "coordinates": 20000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-intersect-or-touch-interior-with/10000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-intersect-or-touch-interior-with/10000/other.geojson",
               "sha256": "97c66e03750ae8073c5e6fb3aea228a855bd2368d7554513c76345dfc88e581c",
               "features": 10000,
               "coordinates": 20000
@@ -9607,13 +9607,13 @@
           "size": 100000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-intersect-or-touch-interior-with/100000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-intersect-or-touch-interior-with/100000/input.geojson",
               "sha256": "c96b61429d6061b52169f044dd02251344a29da2832221b28fd91186dacb5dcf",
               "features": 100000,
               "coordinates": 200000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-intersect-or-touch-interior-with/100000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-intersect-or-touch-interior-with/100000/other.geojson",
               "sha256": "21aa2e43be48921a3b750f1dff9aec851e67372dd4085e7b9e73836037da30bb",
               "features": 100000,
               "coordinates": 200000
@@ -9799,13 +9799,13 @@
           "name": "clean",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-intersect-or-touch-interior-with/probe-0/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-intersect-or-touch-interior-with/probe-0/input.geojson",
               "sha256": "5dda2cf68e66d3d747b13c63ee369dd5f1f5a2feb0aa98e11e2a774be331a80f",
               "features": 1,
               "coordinates": 2
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-intersect-or-touch-interior-with/probe-0/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-intersect-or-touch-interior-with/probe-0/other.geojson",
               "sha256": "f821255406d265ecfed62b21412e326f6f902183326cd6a94105a430fc6716bc",
               "features": 1,
               "coordinates": 2
@@ -9824,13 +9824,13 @@
           "name": "violation",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-intersect-or-touch-interior-with/probe-1/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-intersect-or-touch-interior-with/probe-1/input.geojson",
               "sha256": "5dda2cf68e66d3d747b13c63ee369dd5f1f5a2feb0aa98e11e2a774be331a80f",
               "features": 1,
               "coordinates": 2
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-intersect-or-touch-interior-with/probe-1/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-intersect-or-touch-interior-with/probe-1/other.geojson",
               "sha256": "cf044ccbd301f4a736a9691fb767a30dd32cef3e59235396015dae034a4c5394",
               "features": 1,
               "coordinates": 2
@@ -9864,7 +9864,7 @@
           "size": 1000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-self-intersect/1000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-self-intersect/1000/input.geojson",
               "sha256": "732571b1cd8f2db9af2a65d426743919c7633c06e25b5c4ff7162ece2d802ce1",
               "features": 1000,
               "coordinates": 2020
@@ -10048,7 +10048,7 @@
           "size": 10000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-self-intersect/10000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-self-intersect/10000/input.geojson",
               "sha256": "60732a7ad64d0a962d6d3f271ea9355920f8dc2a7a393641ed62b1c17a5eec02",
               "features": 10000,
               "coordinates": 20200
@@ -10232,7 +10232,7 @@
           "size": 100000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-self-intersect/100000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-self-intersect/100000/input.geojson",
               "sha256": "20ec4d94b54d51a7860ea396fecc44d5430be0340bab21f9cdf523982497ba2c",
               "features": 100000,
               "coordinates": 202000
@@ -10418,7 +10418,7 @@
           "name": "clean",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-self-intersect/probe-0/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-self-intersect/probe-0/input.geojson",
               "sha256": "5dda2cf68e66d3d747b13c63ee369dd5f1f5a2feb0aa98e11e2a774be331a80f",
               "features": 1,
               "coordinates": 2
@@ -10437,7 +10437,7 @@
           "name": "violation",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-self-intersect/probe-1/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-self-intersect/probe-1/input.geojson",
               "sha256": "51f7d79564a3d5e0ca80fc0d7a5eaee8a9b598a32438c33b00f872b4ae797d81",
               "features": 1,
               "coordinates": 4
@@ -10463,7 +10463,7 @@
           "name": "repeated segment",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-self-intersect/probe-2/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-self-intersect/probe-2/input.geojson",
               "sha256": "327f494da29c215f362223f8807228ebe0d20c02115fa2662ac994f5a308f855",
               "features": 1,
               "coordinates": 3
@@ -10489,7 +10489,7 @@
           "name": "self touch",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-self-intersect/probe-3/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-self-intersect/probe-3/input.geojson",
               "sha256": "b8c8ebae0cfe52e2c9c3b1547b58d6f10ee9abaac3ad2789e4ec6aa2956f88c9",
               "features": 1,
               "coordinates": 5
@@ -10516,13 +10516,13 @@
           "size": 1000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-be-inside/1000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-be-inside/1000/input.geojson",
               "sha256": "4574df606ee5476849e6f082a8f418f64006b32d0f1dfb23a3a89de4b186f041",
               "features": 1000,
               "coordinates": 2000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-be-inside/1000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-be-inside/1000/other.geojson",
               "sha256": "130c9ecba8e0a8bd676c8ee5cbefa78539a780458b79b4263af3169d052c3d9d",
               "features": 1000,
               "coordinates": 5000
@@ -10706,13 +10706,13 @@
           "size": 10000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-be-inside/10000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-be-inside/10000/input.geojson",
               "sha256": "847e6f9d51fe24c84bb2867e703f7f1621e377fd3919dd268cac80ca0571610d",
               "features": 10000,
               "coordinates": 20000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-be-inside/10000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-be-inside/10000/other.geojson",
               "sha256": "acecd8231f14458fcbf206014977526c8506f61982facf3ce44f1d176c5042a5",
               "features": 10000,
               "coordinates": 50000
@@ -10896,13 +10896,13 @@
           "size": 100000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-be-inside/100000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-be-inside/100000/input.geojson",
               "sha256": "170a361e6822923115f5dcf186127ff30f4c495e5ba0799a5eb8c6da3d082866",
               "features": 100000,
               "coordinates": 200000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-be-inside/100000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-be-inside/100000/other.geojson",
               "sha256": "31ffc8321ff60606ed53e3186540cd908916bb6ba5023309a40986a3df8e0128",
               "features": 100000,
               "coordinates": 500000
@@ -11088,13 +11088,13 @@
           "name": "clean",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-be-inside/probe-0/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-be-inside/probe-0/input.geojson",
               "sha256": "5dda2cf68e66d3d747b13c63ee369dd5f1f5a2feb0aa98e11e2a774be331a80f",
               "features": 1,
               "coordinates": 2
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-be-inside/probe-0/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-be-inside/probe-0/other.geojson",
               "sha256": "2e9eff212922d8294d9f366b68deff9147704dea4aead1590061bf45a14e28b7",
               "features": 1,
               "coordinates": 5
@@ -11113,13 +11113,13 @@
           "name": "violation",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-be-inside/probe-1/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-be-inside/probe-1/input.geojson",
               "sha256": "744d906e1b6280f53ac97ba061049cc5c4effbad4a9107795a02bdcbd090d75f",
               "features": 1,
               "coordinates": 2
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-be-inside/probe-1/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-be-inside/probe-1/other.geojson",
               "sha256": "2e9eff212922d8294d9f366b68deff9147704dea4aead1590061bf45a14e28b7",
               "features": 1,
               "coordinates": 5
@@ -11162,7 +11162,7 @@
           "size": 1000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_must-not-overlap/1000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_must-not-overlap/1000/input.geojson",
               "sha256": "8ab4dfabc9d45dfe20d15b2ccf36eb7e454beffc8493d08443016fb014c98568",
               "features": 1000,
               "coordinates": 5000
@@ -11505,7 +11505,7 @@
           "size": 10000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_must-not-overlap/10000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_must-not-overlap/10000/input.geojson",
               "sha256": "0c26e1d2dab4a4b2a108e6a0d77460d9687b6611c0ae93ac45399022d2ed1339",
               "features": 10000,
               "coordinates": 50000
@@ -11848,7 +11848,7 @@
           "size": 100000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_must-not-overlap/100000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_must-not-overlap/100000/input.geojson",
               "sha256": "83af680becb629aab12298c955ea541bfad06d5ce3cdc54450b0963109639bb7",
               "features": 100000,
               "coordinates": 500000
@@ -12193,7 +12193,7 @@
           "name": "clean",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/audit-20261011T084202824687/polygon_must-not-overlap/probe-0/input.geojson",
+              "path": "builds/qgis/audit-20261011T084202824687/polygon_must-not-overlap/probe-0/input.geojson",
               "sha256": "60418f6cec607c310db45027d6864ba9ba995b5e7ee0d1d57ef859d861ccad48",
               "features": 2,
               "coordinates": 10
@@ -12218,7 +12218,7 @@
           "name": "violation",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/audit-20261011T084202824687/polygon_must-not-overlap/probe-1/input.geojson",
+              "path": "builds/qgis/audit-20261011T084202824687/polygon_must-not-overlap/probe-1/input.geojson",
               "sha256": "a2d877fcbc38f943b0728e2e37402c0fa07642fd336f869d0859fd3e0a4daacb",
               "features": 2,
               "coordinates": 10
@@ -12256,7 +12256,7 @@
           "name": "equal polygons",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/audit-20261011T084202824687/polygon_must-not-overlap/probe-2/input.geojson",
+              "path": "builds/qgis/audit-20261011T084202824687/polygon_must-not-overlap/probe-2/input.geojson",
               "sha256": "fb5513e4e96d17a43431f1221b1938599c8befa89bde99f4bd6a1cbcfad59a29",
               "features": 2,
               "coordinates": 10
@@ -12288,7 +12288,7 @@
           "name": "contained polygon",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/audit-20261011T084202824687/polygon_must-not-overlap/probe-3/input.geojson",
+              "path": "builds/qgis/audit-20261011T084202824687/polygon_must-not-overlap/probe-3/input.geojson",
               "sha256": "b8d7ae50372236fa3ee26d481d03e4242639d7395dae70de4f1ca8b3d7fb499d",
               "features": 2,
               "coordinates": 10
@@ -12320,7 +12320,7 @@
           "name": "edge contact",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/audit-20261011T084202824687/polygon_must-not-overlap/probe-4/input.geojson",
+              "path": "builds/qgis/audit-20261011T084202824687/polygon_must-not-overlap/probe-4/input.geojson",
               "sha256": "da23773aaa0e233e928801a2d73255c826f257e3662c72c06609e31c9a186d17",
               "features": 2,
               "coordinates": 10
@@ -12349,7 +12349,7 @@
           "name": "clean",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_must-not-overlap/probe-0/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_must-not-overlap/probe-0/input.geojson",
               "sha256": "60418f6cec607c310db45027d6864ba9ba995b5e7ee0d1d57ef859d861ccad48",
               "features": 2,
               "coordinates": 10
@@ -12374,7 +12374,7 @@
           "name": "violation",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_must-not-overlap/probe-1/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_must-not-overlap/probe-1/input.geojson",
               "sha256": "a2d877fcbc38f943b0728e2e37402c0fa07642fd336f869d0859fd3e0a4daacb",
               "features": 2,
               "coordinates": 10
@@ -12412,7 +12412,7 @@
           "name": "edge contact",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_must-not-overlap/probe-2/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_must-not-overlap/probe-2/input.geojson",
               "sha256": "da23773aaa0e233e928801a2d73255c826f257e3662c72c06609e31c9a186d17",
               "features": 2,
               "coordinates": 10
@@ -12446,13 +12446,13 @@
           "size": 1000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_must-not-overlap-with/1000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_must-not-overlap-with/1000/input.geojson",
               "sha256": "5073d55157d6401a47f73eda417f6376bec2ce58fc9762858b1c2ebba42d2fa8",
               "features": 1000,
               "coordinates": 5000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_must-not-overlap-with/1000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_must-not-overlap-with/1000/other.geojson",
               "sha256": "7aba83100ed924dd32c0f3a7c025d55ab9d41bd662b61ac82dd973e63a982a56",
               "features": 1000,
               "coordinates": 5000
@@ -12795,13 +12795,13 @@
           "size": 10000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_must-not-overlap-with/10000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_must-not-overlap-with/10000/input.geojson",
               "sha256": "95da697a17cbc3e5163fde95d2b45ed9d2c68089647f7de565996e6abbb3f048",
               "features": 10000,
               "coordinates": 50000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_must-not-overlap-with/10000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_must-not-overlap-with/10000/other.geojson",
               "sha256": "e78c3dd597bbd3f4d5e403e9592909fdabce5efe10984e586137ae9beb94e24f",
               "features": 10000,
               "coordinates": 50000
@@ -13144,13 +13144,13 @@
           "size": 100000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_must-not-overlap-with/100000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_must-not-overlap-with/100000/input.geojson",
               "sha256": "2875ede7ea30dca79c4d75f96e4e24fc08139c66819a0d9395851066956786dd",
               "features": 100000,
               "coordinates": 500000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_must-not-overlap-with/100000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_must-not-overlap-with/100000/other.geojson",
               "sha256": "7b7c192ff7a995b811386cf9a8b0e90a51bf4e422a0824fd38ff2e49bb6ca4fc",
               "features": 100000,
               "coordinates": 500000
@@ -13495,13 +13495,13 @@
           "name": "clean",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/audit-20261011T084202824687/polygon_must-not-overlap-with/probe-0/input.geojson",
+              "path": "builds/qgis/audit-20261011T084202824687/polygon_must-not-overlap-with/probe-0/input.geojson",
               "sha256": "2842ab5f797aa24871f15af63c654200fb64135daecca239aee005f16a2389e6",
               "features": 1,
               "coordinates": 5
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/audit-20261011T084202824687/polygon_must-not-overlap-with/probe-0/other.geojson",
+              "path": "builds/qgis/audit-20261011T084202824687/polygon_must-not-overlap-with/probe-0/other.geojson",
               "sha256": "07e5efeec181da0ae3954c293ef3620dce3eb0ea8b5a49f717bdcfd0c50fd3d4",
               "features": 1,
               "coordinates": 5
@@ -13526,13 +13526,13 @@
           "name": "violation",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/audit-20261011T084202824687/polygon_must-not-overlap-with/probe-1/input.geojson",
+              "path": "builds/qgis/audit-20261011T084202824687/polygon_must-not-overlap-with/probe-1/input.geojson",
               "sha256": "2842ab5f797aa24871f15af63c654200fb64135daecca239aee005f16a2389e6",
               "features": 1,
               "coordinates": 5
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/audit-20261011T084202824687/polygon_must-not-overlap-with/probe-1/other.geojson",
+              "path": "builds/qgis/audit-20261011T084202824687/polygon_must-not-overlap-with/probe-1/other.geojson",
               "sha256": "5cc0b44aa30c8867c10059676612873258bce2e9c998c1c54adc32a6b7295108",
               "features": 1,
               "coordinates": 5
@@ -13570,13 +13570,13 @@
           "name": "equal polygons",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/audit-20261011T084202824687/polygon_must-not-overlap-with/probe-2/input.geojson",
+              "path": "builds/qgis/audit-20261011T084202824687/polygon_must-not-overlap-with/probe-2/input.geojson",
               "sha256": "2842ab5f797aa24871f15af63c654200fb64135daecca239aee005f16a2389e6",
               "features": 1,
               "coordinates": 5
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/audit-20261011T084202824687/polygon_must-not-overlap-with/probe-2/other.geojson",
+              "path": "builds/qgis/audit-20261011T084202824687/polygon_must-not-overlap-with/probe-2/other.geojson",
               "sha256": "2e9eff212922d8294d9f366b68deff9147704dea4aead1590061bf45a14e28b7",
               "features": 1,
               "coordinates": 5
@@ -13608,13 +13608,13 @@
           "name": "contained polygon",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/audit-20261011T084202824687/polygon_must-not-overlap-with/probe-3/input.geojson",
+              "path": "builds/qgis/audit-20261011T084202824687/polygon_must-not-overlap-with/probe-3/input.geojson",
               "sha256": "e23bbd48b54437701fcd7200795424d6fd95425b9945482c4b759e58383c488e",
               "features": 1,
               "coordinates": 5
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/audit-20261011T084202824687/polygon_must-not-overlap-with/probe-3/other.geojson",
+              "path": "builds/qgis/audit-20261011T084202824687/polygon_must-not-overlap-with/probe-3/other.geojson",
               "sha256": "2e9eff212922d8294d9f366b68deff9147704dea4aead1590061bf45a14e28b7",
               "features": 1,
               "coordinates": 5
@@ -13650,13 +13650,13 @@
           "name": "clean",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_must-not-overlap-with/probe-0/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_must-not-overlap-with/probe-0/input.geojson",
               "sha256": "2842ab5f797aa24871f15af63c654200fb64135daecca239aee005f16a2389e6",
               "features": 1,
               "coordinates": 5
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_must-not-overlap-with/probe-0/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_must-not-overlap-with/probe-0/other.geojson",
               "sha256": "07e5efeec181da0ae3954c293ef3620dce3eb0ea8b5a49f717bdcfd0c50fd3d4",
               "features": 1,
               "coordinates": 5
@@ -13681,13 +13681,13 @@
           "name": "violation",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_must-not-overlap-with/probe-1/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_must-not-overlap-with/probe-1/input.geojson",
               "sha256": "2842ab5f797aa24871f15af63c654200fb64135daecca239aee005f16a2389e6",
               "features": 1,
               "coordinates": 5
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_must-not-overlap-with/probe-1/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_must-not-overlap-with/probe-1/other.geojson",
               "sha256": "5cc0b44aa30c8867c10059676612873258bce2e9c998c1c54adc32a6b7295108",
               "features": 1,
               "coordinates": 5
@@ -13734,7 +13734,7 @@
           "size": 1000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_must-not-have-gaps/1000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_must-not-have-gaps/1000/input.geojson",
               "sha256": "26110206435002a883cdf7f1c61f94c4297e31f95e20ed4b078b2865a4d21888",
               "features": 1000,
               "coordinates": 5050
@@ -14089,7 +14089,7 @@
           "size": 10000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_must-not-have-gaps/10000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_must-not-have-gaps/10000/input.geojson",
               "sha256": "b5fccd08756b0a6a02e7f45f4c4c65c3ec1d8619186d81b7d28601f95e3e813e",
               "features": 10000,
               "coordinates": 50500
@@ -14444,7 +14444,7 @@
           "size": 100000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_must-not-have-gaps/100000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_must-not-have-gaps/100000/input.geojson",
               "sha256": "736ee25c4fe409a448b82a58a5c3f04b2f8f0f5a7ab62cad9305f56f72a8a819",
               "features": 100000,
               "coordinates": 505000
@@ -14801,7 +14801,7 @@
           "name": "clean",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_must-not-have-gaps/probe-0/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_must-not-have-gaps/probe-0/input.geojson",
               "sha256": "2842ab5f797aa24871f15af63c654200fb64135daecca239aee005f16a2389e6",
               "features": 1,
               "coordinates": 5
@@ -14833,7 +14833,7 @@
           "name": "violation",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_must-not-have-gaps/probe-1/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_must-not-have-gaps/probe-1/input.geojson",
               "sha256": "e85db35afdb07f3c0ba49ac2a67b3f1f9f56743030815d38faabe985a1bdccb4",
               "features": 1,
               "coordinates": 10
@@ -14888,7 +14888,7 @@
           "size": 1000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/geometry_must-not-be-multipart/1000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/geometry_must-not-be-multipart/1000/input.geojson",
               "sha256": "be7569e178d8226c2d252317669b73a98af42c8d37cfdc5963bcf9c1942bb1de",
               "features": 1000,
               "coordinates": 2020
@@ -15231,7 +15231,7 @@
           "size": 10000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/geometry_must-not-be-multipart/10000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/geometry_must-not-be-multipart/10000/input.geojson",
               "sha256": "6277262168a1b1c85d7ea2c30ed45ed6ea19cd6184122458a59c6b8b3af14cdf",
               "features": 10000,
               "coordinates": 20200
@@ -15574,7 +15574,7 @@
           "size": 100000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/geometry_must-not-be-multipart/100000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/geometry_must-not-be-multipart/100000/input.geojson",
               "sha256": "49b762bc31725a2338717160c29d4ca4064dc58381ec1825ff15f3ff0259fe7e",
               "features": 100000,
               "coordinates": 202000
@@ -15919,7 +15919,7 @@
           "name": "clean",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/geometry_must-not-be-multipart/probe-0/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/geometry_must-not-be-multipart/probe-0/input.geojson",
               "sha256": "6a3612d17623448d545c0018e7df1f5c4342e61e52059d31caf5ff8d4185352d",
               "features": 1,
               "coordinates": 2
@@ -15944,7 +15944,7 @@
           "name": "violation",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/geometry_must-not-be-multipart/probe-1/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/geometry_must-not-be-multipart/probe-1/input.geojson",
               "sha256": "a2c7ce5bdc61277cd64a09428698ebb7efdce390d1e938391a63fa60eb74f5cc",
               "features": 1,
               "coordinates": 4
@@ -15982,7 +15982,7 @@
           "name": "single-part MultiLineString",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/geometry_must-not-be-multipart/probe-2/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/geometry_must-not-be-multipart/probe-2/input.geojson",
               "sha256": "c902f0cc84a38722f8088b9cfae1c8b1c0a045cb8a6621e55137a5a673dc4111",
               "features": 1,
               "coordinates": 2
@@ -16018,13 +16018,13 @@
           "size": 1000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-covered-by-lines/1000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-covered-by-lines/1000/input.geojson",
               "sha256": "b1c23bc057447e4e1cbb7a62fb348d3f6479544bdf2719aca6c61b8608bf1981",
               "features": 1000,
               "coordinates": 1000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-covered-by-lines/1000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-covered-by-lines/1000/other.geojson",
               "sha256": "bb109c8bca62d28e42a54ca6006df280c78be721999a68854911a6f1ab0a9585",
               "features": 1000,
               "coordinates": 2000
@@ -16367,13 +16367,13 @@
           "size": 10000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-covered-by-lines/10000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-covered-by-lines/10000/input.geojson",
               "sha256": "442c29a387927c70289f3a789526c5639c6dd4e5b3600264adff0633cc9de20a",
               "features": 10000,
               "coordinates": 10000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-covered-by-lines/10000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-covered-by-lines/10000/other.geojson",
               "sha256": "532575893e5b0e52988ad48c9657cbcdd47040640459f219cdd704acb6be853d",
               "features": 10000,
               "coordinates": 20000
@@ -16716,13 +16716,13 @@
           "size": 100000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-covered-by-lines/100000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-covered-by-lines/100000/input.geojson",
               "sha256": "01cd3534f10872d366a7ea7b46532ddbc658351a135971ca2324cc92e6340bf4",
               "features": 100000,
               "coordinates": 100000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-covered-by-lines/100000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-covered-by-lines/100000/other.geojson",
               "sha256": "7d1972dfbaed4b5d63a120563259f6b91a0046272f092af35947fe7f5b59110a",
               "features": 100000,
               "coordinates": 200000
@@ -17067,13 +17067,13 @@
           "name": "clean",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-covered-by-lines/probe-0/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-covered-by-lines/probe-0/input.geojson",
               "sha256": "c91148f39da145648cf449bdd95d0da667c976282e480f549eb8b53aee79ed7d",
               "features": 1,
               "coordinates": 1
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-covered-by-lines/probe-0/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-covered-by-lines/probe-0/other.geojson",
               "sha256": "e840ee72385213072219bae5da617820a2aa495ace1acfa29e0450eaaea079c1",
               "features": 1,
               "coordinates": 2
@@ -17104,13 +17104,13 @@
           "name": "violation",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-covered-by-lines/probe-1/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-covered-by-lines/probe-1/input.geojson",
               "sha256": "a32a96e55799cbd49f116aa48535931bb405d77576ae0445a6530670a4fdc458",
               "features": 1,
               "coordinates": 1
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-covered-by-lines/probe-1/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-covered-by-lines/probe-1/other.geojson",
               "sha256": "e840ee72385213072219bae5da617820a2aa495ace1acfa29e0450eaaea079c1",
               "features": 1,
               "coordinates": 2
@@ -17148,13 +17148,13 @@
           "name": "point on endpoint",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-covered-by-lines/probe-2/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-covered-by-lines/probe-2/input.geojson",
               "sha256": "483bc701f30b40724e3b12bc537bbb72aa4c39d2251d29b3962f0b81d0c3c5ec",
               "features": 1,
               "coordinates": 1
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-covered-by-lines/probe-2/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-covered-by-lines/probe-2/other.geojson",
               "sha256": "e840ee72385213072219bae5da617820a2aa495ace1acfa29e0450eaaea079c1",
               "features": 1,
               "coordinates": 2
@@ -17190,13 +17190,13 @@
           "size": 1000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-covered-by-line-endpoints/1000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-covered-by-line-endpoints/1000/input.geojson",
               "sha256": "fa38fec2e9590a7cd3b6da8f3c7113bde60ac8874944e715794f1532d2709e35",
               "features": 1000,
               "coordinates": 1000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-covered-by-line-endpoints/1000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-covered-by-line-endpoints/1000/other.geojson",
               "sha256": "bb109c8bca62d28e42a54ca6006df280c78be721999a68854911a6f1ab0a9585",
               "features": 1000,
               "coordinates": 2000
@@ -17539,13 +17539,13 @@
           "size": 10000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-covered-by-line-endpoints/10000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-covered-by-line-endpoints/10000/input.geojson",
               "sha256": "271f61048b16a1d4dccc9e803b2a02c36dcf58047af3548f12191ff037a857f0",
               "features": 10000,
               "coordinates": 10000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-covered-by-line-endpoints/10000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-covered-by-line-endpoints/10000/other.geojson",
               "sha256": "532575893e5b0e52988ad48c9657cbcdd47040640459f219cdd704acb6be853d",
               "features": 10000,
               "coordinates": 20000
@@ -17888,13 +17888,13 @@
           "size": 100000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-covered-by-line-endpoints/100000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-covered-by-line-endpoints/100000/input.geojson",
               "sha256": "f7883693a7985bff09e6518a9d2087aa30e9c81eec6bf09e73a0d6cf45f68481",
               "features": 100000,
               "coordinates": 100000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-covered-by-line-endpoints/100000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-covered-by-line-endpoints/100000/other.geojson",
               "sha256": "7d1972dfbaed4b5d63a120563259f6b91a0046272f092af35947fe7f5b59110a",
               "features": 100000,
               "coordinates": 200000
@@ -18239,13 +18239,13 @@
           "name": "clean",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-covered-by-line-endpoints/probe-0/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-covered-by-line-endpoints/probe-0/input.geojson",
               "sha256": "483bc701f30b40724e3b12bc537bbb72aa4c39d2251d29b3962f0b81d0c3c5ec",
               "features": 1,
               "coordinates": 1
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-covered-by-line-endpoints/probe-0/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-covered-by-line-endpoints/probe-0/other.geojson",
               "sha256": "e840ee72385213072219bae5da617820a2aa495ace1acfa29e0450eaaea079c1",
               "features": 1,
               "coordinates": 2
@@ -18270,13 +18270,13 @@
           "name": "violation",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-covered-by-line-endpoints/probe-1/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-covered-by-line-endpoints/probe-1/input.geojson",
               "sha256": "c91148f39da145648cf449bdd95d0da667c976282e480f549eb8b53aee79ed7d",
               "features": 1,
               "coordinates": 1
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-covered-by-line-endpoints/probe-1/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-covered-by-line-endpoints/probe-1/other.geojson",
               "sha256": "e840ee72385213072219bae5da617820a2aa495ace1acfa29e0450eaaea079c1",
               "features": 1,
               "coordinates": 2
@@ -18314,13 +18314,13 @@
           "name": "closed line start",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-covered-by-line-endpoints/probe-2/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-covered-by-line-endpoints/probe-2/input.geojson",
               "sha256": "6977c321e0a9e89964dd1dfdda6ec8a18ff4aab1d434cb18d44613dafbba15f0",
               "features": 1,
               "coordinates": 1
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-covered-by-line-endpoints/probe-2/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-covered-by-line-endpoints/probe-2/other.geojson",
               "sha256": "12d2f4b4d1cb5320877ebf58c7c978b31661f3bc21298e965492a4f466fed8a6",
               "features": 1,
               "coordinates": 4
@@ -18363,13 +18363,13 @@
           "size": 1000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-covered-by-polygon-boundaries/1000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-covered-by-polygon-boundaries/1000/input.geojson",
               "sha256": "a34238d609a0da61ef85fd68cb9a5def5b4713765c5791983fe80313074b02c6",
               "features": 1000,
               "coordinates": 1000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-covered-by-polygon-boundaries/1000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-covered-by-polygon-boundaries/1000/other.geojson",
               "sha256": "130c9ecba8e0a8bd676c8ee5cbefa78539a780458b79b4263af3169d052c3d9d",
               "features": 1000,
               "coordinates": 5000
@@ -18712,13 +18712,13 @@
           "size": 10000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-covered-by-polygon-boundaries/10000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-covered-by-polygon-boundaries/10000/input.geojson",
               "sha256": "ebb9764938e90593e525247306170e896fa2ca5739f8e753dbc9a5f41946173a",
               "features": 10000,
               "coordinates": 10000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-covered-by-polygon-boundaries/10000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-covered-by-polygon-boundaries/10000/other.geojson",
               "sha256": "acecd8231f14458fcbf206014977526c8506f61982facf3ce44f1d176c5042a5",
               "features": 10000,
               "coordinates": 50000
@@ -19061,13 +19061,13 @@
           "size": 100000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-covered-by-polygon-boundaries/100000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-covered-by-polygon-boundaries/100000/input.geojson",
               "sha256": "8712b33ef6595f7b628dc7a26bf09614a3fc7561728442a8c4e00869030e441e",
               "features": 100000,
               "coordinates": 100000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-covered-by-polygon-boundaries/100000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-covered-by-polygon-boundaries/100000/other.geojson",
               "sha256": "31ffc8321ff60606ed53e3186540cd908916bb6ba5023309a40986a3df8e0128",
               "features": 100000,
               "coordinates": 500000
@@ -19412,13 +19412,13 @@
           "name": "clean",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-covered-by-polygon-boundaries/probe-0/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-covered-by-polygon-boundaries/probe-0/input.geojson",
               "sha256": "d4d374291f1d07ce295a593df0614ff6b1503a9e3c297f4a7d5a1b5897d6ee4e",
               "features": 1,
               "coordinates": 1
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-covered-by-polygon-boundaries/probe-0/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-covered-by-polygon-boundaries/probe-0/other.geojson",
               "sha256": "2e9eff212922d8294d9f366b68deff9147704dea4aead1590061bf45a14e28b7",
               "features": 1,
               "coordinates": 5
@@ -19443,13 +19443,13 @@
           "name": "violation",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-covered-by-polygon-boundaries/probe-1/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-covered-by-polygon-boundaries/probe-1/input.geojson",
               "sha256": "483bc701f30b40724e3b12bc537bbb72aa4c39d2251d29b3962f0b81d0c3c5ec",
               "features": 1,
               "coordinates": 1
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-covered-by-polygon-boundaries/probe-1/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-covered-by-polygon-boundaries/probe-1/other.geojson",
               "sha256": "2e9eff212922d8294d9f366b68deff9147704dea4aead1590061bf45a14e28b7",
               "features": 1,
               "coordinates": 5
@@ -19487,13 +19487,13 @@
           "name": "point on shared polygon edge",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-covered-by-polygon-boundaries/probe-2/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-covered-by-polygon-boundaries/probe-2/input.geojson",
               "sha256": "68eccbd20b85b61fc11ad1390db7b8f5bdeac1fdd8c9eab285855f1cdf64e63a",
               "features": 1,
               "coordinates": 1
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-covered-by-polygon-boundaries/probe-2/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-covered-by-polygon-boundaries/probe-2/other.geojson",
               "sha256": "a0923f7b1b0ea3ead05e242e9830289642be0d31b9f0b38c0da01787715da5a1",
               "features": 2,
               "coordinates": 10
@@ -19529,13 +19529,13 @@
           "size": 1000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_endpoints-must-be-covered-by-points/1000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_endpoints-must-be-covered-by-points/1000/input.geojson",
               "sha256": "3a7e124965243259a3fd1b2f8e4c52a827ab994c59910eeb6cc0f91924a15a36",
               "features": 1000,
               "coordinates": 2000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_endpoints-must-be-covered-by-points/1000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_endpoints-must-be-covered-by-points/1000/other.geojson",
               "sha256": "1336b10bf96808e507f61b3652f0415daa343d833026c84e79fbf3bb69d8e2b8",
               "features": 1990,
               "coordinates": 1990
@@ -19878,13 +19878,13 @@
           "size": 10000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_endpoints-must-be-covered-by-points/10000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_endpoints-must-be-covered-by-points/10000/input.geojson",
               "sha256": "5ee3defbfd3e54ce440705acbbe7ee3f14f292475f6979ec320765d34efea6d3",
               "features": 10000,
               "coordinates": 20000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_endpoints-must-be-covered-by-points/10000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_endpoints-must-be-covered-by-points/10000/other.geojson",
               "sha256": "582ecd29bf105d4c1eb2e0d7cf38e2e104acc8edc282d440688bddb186450ad3",
               "features": 19900,
               "coordinates": 19900
@@ -20227,13 +20227,13 @@
           "size": 100000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_endpoints-must-be-covered-by-points/100000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_endpoints-must-be-covered-by-points/100000/input.geojson",
               "sha256": "c96b61429d6061b52169f044dd02251344a29da2832221b28fd91186dacb5dcf",
               "features": 100000,
               "coordinates": 200000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_endpoints-must-be-covered-by-points/100000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_endpoints-must-be-covered-by-points/100000/other.geojson",
               "sha256": "32e2563e05afa63daa8725d44e587e84ccf74eafb804cfe019e1d2bf8a95a81c",
               "features": 199000,
               "coordinates": 199000
@@ -20578,13 +20578,13 @@
           "name": "clean",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/audit-20261011T084202824687/line_endpoints-must-be-covered-by-points/probe-0/input.geojson",
+              "path": "builds/qgis/audit-20261011T084202824687/line_endpoints-must-be-covered-by-points/probe-0/input.geojson",
               "sha256": "5dda2cf68e66d3d747b13c63ee369dd5f1f5a2feb0aa98e11e2a774be331a80f",
               "features": 1,
               "coordinates": 2
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/audit-20261011T084202824687/line_endpoints-must-be-covered-by-points/probe-0/other.geojson",
+              "path": "builds/qgis/audit-20261011T084202824687/line_endpoints-must-be-covered-by-points/probe-0/other.geojson",
               "sha256": "74daa8a2e5e204bebbacb6535d260d44b41425376fd3a8a0b26ca4eccbb5b681",
               "features": 2,
               "coordinates": 2
@@ -20609,13 +20609,13 @@
           "name": "violation",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/audit-20261011T084202824687/line_endpoints-must-be-covered-by-points/probe-1/input.geojson",
+              "path": "builds/qgis/audit-20261011T084202824687/line_endpoints-must-be-covered-by-points/probe-1/input.geojson",
               "sha256": "5dda2cf68e66d3d747b13c63ee369dd5f1f5a2feb0aa98e11e2a774be331a80f",
               "features": 1,
               "coordinates": 2
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/audit-20261011T084202824687/line_endpoints-must-be-covered-by-points/probe-1/other.geojson",
+              "path": "builds/qgis/audit-20261011T084202824687/line_endpoints-must-be-covered-by-points/probe-1/other.geojson",
               "sha256": "2b257c2e2c8757984fe91d41a969f41f466e4d87789a5423458e640e5cd0b979",
               "features": 1,
               "coordinates": 1
@@ -20653,13 +20653,13 @@
           "name": "closed line without point at ring start",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/audit-20261011T084202824687/line_endpoints-must-be-covered-by-points/probe-2/input.geojson",
+              "path": "builds/qgis/audit-20261011T084202824687/line_endpoints-must-be-covered-by-points/probe-2/input.geojson",
               "sha256": "d751cd4b184adf6535c9f9f31e7697ca33176d17b7696e0ef49f8b1c6a14a6c6",
               "features": 1,
               "coordinates": 4
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/audit-20261011T084202824687/line_endpoints-must-be-covered-by-points/probe-2/other.geojson",
+              "path": "builds/qgis/audit-20261011T084202824687/line_endpoints-must-be-covered-by-points/probe-2/other.geojson",
               "sha256": "14d9383ee1b6e261d064b32acb300594bf50ca25fe42b002e333aea55a716eba",
               "features": 1,
               "coordinates": 1
@@ -20690,13 +20690,13 @@
           "name": "both endpoints uncovered",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/audit-20261011T084202824687/line_endpoints-must-be-covered-by-points/probe-3/input.geojson",
+              "path": "builds/qgis/audit-20261011T084202824687/line_endpoints-must-be-covered-by-points/probe-3/input.geojson",
               "sha256": "5dda2cf68e66d3d747b13c63ee369dd5f1f5a2feb0aa98e11e2a774be331a80f",
               "features": 1,
               "coordinates": 2
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/audit-20261011T084202824687/line_endpoints-must-be-covered-by-points/probe-3/other.geojson",
+              "path": "builds/qgis/audit-20261011T084202824687/line_endpoints-must-be-covered-by-points/probe-3/other.geojson",
               "sha256": "14d9383ee1b6e261d064b32acb300594bf50ca25fe42b002e333aea55a716eba",
               "features": 1,
               "coordinates": 1
@@ -20738,13 +20738,13 @@
           "name": "clean",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_endpoints-must-be-covered-by-points/probe-0/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_endpoints-must-be-covered-by-points/probe-0/input.geojson",
               "sha256": "5dda2cf68e66d3d747b13c63ee369dd5f1f5a2feb0aa98e11e2a774be331a80f",
               "features": 1,
               "coordinates": 2
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_endpoints-must-be-covered-by-points/probe-0/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_endpoints-must-be-covered-by-points/probe-0/other.geojson",
               "sha256": "74daa8a2e5e204bebbacb6535d260d44b41425376fd3a8a0b26ca4eccbb5b681",
               "features": 2,
               "coordinates": 2
@@ -20769,13 +20769,13 @@
           "name": "violation",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_endpoints-must-be-covered-by-points/probe-1/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_endpoints-must-be-covered-by-points/probe-1/input.geojson",
               "sha256": "5dda2cf68e66d3d747b13c63ee369dd5f1f5a2feb0aa98e11e2a774be331a80f",
               "features": 1,
               "coordinates": 2
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_endpoints-must-be-covered-by-points/probe-1/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_endpoints-must-be-covered-by-points/probe-1/other.geojson",
               "sha256": "2b257c2e2c8757984fe91d41a969f41f466e4d87789a5423458e640e5cd0b979",
               "features": 1,
               "coordinates": 1
@@ -20813,13 +20813,13 @@
           "name": "both endpoints uncovered",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_endpoints-must-be-covered-by-points/probe-2/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_endpoints-must-be-covered-by-points/probe-2/input.geojson",
               "sha256": "5dda2cf68e66d3d747b13c63ee369dd5f1f5a2feb0aa98e11e2a774be331a80f",
               "features": 1,
               "coordinates": 2
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_endpoints-must-be-covered-by-points/probe-2/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_endpoints-must-be-covered-by-points/probe-2/other.geojson",
               "sha256": "14d9383ee1b6e261d064b32acb300594bf50ca25fe42b002e333aea55a716eba",
               "features": 1,
               "coordinates": 1
@@ -20863,13 +20863,13 @@
           "size": 1000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-be-covered-by-polygon-boundaries/1000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-be-covered-by-polygon-boundaries/1000/input.geojson",
               "sha256": "3811ae89d8e21874b7ba6e0e4b7f42e17ecdd23e4fb5bbb886eeb1adb17d651c",
               "features": 1000,
               "coordinates": 2000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-be-covered-by-polygon-boundaries/1000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-be-covered-by-polygon-boundaries/1000/other.geojson",
               "sha256": "130c9ecba8e0a8bd676c8ee5cbefa78539a780458b79b4263af3169d052c3d9d",
               "features": 1000,
               "coordinates": 5000
@@ -21053,13 +21053,13 @@
           "size": 10000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-be-covered-by-polygon-boundaries/10000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-be-covered-by-polygon-boundaries/10000/input.geojson",
               "sha256": "c2fd5e848aa9f3178cfcb83dc006bb20f7c04f26d258605312874b3943eb9762",
               "features": 10000,
               "coordinates": 20000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-be-covered-by-polygon-boundaries/10000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-be-covered-by-polygon-boundaries/10000/other.geojson",
               "sha256": "acecd8231f14458fcbf206014977526c8506f61982facf3ce44f1d176c5042a5",
               "features": 10000,
               "coordinates": 50000
@@ -21243,13 +21243,13 @@
           "size": 100000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-be-covered-by-polygon-boundaries/100000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-be-covered-by-polygon-boundaries/100000/input.geojson",
               "sha256": "c29bd9118fbfcae7902bfcc7af0f72c47e5441a4c45b03a4ca9a058c54d116aa",
               "features": 100000,
               "coordinates": 200000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-be-covered-by-polygon-boundaries/100000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-be-covered-by-polygon-boundaries/100000/other.geojson",
               "sha256": "31ffc8321ff60606ed53e3186540cd908916bb6ba5023309a40986a3df8e0128",
               "features": 100000,
               "coordinates": 500000
@@ -21435,13 +21435,13 @@
           "name": "clean",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-be-covered-by-polygon-boundaries/probe-0/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-be-covered-by-polygon-boundaries/probe-0/input.geojson",
               "sha256": "2277750d5375460768218fa823d6207d22b6a777525739fda083b16b9cc99d15",
               "features": 1,
               "coordinates": 2
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-be-covered-by-polygon-boundaries/probe-0/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-be-covered-by-polygon-boundaries/probe-0/other.geojson",
               "sha256": "2e9eff212922d8294d9f366b68deff9147704dea4aead1590061bf45a14e28b7",
               "features": 1,
               "coordinates": 5
@@ -21460,13 +21460,13 @@
           "name": "violation",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-be-covered-by-polygon-boundaries/probe-1/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-be-covered-by-polygon-boundaries/probe-1/input.geojson",
               "sha256": "5dda2cf68e66d3d747b13c63ee369dd5f1f5a2feb0aa98e11e2a774be331a80f",
               "features": 1,
               "coordinates": 2
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-be-covered-by-polygon-boundaries/probe-1/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-be-covered-by-polygon-boundaries/probe-1/other.geojson",
               "sha256": "2e9eff212922d8294d9f366b68deff9147704dea4aead1590061bf45a14e28b7",
               "features": 1,
               "coordinates": 5
@@ -21500,13 +21500,13 @@
           "size": 1000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_boundaries-must-be-covered-by-lines/1000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_boundaries-must-be-covered-by-lines/1000/input.geojson",
               "sha256": "5073d55157d6401a47f73eda417f6376bec2ce58fc9762858b1c2ebba42d2fa8",
               "features": 1000,
               "coordinates": 5000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_boundaries-must-be-covered-by-lines/1000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_boundaries-must-be-covered-by-lines/1000/other.geojson",
               "sha256": "e612bc23a0980098f8f6a8a0c7ccea0df15d1b82312a67c31d20baea66b5dc37",
               "features": 1000,
               "coordinates": 4970
@@ -21690,13 +21690,13 @@
           "size": 10000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_boundaries-must-be-covered-by-lines/10000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_boundaries-must-be-covered-by-lines/10000/input.geojson",
               "sha256": "95da697a17cbc3e5163fde95d2b45ed9d2c68089647f7de565996e6abbb3f048",
               "features": 10000,
               "coordinates": 50000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_boundaries-must-be-covered-by-lines/10000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_boundaries-must-be-covered-by-lines/10000/other.geojson",
               "sha256": "2f994cf47cfd6e42dc74d0f8f8c4b9895e0c8c0a0caa88b271f05aa109214382",
               "features": 10000,
               "coordinates": 49700
@@ -21880,13 +21880,13 @@
           "size": 100000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_boundaries-must-be-covered-by-lines/100000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_boundaries-must-be-covered-by-lines/100000/input.geojson",
               "sha256": "2875ede7ea30dca79c4d75f96e4e24fc08139c66819a0d9395851066956786dd",
               "features": 100000,
               "coordinates": 500000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_boundaries-must-be-covered-by-lines/100000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_boundaries-must-be-covered-by-lines/100000/other.geojson",
               "sha256": "3089e5eb0135025fdab5c0d317c0fbcd60bac590436e2ed77ca4b1c9717d219e",
               "features": 100000,
               "coordinates": 497000
@@ -22072,13 +22072,13 @@
           "name": "clean",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_boundaries-must-be-covered-by-lines/probe-0/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_boundaries-must-be-covered-by-lines/probe-0/input.geojson",
               "sha256": "2842ab5f797aa24871f15af63c654200fb64135daecca239aee005f16a2389e6",
               "features": 1,
               "coordinates": 5
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_boundaries-must-be-covered-by-lines/probe-0/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_boundaries-must-be-covered-by-lines/probe-0/other.geojson",
               "sha256": "5b20d286efecd916c4b2a9e1a517302addd4226203c8f8882ed8ae40a0d86d0f",
               "features": 1,
               "coordinates": 5
@@ -22097,13 +22097,13 @@
           "name": "violation",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_boundaries-must-be-covered-by-lines/probe-1/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_boundaries-must-be-covered-by-lines/probe-1/input.geojson",
               "sha256": "2842ab5f797aa24871f15af63c654200fb64135daecca239aee005f16a2389e6",
               "features": 1,
               "coordinates": 5
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_boundaries-must-be-covered-by-lines/probe-1/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_boundaries-must-be-covered-by-lines/probe-1/other.geojson",
               "sha256": "e840ee72385213072219bae5da617820a2aa495ace1acfa29e0450eaaea079c1",
               "features": 1,
               "coordinates": 2
@@ -22140,13 +22140,13 @@
           "size": 1000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_must-contain-point/1000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_must-contain-point/1000/input.geojson",
               "sha256": "5073d55157d6401a47f73eda417f6376bec2ce58fc9762858b1c2ebba42d2fa8",
               "features": 1000,
               "coordinates": 5000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_must-contain-point/1000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_must-contain-point/1000/other.geojson",
               "sha256": "d47de7d0aeb5c8c1a93bad450948ed64ba97ea7a1700590adf02372b6880d1ae",
               "features": 1000,
               "coordinates": 1000
@@ -22489,13 +22489,13 @@
           "size": 10000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_must-contain-point/10000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_must-contain-point/10000/input.geojson",
               "sha256": "95da697a17cbc3e5163fde95d2b45ed9d2c68089647f7de565996e6abbb3f048",
               "features": 10000,
               "coordinates": 50000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_must-contain-point/10000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_must-contain-point/10000/other.geojson",
               "sha256": "ee510b07ee04b375f74788f01a78a8636e071e43f22980e833d667c44dbfd9b3",
               "features": 10000,
               "coordinates": 10000
@@ -22838,13 +22838,13 @@
           "size": 100000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_must-contain-point/100000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_must-contain-point/100000/input.geojson",
               "sha256": "2875ede7ea30dca79c4d75f96e4e24fc08139c66819a0d9395851066956786dd",
               "features": 100000,
               "coordinates": 500000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_must-contain-point/100000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_must-contain-point/100000/other.geojson",
               "sha256": "dad85f025344c97e22addd03a230ad301e3a9a79c3a1f92cb1bed6a7c1e99564",
               "features": 100000,
               "coordinates": 100000
@@ -23189,13 +23189,13 @@
           "name": "clean",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_must-contain-point/probe-0/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_must-contain-point/probe-0/input.geojson",
               "sha256": "2842ab5f797aa24871f15af63c654200fb64135daecca239aee005f16a2389e6",
               "features": 1,
               "coordinates": 5
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_must-contain-point/probe-0/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_must-contain-point/probe-0/other.geojson",
               "sha256": "2b257c2e2c8757984fe91d41a969f41f466e4d87789a5423458e640e5cd0b979",
               "features": 1,
               "coordinates": 1
@@ -23220,13 +23220,13 @@
           "name": "violation",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_must-contain-point/probe-1/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_must-contain-point/probe-1/input.geojson",
               "sha256": "2842ab5f797aa24871f15af63c654200fb64135daecca239aee005f16a2389e6",
               "features": 1,
               "coordinates": 5
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_must-contain-point/probe-1/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_must-contain-point/probe-1/other.geojson",
               "sha256": "e0aaad0eb098c7fd573bb7f495f6c39956345f88d7ee22d748458b41336524bc",
               "features": 1,
               "coordinates": 1
@@ -23264,13 +23264,13 @@
           "name": "boundary point",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_must-contain-point/probe-2/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_must-contain-point/probe-2/input.geojson",
               "sha256": "2842ab5f797aa24871f15af63c654200fb64135daecca239aee005f16a2389e6",
               "features": 1,
               "coordinates": 5
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_must-contain-point/probe-2/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_must-contain-point/probe-2/other.geojson",
               "sha256": "679d76d439faacc8c67473f19a2837d1b1af41f7b27679e491dac0f167a4d828",
               "features": 1,
               "coordinates": 1
@@ -23316,13 +23316,13 @@
           "size": 1000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_must-contain-one-point/1000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_must-contain-one-point/1000/input.geojson",
               "sha256": "5073d55157d6401a47f73eda417f6376bec2ce58fc9762858b1c2ebba42d2fa8",
               "features": 1000,
               "coordinates": 5000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_must-contain-one-point/1000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_must-contain-one-point/1000/other.geojson",
               "sha256": "aee4cd19c9e201cfc75586a77d2bfce6045d6b342ec166fb7a5d6ff60321a3b9",
               "features": 1010,
               "coordinates": 1010
@@ -23506,13 +23506,13 @@
           "size": 10000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_must-contain-one-point/10000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_must-contain-one-point/10000/input.geojson",
               "sha256": "95da697a17cbc3e5163fde95d2b45ed9d2c68089647f7de565996e6abbb3f048",
               "features": 10000,
               "coordinates": 50000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_must-contain-one-point/10000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_must-contain-one-point/10000/other.geojson",
               "sha256": "77a07026562fe7e4c3dfd2579ae81905211f47f742d14c780f34830790cb6f1d",
               "features": 10100,
               "coordinates": 10100
@@ -23696,13 +23696,13 @@
           "size": 100000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_must-contain-one-point/100000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_must-contain-one-point/100000/input.geojson",
               "sha256": "2875ede7ea30dca79c4d75f96e4e24fc08139c66819a0d9395851066956786dd",
               "features": 100000,
               "coordinates": 500000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_must-contain-one-point/100000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_must-contain-one-point/100000/other.geojson",
               "sha256": "b9be8df80834f4002d1c10a45185bdb13b043e675bde61d6ed55c000046dc1bc",
               "features": 101000,
               "coordinates": 101000
@@ -23888,13 +23888,13 @@
           "name": "clean",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_must-contain-one-point/probe-0/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_must-contain-one-point/probe-0/input.geojson",
               "sha256": "2842ab5f797aa24871f15af63c654200fb64135daecca239aee005f16a2389e6",
               "features": 1,
               "coordinates": 5
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_must-contain-one-point/probe-0/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_must-contain-one-point/probe-0/other.geojson",
               "sha256": "2b257c2e2c8757984fe91d41a969f41f466e4d87789a5423458e640e5cd0b979",
               "features": 1,
               "coordinates": 1
@@ -23913,13 +23913,13 @@
           "name": "violation",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_must-contain-one-point/probe-1/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_must-contain-one-point/probe-1/input.geojson",
               "sha256": "2842ab5f797aa24871f15af63c654200fb64135daecca239aee005f16a2389e6",
               "features": 1,
               "coordinates": 5
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_must-contain-one-point/probe-1/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_must-contain-one-point/probe-1/other.geojson",
               "sha256": "512aaa1bebcb5d8585f7403341b75da9ef7ffaeb8904edb1f1a5356957bc01fd",
               "features": 2,
               "coordinates": 2
@@ -23953,13 +23953,13 @@
           "size": 1000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-cross-polygon-boundaries/1000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-cross-polygon-boundaries/1000/input.geojson",
               "sha256": "4574df606ee5476849e6f082a8f418f64006b32d0f1dfb23a3a89de4b186f041",
               "features": 1000,
               "coordinates": 2000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-cross-polygon-boundaries/1000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-cross-polygon-boundaries/1000/other.geojson",
               "sha256": "130c9ecba8e0a8bd676c8ee5cbefa78539a780458b79b4263af3169d052c3d9d",
               "features": 1000,
               "coordinates": 5000
@@ -24143,13 +24143,13 @@
           "size": 10000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-cross-polygon-boundaries/10000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-cross-polygon-boundaries/10000/input.geojson",
               "sha256": "847e6f9d51fe24c84bb2867e703f7f1621e377fd3919dd268cac80ca0571610d",
               "features": 10000,
               "coordinates": 20000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-cross-polygon-boundaries/10000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-cross-polygon-boundaries/10000/other.geojson",
               "sha256": "acecd8231f14458fcbf206014977526c8506f61982facf3ce44f1d176c5042a5",
               "features": 10000,
               "coordinates": 50000
@@ -24333,13 +24333,13 @@
           "size": 100000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-cross-polygon-boundaries/100000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-cross-polygon-boundaries/100000/input.geojson",
               "sha256": "170a361e6822923115f5dcf186127ff30f4c495e5ba0799a5eb8c6da3d082866",
               "features": 100000,
               "coordinates": 200000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-cross-polygon-boundaries/100000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-cross-polygon-boundaries/100000/other.geojson",
               "sha256": "31ffc8321ff60606ed53e3186540cd908916bb6ba5023309a40986a3df8e0128",
               "features": 100000,
               "coordinates": 500000
@@ -24525,13 +24525,13 @@
           "name": "clean",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-cross-polygon-boundaries/probe-0/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-cross-polygon-boundaries/probe-0/input.geojson",
               "sha256": "5dda2cf68e66d3d747b13c63ee369dd5f1f5a2feb0aa98e11e2a774be331a80f",
               "features": 1,
               "coordinates": 2
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-cross-polygon-boundaries/probe-0/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-cross-polygon-boundaries/probe-0/other.geojson",
               "sha256": "2e9eff212922d8294d9f366b68deff9147704dea4aead1590061bf45a14e28b7",
               "features": 1,
               "coordinates": 5
@@ -24550,13 +24550,13 @@
           "name": "violation",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-cross-polygon-boundaries/probe-1/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-cross-polygon-boundaries/probe-1/input.geojson",
               "sha256": "744d906e1b6280f53ac97ba061049cc5c4effbad4a9107795a02bdcbd090d75f",
               "features": 1,
               "coordinates": 2
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-cross-polygon-boundaries/probe-1/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-cross-polygon-boundaries/probe-1/other.geojson",
               "sha256": "2e9eff212922d8294d9f366b68deff9147704dea4aead1590061bf45a14e28b7",
               "features": 1,
               "coordinates": 5
@@ -24582,13 +24582,13 @@
           "name": "tangent at polygon corner",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-cross-polygon-boundaries/probe-2/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-cross-polygon-boundaries/probe-2/input.geojson",
               "sha256": "d48de7ac88cf89ac79eafd179c5aa5a2494e8dbc946a86b8ca3853f35d72bfd1",
               "features": 1,
               "coordinates": 2
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-cross-polygon-boundaries/probe-2/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-cross-polygon-boundaries/probe-2/other.geojson",
               "sha256": "2e9eff212922d8294d9f366b68deff9147704dea4aead1590061bf45a14e28b7",
               "features": 1,
               "coordinates": 5
@@ -24615,13 +24615,13 @@
           "size": 1000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/geometry_must-not-be-contained-by/1000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/geometry_must-not-be-contained-by/1000/input.geojson",
               "sha256": "a9d95c1811e6748b5dbf0a307a5dd28c7485eb55e498d0073f8139e0bce95cbd",
               "features": 1000,
               "coordinates": 5000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/geometry_must-not-be-contained-by/1000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/geometry_must-not-be-contained-by/1000/other.geojson",
               "sha256": "130c9ecba8e0a8bd676c8ee5cbefa78539a780458b79b4263af3169d052c3d9d",
               "features": 1000,
               "coordinates": 5000
@@ -24805,13 +24805,13 @@
           "size": 10000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/geometry_must-not-be-contained-by/10000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/geometry_must-not-be-contained-by/10000/input.geojson",
               "sha256": "0aeedce3b60053fb64cb2dffaf357ad09dcb255e242738e8e0bb6cee5bb2016e",
               "features": 10000,
               "coordinates": 50000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/geometry_must-not-be-contained-by/10000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/geometry_must-not-be-contained-by/10000/other.geojson",
               "sha256": "acecd8231f14458fcbf206014977526c8506f61982facf3ce44f1d176c5042a5",
               "features": 10000,
               "coordinates": 50000
@@ -24995,13 +24995,13 @@
           "size": 100000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/geometry_must-not-be-contained-by/100000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/geometry_must-not-be-contained-by/100000/input.geojson",
               "sha256": "1afd6c1b08f2c2c9cbbc92e2e577e8edf150ba924c65cf1c76aad1efe82a8a87",
               "features": 100000,
               "coordinates": 500000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/geometry_must-not-be-contained-by/100000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/geometry_must-not-be-contained-by/100000/other.geojson",
               "sha256": "31ffc8321ff60606ed53e3186540cd908916bb6ba5023309a40986a3df8e0128",
               "features": 100000,
               "coordinates": 500000
@@ -25187,13 +25187,13 @@
           "name": "clean",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/geometry_must-not-be-contained-by/probe-0/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/geometry_must-not-be-contained-by/probe-0/input.geojson",
               "sha256": "b64f6fb68e3cfdb3df260f519df40ad48ba146b793d35702825d4d257b4453c6",
               "features": 1,
               "coordinates": 5
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/geometry_must-not-be-contained-by/probe-0/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/geometry_must-not-be-contained-by/probe-0/other.geojson",
               "sha256": "2e9eff212922d8294d9f366b68deff9147704dea4aead1590061bf45a14e28b7",
               "features": 1,
               "coordinates": 5
@@ -25212,13 +25212,13 @@
           "name": "violation",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/geometry_must-not-be-contained-by/probe-1/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/geometry_must-not-be-contained-by/probe-1/input.geojson",
               "sha256": "e23bbd48b54437701fcd7200795424d6fd95425b9945482c4b759e58383c488e",
               "features": 1,
               "coordinates": 5
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/geometry_must-not-be-contained-by/probe-1/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/geometry_must-not-be-contained-by/probe-1/other.geojson",
               "sha256": "2e9eff212922d8294d9f366b68deff9147704dea4aead1590061bf45a14e28b7",
               "features": 1,
               "coordinates": 5
@@ -25244,13 +25244,13 @@
           "name": "equal polygons",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/geometry_must-not-be-contained-by/probe-2/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/geometry_must-not-be-contained-by/probe-2/input.geojson",
               "sha256": "2842ab5f797aa24871f15af63c654200fb64135daecca239aee005f16a2389e6",
               "features": 1,
               "coordinates": 5
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/geometry_must-not-be-contained-by/probe-2/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/geometry_must-not-be-contained-by/probe-2/other.geojson",
               "sha256": "2e9eff212922d8294d9f366b68deff9147704dea4aead1590061bf45a14e28b7",
               "features": 1,
               "coordinates": 5
@@ -25277,13 +25277,13 @@
           "size": 1000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-covered-by-polygons/1000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-covered-by-polygons/1000/input.geojson",
               "sha256": "1ecb40b6d4f79c3e7fe91ded8b59188a41334fe2b778cdda9d8a19633289229d",
               "features": 1000,
               "coordinates": 1000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-covered-by-polygons/1000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-covered-by-polygons/1000/other.geojson",
               "sha256": "130c9ecba8e0a8bd676c8ee5cbefa78539a780458b79b4263af3169d052c3d9d",
               "features": 1000,
               "coordinates": 5000
@@ -25467,13 +25467,13 @@
           "size": 10000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-covered-by-polygons/10000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-covered-by-polygons/10000/input.geojson",
               "sha256": "9c7bf909c44790ebd9fa14eba570ffe7f64b367a0e3d38ac10274a7526d1e86e",
               "features": 10000,
               "coordinates": 10000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-covered-by-polygons/10000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-covered-by-polygons/10000/other.geojson",
               "sha256": "acecd8231f14458fcbf206014977526c8506f61982facf3ce44f1d176c5042a5",
               "features": 10000,
               "coordinates": 50000
@@ -25657,13 +25657,13 @@
           "size": 100000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-covered-by-polygons/100000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-covered-by-polygons/100000/input.geojson",
               "sha256": "0ac69f6e427e17c6198901259be194a6aa54cdffd341ba552a3da1015e6907bb",
               "features": 100000,
               "coordinates": 100000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-covered-by-polygons/100000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-covered-by-polygons/100000/other.geojson",
               "sha256": "31ffc8321ff60606ed53e3186540cd908916bb6ba5023309a40986a3df8e0128",
               "features": 100000,
               "coordinates": 500000
@@ -25849,13 +25849,13 @@
           "name": "clean",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-covered-by-polygons/probe-0/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-covered-by-polygons/probe-0/input.geojson",
               "sha256": "d4d374291f1d07ce295a593df0614ff6b1503a9e3c297f4a7d5a1b5897d6ee4e",
               "features": 1,
               "coordinates": 1
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-covered-by-polygons/probe-0/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-covered-by-polygons/probe-0/other.geojson",
               "sha256": "2e9eff212922d8294d9f366b68deff9147704dea4aead1590061bf45a14e28b7",
               "features": 1,
               "coordinates": 5
@@ -25874,13 +25874,13 @@
           "name": "violation",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-covered-by-polygons/probe-1/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-covered-by-polygons/probe-1/input.geojson",
               "sha256": "46301a65d64989e5ddb5d92e438a0a8dc11cde7642d0b1151233fae938ede41e",
               "features": 1,
               "coordinates": 1
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-be-covered-by-polygons/probe-1/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-be-covered-by-polygons/probe-1/other.geojson",
               "sha256": "2e9eff212922d8294d9f366b68deff9147704dea4aead1590061bf45a14e28b7",
               "features": 1,
               "coordinates": 5
@@ -25914,13 +25914,13 @@
           "size": 1000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-not-be-inside-polygons/1000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-not-be-inside-polygons/1000/input.geojson",
               "sha256": "a34238d609a0da61ef85fd68cb9a5def5b4713765c5791983fe80313074b02c6",
               "features": 1000,
               "coordinates": 1000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-not-be-inside-polygons/1000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-not-be-inside-polygons/1000/other.geojson",
               "sha256": "130c9ecba8e0a8bd676c8ee5cbefa78539a780458b79b4263af3169d052c3d9d",
               "features": 1000,
               "coordinates": 5000
@@ -26104,13 +26104,13 @@
           "size": 10000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-not-be-inside-polygons/10000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-not-be-inside-polygons/10000/input.geojson",
               "sha256": "ebb9764938e90593e525247306170e896fa2ca5739f8e753dbc9a5f41946173a",
               "features": 10000,
               "coordinates": 10000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-not-be-inside-polygons/10000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-not-be-inside-polygons/10000/other.geojson",
               "sha256": "acecd8231f14458fcbf206014977526c8506f61982facf3ce44f1d176c5042a5",
               "features": 10000,
               "coordinates": 50000
@@ -26294,13 +26294,13 @@
           "size": 100000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-not-be-inside-polygons/100000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-not-be-inside-polygons/100000/input.geojson",
               "sha256": "8712b33ef6595f7b628dc7a26bf09614a3fc7561728442a8c4e00869030e441e",
               "features": 100000,
               "coordinates": 100000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-not-be-inside-polygons/100000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-not-be-inside-polygons/100000/other.geojson",
               "sha256": "31ffc8321ff60606ed53e3186540cd908916bb6ba5023309a40986a3df8e0128",
               "features": 100000,
               "coordinates": 500000
@@ -26486,13 +26486,13 @@
           "name": "clean",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-not-be-inside-polygons/probe-0/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-not-be-inside-polygons/probe-0/input.geojson",
               "sha256": "d4d374291f1d07ce295a593df0614ff6b1503a9e3c297f4a7d5a1b5897d6ee4e",
               "features": 1,
               "coordinates": 1
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-not-be-inside-polygons/probe-0/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-not-be-inside-polygons/probe-0/other.geojson",
               "sha256": "2e9eff212922d8294d9f366b68deff9147704dea4aead1590061bf45a14e28b7",
               "features": 1,
               "coordinates": 5
@@ -26511,13 +26511,13 @@
           "name": "violation",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-not-be-inside-polygons/probe-1/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-not-be-inside-polygons/probe-1/input.geojson",
               "sha256": "483bc701f30b40724e3b12bc537bbb72aa4c39d2251d29b3962f0b81d0c3c5ec",
               "features": 1,
               "coordinates": 1
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-not-be-inside-polygons/probe-1/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-not-be-inside-polygons/probe-1/other.geojson",
               "sha256": "2e9eff212922d8294d9f366b68deff9147704dea4aead1590061bf45a14e28b7",
               "features": 1,
               "coordinates": 5
@@ -26543,13 +26543,13 @@
           "name": "point on polygon boundary",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-not-be-inside-polygons/probe-2/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-not-be-inside-polygons/probe-2/input.geojson",
               "sha256": "d4d374291f1d07ce295a593df0614ff6b1503a9e3c297f4a7d5a1b5897d6ee4e",
               "features": 1,
               "coordinates": 1
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-not-be-inside-polygons/probe-2/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-not-be-inside-polygons/probe-2/other.geojson",
               "sha256": "2e9eff212922d8294d9f366b68deff9147704dea4aead1590061bf45a14e28b7",
               "features": 1,
               "coordinates": 5
@@ -26576,13 +26576,13 @@
           "size": 1000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-not-intersect-lines/1000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-not-intersect-lines/1000/input.geojson",
               "sha256": "53cfc3fede8417fa336abb67283fb49072d31dc917287fcbbf9f1c8200144a48",
               "features": 1000,
               "coordinates": 1000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-not-intersect-lines/1000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-not-intersect-lines/1000/other.geojson",
               "sha256": "bb109c8bca62d28e42a54ca6006df280c78be721999a68854911a6f1ab0a9585",
               "features": 1000,
               "coordinates": 2000
@@ -26766,13 +26766,13 @@
           "size": 10000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-not-intersect-lines/10000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-not-intersect-lines/10000/input.geojson",
               "sha256": "0664a45a0e2265526090a5a2e2e8b474d031d66a317daec5bc1ac74c902c8199",
               "features": 10000,
               "coordinates": 10000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-not-intersect-lines/10000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-not-intersect-lines/10000/other.geojson",
               "sha256": "532575893e5b0e52988ad48c9657cbcdd47040640459f219cdd704acb6be853d",
               "features": 10000,
               "coordinates": 20000
@@ -26956,13 +26956,13 @@
           "size": 100000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-not-intersect-lines/100000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-not-intersect-lines/100000/input.geojson",
               "sha256": "2a823fc2e3017077dc765ddaa5b10ae238b38701e92ea6a43e6e92ae861cdb9e",
               "features": 100000,
               "coordinates": 100000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-not-intersect-lines/100000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-not-intersect-lines/100000/other.geojson",
               "sha256": "7d1972dfbaed4b5d63a120563259f6b91a0046272f092af35947fe7f5b59110a",
               "features": 100000,
               "coordinates": 200000
@@ -27148,13 +27148,13 @@
           "name": "clean",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-not-intersect-lines/probe-0/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-not-intersect-lines/probe-0/input.geojson",
               "sha256": "a32a96e55799cbd49f116aa48535931bb405d77576ae0445a6530670a4fdc458",
               "features": 1,
               "coordinates": 1
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-not-intersect-lines/probe-0/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-not-intersect-lines/probe-0/other.geojson",
               "sha256": "e840ee72385213072219bae5da617820a2aa495ace1acfa29e0450eaaea079c1",
               "features": 1,
               "coordinates": 2
@@ -27173,13 +27173,13 @@
           "name": "violation",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-not-intersect-lines/probe-1/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-not-intersect-lines/probe-1/input.geojson",
               "sha256": "c91148f39da145648cf449bdd95d0da667c976282e480f549eb8b53aee79ed7d",
               "features": 1,
               "coordinates": 1
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-not-intersect-lines/probe-1/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-not-intersect-lines/probe-1/other.geojson",
               "sha256": "e840ee72385213072219bae5da617820a2aa495ace1acfa29e0450eaaea079c1",
               "features": 1,
               "coordinates": 2
@@ -27213,13 +27213,13 @@
           "size": 1000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-not-intersect-polygons/1000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-not-intersect-polygons/1000/input.geojson",
               "sha256": "4718b245fd135d3af1e3f00ec7c234ed274d51a1c750752ca727ab76862564c3",
               "features": 1000,
               "coordinates": 1000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-not-intersect-polygons/1000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-not-intersect-polygons/1000/other.geojson",
               "sha256": "130c9ecba8e0a8bd676c8ee5cbefa78539a780458b79b4263af3169d052c3d9d",
               "features": 1000,
               "coordinates": 5000
@@ -27403,13 +27403,13 @@
           "size": 10000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-not-intersect-polygons/10000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-not-intersect-polygons/10000/input.geojson",
               "sha256": "a3b0af8c97a357f36779bea380329ab4079dfc2f06d2f0d067947ee08f8df21a",
               "features": 10000,
               "coordinates": 10000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-not-intersect-polygons/10000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-not-intersect-polygons/10000/other.geojson",
               "sha256": "acecd8231f14458fcbf206014977526c8506f61982facf3ce44f1d176c5042a5",
               "features": 10000,
               "coordinates": 50000
@@ -27593,13 +27593,13 @@
           "size": 100000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-not-intersect-polygons/100000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-not-intersect-polygons/100000/input.geojson",
               "sha256": "575a7ce07521c3dc6dc10c198271ec4e008400c6483ca49da177493cb4ff5c47",
               "features": 100000,
               "coordinates": 100000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-not-intersect-polygons/100000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-not-intersect-polygons/100000/other.geojson",
               "sha256": "31ffc8321ff60606ed53e3186540cd908916bb6ba5023309a40986a3df8e0128",
               "features": 100000,
               "coordinates": 500000
@@ -27785,13 +27785,13 @@
           "name": "clean",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-not-intersect-polygons/probe-0/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-not-intersect-polygons/probe-0/input.geojson",
               "sha256": "46301a65d64989e5ddb5d92e438a0a8dc11cde7642d0b1151233fae938ede41e",
               "features": 1,
               "coordinates": 1
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-not-intersect-polygons/probe-0/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-not-intersect-polygons/probe-0/other.geojson",
               "sha256": "2e9eff212922d8294d9f366b68deff9147704dea4aead1590061bf45a14e28b7",
               "features": 1,
               "coordinates": 5
@@ -27810,13 +27810,13 @@
           "name": "violation",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-not-intersect-polygons/probe-1/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-not-intersect-polygons/probe-1/input.geojson",
               "sha256": "d4d374291f1d07ce295a593df0614ff6b1503a9e3c297f4a7d5a1b5897d6ee4e",
               "features": 1,
               "coordinates": 1
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/point_must-not-intersect-polygons/probe-1/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/point_must-not-intersect-polygons/probe-1/other.geojson",
               "sha256": "2e9eff212922d8294d9f366b68deff9147704dea4aead1590061bf45a14e28b7",
               "features": 1,
               "coordinates": 5
@@ -27850,13 +27850,13 @@
           "size": 1000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-be-properly-inside-polygons/1000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-be-properly-inside-polygons/1000/input.geojson",
               "sha256": "0788ee6ca4ea902a9224574368e217f6ec056eae1ad3a3a79bb18926d808e21f",
               "features": 1000,
               "coordinates": 2000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-be-properly-inside-polygons/1000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-be-properly-inside-polygons/1000/other.geojson",
               "sha256": "130c9ecba8e0a8bd676c8ee5cbefa78539a780458b79b4263af3169d052c3d9d",
               "features": 1000,
               "coordinates": 5000
@@ -28040,13 +28040,13 @@
           "size": 10000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-be-properly-inside-polygons/10000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-be-properly-inside-polygons/10000/input.geojson",
               "sha256": "c86006be9250a1eaf7eb89da7affe7f0185f964f9fe69a2c5f1b4204edc46425",
               "features": 10000,
               "coordinates": 20000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-be-properly-inside-polygons/10000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-be-properly-inside-polygons/10000/other.geojson",
               "sha256": "acecd8231f14458fcbf206014977526c8506f61982facf3ce44f1d176c5042a5",
               "features": 10000,
               "coordinates": 50000
@@ -28208,13 +28208,13 @@
           "size": 100000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-be-properly-inside-polygons/100000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-be-properly-inside-polygons/100000/input.geojson",
               "sha256": "54b811b34990786ba3d17bedcdc6d942ef4494b91a441ac0e8d7469fe6a96cf0",
               "features": 100000,
               "coordinates": 200000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-be-properly-inside-polygons/100000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-be-properly-inside-polygons/100000/other.geojson",
               "sha256": "31ffc8321ff60606ed53e3186540cd908916bb6ba5023309a40986a3df8e0128",
               "features": 100000,
               "coordinates": 500000
@@ -28378,13 +28378,13 @@
           "name": "clean",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-be-properly-inside-polygons/probe-0/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-be-properly-inside-polygons/probe-0/input.geojson",
               "sha256": "5dda2cf68e66d3d747b13c63ee369dd5f1f5a2feb0aa98e11e2a774be331a80f",
               "features": 1,
               "coordinates": 2
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-be-properly-inside-polygons/probe-0/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-be-properly-inside-polygons/probe-0/other.geojson",
               "sha256": "2e9eff212922d8294d9f366b68deff9147704dea4aead1590061bf45a14e28b7",
               "features": 1,
               "coordinates": 5
@@ -28403,13 +28403,13 @@
           "name": "violation",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-be-properly-inside-polygons/probe-1/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-be-properly-inside-polygons/probe-1/input.geojson",
               "sha256": "2277750d5375460768218fa823d6207d22b6a777525739fda083b16b9cc99d15",
               "features": 1,
               "coordinates": 2
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-be-properly-inside-polygons/probe-1/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-be-properly-inside-polygons/probe-1/other.geojson",
               "sha256": "2e9eff212922d8294d9f366b68deff9147704dea4aead1590061bf45a14e28b7",
               "features": 1,
               "coordinates": 5
@@ -28443,13 +28443,13 @@
           "size": 1000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-overlap-with-polygons/1000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-overlap-with-polygons/1000/input.geojson",
               "sha256": "5f71942081775493feef4a146859f81215aa62a10f7626a28e6f28e8f04d8962",
               "features": 1000,
               "coordinates": 2000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-overlap-with-polygons/1000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-overlap-with-polygons/1000/other.geojson",
               "sha256": "130c9ecba8e0a8bd676c8ee5cbefa78539a780458b79b4263af3169d052c3d9d",
               "features": 1000,
               "coordinates": 5000
@@ -28633,13 +28633,13 @@
           "size": 10000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-overlap-with-polygons/10000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-overlap-with-polygons/10000/input.geojson",
               "sha256": "75926817dad0118b1f953e276a5bed090958f4aa2465dea1f351a439aba061f1",
               "features": 10000,
               "coordinates": 20000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-overlap-with-polygons/10000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-overlap-with-polygons/10000/other.geojson",
               "sha256": "acecd8231f14458fcbf206014977526c8506f61982facf3ce44f1d176c5042a5",
               "features": 10000,
               "coordinates": 50000
@@ -28823,13 +28823,13 @@
           "size": 100000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-overlap-with-polygons/100000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-overlap-with-polygons/100000/input.geojson",
               "sha256": "85e677d1a4aed4563ec5fe9978b722a80ee746888807f9d5a0b3dc668b5abf4e",
               "features": 100000,
               "coordinates": 200000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-overlap-with-polygons/100000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-overlap-with-polygons/100000/other.geojson",
               "sha256": "31ffc8321ff60606ed53e3186540cd908916bb6ba5023309a40986a3df8e0128",
               "features": 100000,
               "coordinates": 500000
@@ -29015,13 +29015,13 @@
           "name": "clean",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-overlap-with-polygons/probe-0/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-overlap-with-polygons/probe-0/input.geojson",
               "sha256": "4826672b3fb67dc9642d753b316bf1a98c0e7654c99b3499ac0f98eefc1e7b55",
               "features": 1,
               "coordinates": 2
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-overlap-with-polygons/probe-0/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-overlap-with-polygons/probe-0/other.geojson",
               "sha256": "2e9eff212922d8294d9f366b68deff9147704dea4aead1590061bf45a14e28b7",
               "features": 1,
               "coordinates": 5
@@ -29040,13 +29040,13 @@
           "name": "violation",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-overlap-with-polygons/probe-1/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-overlap-with-polygons/probe-1/input.geojson",
               "sha256": "5dda2cf68e66d3d747b13c63ee369dd5f1f5a2feb0aa98e11e2a774be331a80f",
               "features": 1,
               "coordinates": 2
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-overlap-with-polygons/probe-1/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-overlap-with-polygons/probe-1/other.geojson",
               "sha256": "2e9eff212922d8294d9f366b68deff9147704dea4aead1590061bf45a14e28b7",
               "features": 1,
               "coordinates": 5
@@ -29080,13 +29080,13 @@
           "size": 1000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-overlap-polygon-boundaries/1000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-overlap-polygon-boundaries/1000/input.geojson",
               "sha256": "cc71e071c74ac2466571a3933183e809c765bdad263d9165c6fa196bc9971078",
               "features": 1000,
               "coordinates": 2000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-overlap-polygon-boundaries/1000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-overlap-polygon-boundaries/1000/other.geojson",
               "sha256": "130c9ecba8e0a8bd676c8ee5cbefa78539a780458b79b4263af3169d052c3d9d",
               "features": 1000,
               "coordinates": 5000
@@ -29270,13 +29270,13 @@
           "size": 10000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-overlap-polygon-boundaries/10000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-overlap-polygon-boundaries/10000/input.geojson",
               "sha256": "13157c755d5eda9065ca9fcecea3b23d99252fd0e98562eba53754dafcc047f7",
               "features": 10000,
               "coordinates": 20000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-overlap-polygon-boundaries/10000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-overlap-polygon-boundaries/10000/other.geojson",
               "sha256": "acecd8231f14458fcbf206014977526c8506f61982facf3ce44f1d176c5042a5",
               "features": 10000,
               "coordinates": 50000
@@ -29460,13 +29460,13 @@
           "size": 100000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-overlap-polygon-boundaries/100000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-overlap-polygon-boundaries/100000/input.geojson",
               "sha256": "62205bffa950b1e9f1ca77780895acb851fb96e780a089d23a068cb8edf41a89",
               "features": 100000,
               "coordinates": 200000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-overlap-polygon-boundaries/100000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-overlap-polygon-boundaries/100000/other.geojson",
               "sha256": "31ffc8321ff60606ed53e3186540cd908916bb6ba5023309a40986a3df8e0128",
               "features": 100000,
               "coordinates": 500000
@@ -29652,13 +29652,13 @@
           "name": "clean",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-overlap-polygon-boundaries/probe-0/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-overlap-polygon-boundaries/probe-0/input.geojson",
               "sha256": "744d906e1b6280f53ac97ba061049cc5c4effbad4a9107795a02bdcbd090d75f",
               "features": 1,
               "coordinates": 2
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-overlap-polygon-boundaries/probe-0/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-overlap-polygon-boundaries/probe-0/other.geojson",
               "sha256": "2e9eff212922d8294d9f366b68deff9147704dea4aead1590061bf45a14e28b7",
               "features": 1,
               "coordinates": 5
@@ -29677,13 +29677,13 @@
           "name": "violation",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-overlap-polygon-boundaries/probe-1/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-overlap-polygon-boundaries/probe-1/input.geojson",
               "sha256": "2277750d5375460768218fa823d6207d22b6a777525739fda083b16b9cc99d15",
               "features": 1,
               "coordinates": 2
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-overlap-polygon-boundaries/probe-1/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-overlap-polygon-boundaries/probe-1/other.geojson",
               "sha256": "2e9eff212922d8294d9f366b68deff9147704dea4aead1590061bf45a14e28b7",
               "features": 1,
               "coordinates": 5
@@ -29717,13 +29717,13 @@
           "size": 1000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-intersect-polygons/1000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-intersect-polygons/1000/input.geojson",
               "sha256": "5f71942081775493feef4a146859f81215aa62a10f7626a28e6f28e8f04d8962",
               "features": 1000,
               "coordinates": 2000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-intersect-polygons/1000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-intersect-polygons/1000/other.geojson",
               "sha256": "130c9ecba8e0a8bd676c8ee5cbefa78539a780458b79b4263af3169d052c3d9d",
               "features": 1000,
               "coordinates": 5000
@@ -29907,13 +29907,13 @@
           "size": 10000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-intersect-polygons/10000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-intersect-polygons/10000/input.geojson",
               "sha256": "75926817dad0118b1f953e276a5bed090958f4aa2465dea1f351a439aba061f1",
               "features": 10000,
               "coordinates": 20000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-intersect-polygons/10000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-intersect-polygons/10000/other.geojson",
               "sha256": "acecd8231f14458fcbf206014977526c8506f61982facf3ce44f1d176c5042a5",
               "features": 10000,
               "coordinates": 50000
@@ -30097,13 +30097,13 @@
           "size": 100000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-intersect-polygons/100000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-intersect-polygons/100000/input.geojson",
               "sha256": "85e677d1a4aed4563ec5fe9978b722a80ee746888807f9d5a0b3dc668b5abf4e",
               "features": 100000,
               "coordinates": 200000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-intersect-polygons/100000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-intersect-polygons/100000/other.geojson",
               "sha256": "31ffc8321ff60606ed53e3186540cd908916bb6ba5023309a40986a3df8e0128",
               "features": 100000,
               "coordinates": 500000
@@ -30289,13 +30289,13 @@
           "name": "clean",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-intersect-polygons/probe-0/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-intersect-polygons/probe-0/input.geojson",
               "sha256": "4826672b3fb67dc9642d753b316bf1a98c0e7654c99b3499ac0f98eefc1e7b55",
               "features": 1,
               "coordinates": 2
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-intersect-polygons/probe-0/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-intersect-polygons/probe-0/other.geojson",
               "sha256": "2e9eff212922d8294d9f366b68deff9147704dea4aead1590061bf45a14e28b7",
               "features": 1,
               "coordinates": 5
@@ -30314,13 +30314,13 @@
           "name": "violation",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-intersect-polygons/probe-1/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-intersect-polygons/probe-1/input.geojson",
               "sha256": "5dda2cf68e66d3d747b13c63ee369dd5f1f5a2feb0aa98e11e2a774be331a80f",
               "features": 1,
               "coordinates": 2
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-intersect-polygons/probe-1/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-intersect-polygons/probe-1/other.geojson",
               "sha256": "2e9eff212922d8294d9f366b68deff9147704dea4aead1590061bf45a14e28b7",
               "features": 1,
               "coordinates": 5
@@ -30346,13 +30346,13 @@
           "name": "line follows polygon edge",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-intersect-polygons/probe-2/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-intersect-polygons/probe-2/input.geojson",
               "sha256": "2277750d5375460768218fa823d6207d22b6a777525739fda083b16b9cc99d15",
               "features": 1,
               "coordinates": 2
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_must-not-intersect-polygons/probe-2/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_must-not-intersect-polygons/probe-2/other.geojson",
               "sha256": "2e9eff212922d8294d9f366b68deff9147704dea4aead1590061bf45a14e28b7",
               "features": 1,
               "coordinates": 5
@@ -30386,13 +30386,13 @@
           "size": 1000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_endpoints-must-be-covered-by-polygon-boundaries/1000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_endpoints-must-be-covered-by-polygon-boundaries/1000/input.geojson",
               "sha256": "d209d45ec387b8dbcf1acccbd9a7601286968ad1fd8cb7e2828e006798cb3474",
               "features": 1000,
               "coordinates": 2000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_endpoints-must-be-covered-by-polygon-boundaries/1000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_endpoints-must-be-covered-by-polygon-boundaries/1000/other.geojson",
               "sha256": "130c9ecba8e0a8bd676c8ee5cbefa78539a780458b79b4263af3169d052c3d9d",
               "features": 1000,
               "coordinates": 5000
@@ -30576,13 +30576,13 @@
           "size": 10000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_endpoints-must-be-covered-by-polygon-boundaries/10000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_endpoints-must-be-covered-by-polygon-boundaries/10000/input.geojson",
               "sha256": "00e2cff1e1463e267c917fdb630e4b359e2e074807c2583cefe06339b482a590",
               "features": 10000,
               "coordinates": 20000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_endpoints-must-be-covered-by-polygon-boundaries/10000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_endpoints-must-be-covered-by-polygon-boundaries/10000/other.geojson",
               "sha256": "acecd8231f14458fcbf206014977526c8506f61982facf3ce44f1d176c5042a5",
               "features": 10000,
               "coordinates": 50000
@@ -30766,13 +30766,13 @@
           "size": 100000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_endpoints-must-be-covered-by-polygon-boundaries/100000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_endpoints-must-be-covered-by-polygon-boundaries/100000/input.geojson",
               "sha256": "13a9aa34c8614df7bd3367fb840a9c4cf06bf5223f287cb388eb40eaca18d3b5",
               "features": 100000,
               "coordinates": 200000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_endpoints-must-be-covered-by-polygon-boundaries/100000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_endpoints-must-be-covered-by-polygon-boundaries/100000/other.geojson",
               "sha256": "31ffc8321ff60606ed53e3186540cd908916bb6ba5023309a40986a3df8e0128",
               "features": 100000,
               "coordinates": 500000
@@ -30958,13 +30958,13 @@
           "name": "clean",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_endpoints-must-be-covered-by-polygon-boundaries/probe-0/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_endpoints-must-be-covered-by-polygon-boundaries/probe-0/input.geojson",
               "sha256": "719a2ae806796b365ed5ab9aac0cbeefd59aecc3bfa5fae6923cc80e40dbe3b9",
               "features": 1,
               "coordinates": 2
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_endpoints-must-be-covered-by-polygon-boundaries/probe-0/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_endpoints-must-be-covered-by-polygon-boundaries/probe-0/other.geojson",
               "sha256": "2e9eff212922d8294d9f366b68deff9147704dea4aead1590061bf45a14e28b7",
               "features": 1,
               "coordinates": 5
@@ -30983,13 +30983,13 @@
           "name": "violation",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_endpoints-must-be-covered-by-polygon-boundaries/probe-1/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_endpoints-must-be-covered-by-polygon-boundaries/probe-1/input.geojson",
               "sha256": "5dda2cf68e66d3d747b13c63ee369dd5f1f5a2feb0aa98e11e2a774be331a80f",
               "features": 1,
               "coordinates": 2
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/line_endpoints-must-be-covered-by-polygon-boundaries/probe-1/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/line_endpoints-must-be-covered-by-polygon-boundaries/probe-1/other.geojson",
               "sha256": "2e9eff212922d8294d9f366b68deff9147704dea4aead1590061bf45a14e28b7",
               "features": 1,
               "coordinates": 5
@@ -31023,13 +31023,13 @@
           "size": 1000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_must-not-contain-points/1000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_must-not-contain-points/1000/input.geojson",
               "sha256": "5073d55157d6401a47f73eda417f6376bec2ce58fc9762858b1c2ebba42d2fa8",
               "features": 1000,
               "coordinates": 5000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_must-not-contain-points/1000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_must-not-contain-points/1000/other.geojson",
               "sha256": "b9afa9b014f5ae148a7c6ada7eae9e52e4f89a472368c38ca21d6127ec9e260a",
               "features": 1000,
               "coordinates": 1000
@@ -31213,13 +31213,13 @@
           "size": 10000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_must-not-contain-points/10000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_must-not-contain-points/10000/input.geojson",
               "sha256": "95da697a17cbc3e5163fde95d2b45ed9d2c68089647f7de565996e6abbb3f048",
               "features": 10000,
               "coordinates": 50000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_must-not-contain-points/10000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_must-not-contain-points/10000/other.geojson",
               "sha256": "3316bcc33f033ea3c49cd21171e6318965dc52f09baffa9a7531771707c84495",
               "features": 10000,
               "coordinates": 10000
@@ -31403,13 +31403,13 @@
           "size": 100000,
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_must-not-contain-points/100000/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_must-not-contain-points/100000/input.geojson",
               "sha256": "2875ede7ea30dca79c4d75f96e4e24fc08139c66819a0d9395851066956786dd",
               "features": 100000,
               "coordinates": 500000
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_must-not-contain-points/100000/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_must-not-contain-points/100000/other.geojson",
               "sha256": "1f4242598bec0509dad81dc5bb0e2ba67c35d30ed9f25eae08aa0ec5bf3d5f3b",
               "features": 100000,
               "coordinates": 100000
@@ -31595,13 +31595,13 @@
           "name": "clean",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_must-not-contain-points/probe-0/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_must-not-contain-points/probe-0/input.geojson",
               "sha256": "2842ab5f797aa24871f15af63c654200fb64135daecca239aee005f16a2389e6",
               "features": 1,
               "coordinates": 5
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_must-not-contain-points/probe-0/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_must-not-contain-points/probe-0/other.geojson",
               "sha256": "679d76d439faacc8c67473f19a2837d1b1af41f7b27679e491dac0f167a4d828",
               "features": 1,
               "coordinates": 1
@@ -31620,13 +31620,13 @@
           "name": "violation",
           "fixture": {
             "input": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_must-not-contain-points/probe-1/input.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_must-not-contain-points/probe-1/input.geojson",
               "sha256": "2842ab5f797aa24871f15af63c654200fb64135daecca239aee005f16a2389e6",
               "features": 1,
               "coordinates": 5
             },
             "other": {
-              "path": "/Users/alex-andrei.cuvuliuc/Desktop/topology-checker/builds/qgis/20261011T082656834532/polygon_must-not-contain-points/probe-1/other.geojson",
+              "path": "builds/qgis/20261011T082656834532/polygon_must-not-contain-points/probe-1/other.geojson",
               "sha256": "2b257c2e2c8757984fe91d41a969f41f466e4d87789a5423458e640e5cd0b979",
               "features": 1,
               "coordinates": 1

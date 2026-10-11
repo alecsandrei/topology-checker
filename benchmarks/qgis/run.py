@@ -13,9 +13,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from fixtures import CATALOG, FIXTURES, HERE, MAPPINGS, workload, write_case
+from fixtures import CATALOG, FIXTURES, HERE, MAPPINGS, ROOT, workload, write_case
 
-ROOT = HERE.parents[1]
 DEFAULT_QGIS = "/Applications/QGIS-final-4_2_2.app/Contents/MacOS/QGIS-final-4_2_2"
 
 
@@ -140,8 +139,10 @@ class QgisSession:
         self.command(
             {
                 "action": "load",
-                "input": fixture["input"]["path"],
-                "other": fixture.get("other", {}).get("path"),
+                "input": str(ROOT / fixture["input"]["path"]),
+                "other": (
+                    str(ROOT / fixture["other"]["path"]) if "other" in fixture else None
+                ),
             },
             timeout,
         )
@@ -181,9 +182,9 @@ class RustSession:
         self.log = (directory / "rust.log").open("w")
         self.startup_timeout = startup_timeout
         self.buffer = b""
-        command = [str(executable), rule, fixture["input"]["path"]]
+        command = [str(executable), rule, str(ROOT / fixture["input"]["path"])]
         if "other" in fixture:
-            command.append(fixture["other"]["path"])
+            command.append(str(ROOT / fixture["other"]["path"]))
         self.process = subprocess.Popen(
             command,
             stdin=subprocess.PIPE,

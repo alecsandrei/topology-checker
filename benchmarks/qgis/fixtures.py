@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 HERE = Path(__file__).resolve().parent
+ROOT = HERE.parents[1]
 CATALOG = json.loads((HERE / "fixtures.json").read_text())
 FIXTURES = {item["rule"]: item for item in CATALOG["fixtures"]}
 MAPPINGS = {
@@ -273,7 +274,8 @@ def write_case(
         path = directory / f"{name}.geojson"
         path.write_bytes(data)
         result[name] = {
-            "path": str(path.resolve()),
+            # Repo-relative, so results do not record the local checkout path.
+            "path": str(path.resolve().relative_to(ROOT, walk_up=True)),
             "sha256": hashlib.sha256(data).hexdigest(),
             "features": len(geometries),
             "coordinates": sum(coordinate_count(g["coordinates"]) for g in geometries),
