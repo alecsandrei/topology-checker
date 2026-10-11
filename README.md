@@ -1,41 +1,32 @@
 # topology-checker
 
-You can also use the local web app to import datasets, run topology checks, and inspect results on an interactive map. Try five bundled real-data examples covering every GeoJSON geometry type. See [Local web app](#local-web-app) for startup instructions.
+topology-checker checks map data for duplicate points, gaps, overlaps, and disconnected lines. Use it with Python, the command line, or the local web app.
 
-## Installation
+![Measured validation runtime against QGIS Topology Checker](benchmarks/qgis/results/comparison.png)
 
-Prerequisites: Rust **1.88 or newer**, CMake, a C/C++ compiler and `sqlite3` on PATH.
-On macOS, install Xcode Command Line Tools; on Linux, install the compiler
-toolchain, CMake and SQLite; on Windows, install Visual Studio Build Tools,
-CMake and SQLite.
+## Python API
 
-From the repository root:
+```sh
+uv add 'topology-checker[geopandas]'
+```
+
+```python
+from topology_checker import Rule, Topology
+
+topology = Topology(tolerance=0.001)
+topology.add_rule(Rule.MUST_NOT_HAVE_DANGLES, roads_gdf)
+errors = topology.validate().to_geodataframe()
+```
+
+[More Python examples](python/README.md), [usage guide](docs/python-usage.md), and [manual release guide](docs/python-release.md).
+
+## CLI
+
+Requires Rust 1.88 or newer. Install from the repository root:
 
 ```sh
 cargo install --path crates/cli --locked
 ```
-
-The CLI bundles GDAL and PROJ by default. The first build takes several minutes.
-To use an installed GDAL instead:
-
-```sh
-cargo install --path crates/cli --no-default-features --locked
-```
-
-To build a local release binary:
-
-```sh
-cargo build --workspace --release --locked
-./target/release/topology-checker --help
-```
-
-The Rust core builds independently without GDAL, PROJ, CMake or SQLite:
-
-```sh
-cargo build -p topology-checker-core --release --locked
-```
-
-## CLI examples
 
 ```sh
 topology-checker rules
@@ -56,28 +47,9 @@ topology-checker utilities explode-lines roads.gpkg --layer roads -o segments.gp
 topology-checker line must-not-have-dangles --help
 ```
 
-The `rules` command groups checks by geometry type and shows their required inputs:
+`-o` writes `errors_point`, `errors_line` and `errors_polygon` layers with `violation_id`, `rule`, `error_type` and the origin and destination layer, FID and part of each violation. The web app's dataset exports use the same columns.
 
-```text
-Available topology rules (38)
-
-Points (10)
-
-  point/must-not-overlap
-    Find duplicate points within the distance tolerance.
-    Needs: one point layer
-
-  point/must-not-overlap-with
-    Find duplicate points across two layers within the distance tolerance.
-    Needs: two point layers
-
-...
-```
-
-The 38 rules are grouped as Points (10), Lines (19), Polygons (7), and All
-geometries (2).
-
-Save a topology definition as `topology.toml`:
+`topology.toml`:
 
 ```toml
 tolerance = 0.001
@@ -111,18 +83,9 @@ other = "addresses"
 topology-checker --json validate topology.toml -o errors.gpkg
 ```
 
-All binary rules use the same `--other` CLI option and TOML `layer`/`other`
-fields. Distances are planar coordinate units. Polygon boundary checks retain
-individual exterior, hole and shared parcel edges. Required line containment uses
-the polygon layer union. Point cardinality counts feature IDs, with all retained
-parts of a point feature required to lie strictly inside a polygon feature.
+## Rust API
 
-The new public `Rule` and `ErrorType` variants are additive; downstream exhaustive
-Rust matches need updating. Rule catalog and report JSON fields are unchanged.
-
-## Rust API example
-
-Add the core to your application's `Cargo.toml`, using your checkout path:
+`Cargo.toml` (update the path):
 
 ```toml
 [dependencies]
@@ -132,7 +95,7 @@ topology-checker-core = { path = "/path/to/topology-checker/crates/core" }
 ```rust
 use topology_checker_core::{
     geo::{Geometry, line_string},
-    Error, ErrorType, Layer, Rule, Topology,
+    Error, Layer, Rule, Topology, ViolationKind,
 };
 
 fn main() -> Result<(), Error> {
@@ -145,27 +108,20 @@ fn main() -> Result<(), Error> {
 
     let report = topology.validate()?;
     assert!(!report.is_valid());
-    assert_eq!(report.error_count(), 2);
-    assert!(report.errors().all(|error| error.error_type == ErrorType::Dangle));
+    assert_eq!(report.violation_count(), 2);
+    assert!(report.violations().all(|v| v.kind == ViolationKind::Dangle));
     Ok(())
 }
 ```
 
 ## Local web app
 
-Inspect datasets in a browser with the local Axum server and Vue/OpenLayers app:
-
 ```sh
 npm ci --prefix web
 npm run build --prefix web
-cargo run -p topology-checker-web --locked
+cargo run -p topology-checker-web --release --locked
 ```
 
-Open <http://127.0.0.1:8080>. Import vector data, select a working CRS and topology
-rules, inspect highlighted violations, and download reports or portable projects.
+Open <http://127.0.0.1:8080>, or pass `--port` (or set `TOPOLOGY_WEB_PORT`) to use another port. Release builds embed the frontend, so `target/release/topology-checker-web` runs on its own. Workspaces idle for four hours are discarded.
 
-Run `./scripts/package-web.sh` to create a portable bundle in
-`builds/topology-checker-web`. On a machine with the same operating system and
-architecture, launch the bundled `topology-checker-web` executable (`.exe` on
-Windows) and open <http://127.0.0.1:8080>. Keep the adjacent `web` directory with
-the executable.
+The TypeScript API types in `web/src/generated` are generated from the server by `cargo test`.

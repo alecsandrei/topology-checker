@@ -1,0 +1,3468 @@
+{
+  "fixtures": [
+    {
+      "rule": "point/must-not-overlap",
+      "note": "",
+      "clean": {
+        "input": [
+          {
+            "type": "Point",
+            "coordinates": [
+              2,
+              2
+            ]
+          },
+          {
+            "type": "Point",
+            "coordinates": [
+              8,
+              8
+            ]
+          }
+        ],
+        "other": null
+      },
+      "violation": {
+        "input": [
+          {
+            "type": "Point",
+            "coordinates": [
+              2,
+              2
+            ]
+          },
+          {
+            "type": "Point",
+            "coordinates": [
+              2,
+              2
+            ]
+          }
+        ],
+        "other": null
+      }
+    },
+    {
+      "rule": "point/must-not-overlap-with",
+      "note": "",
+      "clean": {
+        "input": [
+          {
+            "type": "Point",
+            "coordinates": [
+              2,
+              2
+            ]
+          }
+        ],
+        "other": [
+          {
+            "type": "Point",
+            "coordinates": [
+              8,
+              8
+            ]
+          }
+        ]
+      },
+      "violation": {
+        "input": [
+          {
+            "type": "Point",
+            "coordinates": [
+              2,
+              2
+            ]
+          }
+        ],
+        "other": [
+          {
+            "type": "Point",
+            "coordinates": [
+              2,
+              2
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "rule": "point/must-be-inside",
+      "note": "",
+      "clean": {
+        "input": [
+          {
+            "type": "Point",
+            "coordinates": [
+              2,
+              2
+            ]
+          }
+        ],
+        "other": [
+          {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  0,
+                  0
+                ],
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ],
+                [
+                  0,
+                  10
+                ],
+                [
+                  0,
+                  0
+                ]
+              ]
+            ]
+          }
+        ]
+      },
+      "violation": {
+        "input": [
+          {
+            "type": "Point",
+            "coordinates": [
+              12,
+              2
+            ]
+          }
+        ],
+        "other": [
+          {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  0,
+                  0
+                ],
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ],
+                [
+                  0,
+                  10
+                ],
+                [
+                  0,
+                  0
+                ]
+              ]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "rule": "line/must-not-have-dangles",
+      "note": "",
+      "clean": {
+        "input": [
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                0,
+                0
+              ],
+              [
+                4,
+                0
+              ],
+              [
+                4,
+                4
+              ],
+              [
+                0,
+                0
+              ]
+            ]
+          }
+        ],
+        "other": null
+      },
+      "violation": {
+        "input": [
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                2,
+                2
+              ],
+              [
+                8,
+                2
+              ]
+            ]
+          }
+        ],
+        "other": null
+      }
+    },
+    {
+      "rule": "line/must-not-have-pseudo-nodes",
+      "note": "",
+      "clean": {
+        "input": [
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                0,
+                0
+              ],
+              [
+                4,
+                0
+              ],
+              [
+                4,
+                4
+              ],
+              [
+                0,
+                0
+              ]
+            ]
+          }
+        ],
+        "other": null
+      },
+      "violation": {
+        "input": [
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                0,
+                0
+              ],
+              [
+                4,
+                0
+              ]
+            ]
+          },
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                4,
+                0
+              ],
+              [
+                8,
+                0
+              ]
+            ]
+          }
+        ],
+        "other": null
+      }
+    },
+    {
+      "rule": "line/must-not-overlap",
+      "note": "",
+      "clean": {
+        "input": [
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                2,
+                2
+              ],
+              [
+                8,
+                2
+              ]
+            ]
+          }
+        ],
+        "other": null
+      },
+      "violation": {
+        "input": [
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                2,
+                2
+              ],
+              [
+                8,
+                2
+              ]
+            ]
+          },
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                4,
+                2
+              ],
+              [
+                12,
+                2
+              ]
+            ]
+          }
+        ],
+        "other": null
+      }
+    },
+    {
+      "rule": "line/must-not-overlap-with",
+      "note": "",
+      "clean": {
+        "input": [
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                2,
+                2
+              ],
+              [
+                8,
+                2
+              ]
+            ]
+          }
+        ],
+        "other": [
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                12,
+                2
+              ],
+              [
+                18,
+                2
+              ]
+            ]
+          }
+        ]
+      },
+      "violation": {
+        "input": [
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                2,
+                2
+              ],
+              [
+                8,
+                2
+              ]
+            ]
+          }
+        ],
+        "other": [
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                4,
+                2
+              ],
+              [
+                12,
+                2
+              ]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "rule": "line/must-not-self-overlap",
+      "note": "",
+      "clean": {
+        "input": [
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                2,
+                2
+              ],
+              [
+                8,
+                2
+              ]
+            ]
+          }
+        ],
+        "other": null
+      },
+      "violation": {
+        "input": [
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                0,
+                0
+              ],
+              [
+                4,
+                0
+              ],
+              [
+                2,
+                0
+              ]
+            ]
+          }
+        ],
+        "other": null
+      }
+    },
+    {
+      "rule": "line/must-not-intersect",
+      "note": "",
+      "clean": {
+        "input": [
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                2,
+                2
+              ],
+              [
+                8,
+                2
+              ]
+            ]
+          }
+        ],
+        "other": null
+      },
+      "violation": {
+        "input": [
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                2,
+                2
+              ],
+              [
+                8,
+                2
+              ]
+            ]
+          },
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                5,
+                0
+              ],
+              [
+                5,
+                4
+              ]
+            ]
+          }
+        ],
+        "other": null
+      }
+    },
+    {
+      "rule": "line/must-not-intersect-with",
+      "note": "",
+      "clean": {
+        "input": [
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                2,
+                2
+              ],
+              [
+                8,
+                2
+              ]
+            ]
+          }
+        ],
+        "other": [
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                12,
+                2
+              ],
+              [
+                18,
+                2
+              ]
+            ]
+          }
+        ]
+      },
+      "violation": {
+        "input": [
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                2,
+                2
+              ],
+              [
+                8,
+                2
+              ]
+            ]
+          }
+        ],
+        "other": [
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                5,
+                0
+              ],
+              [
+                5,
+                4
+              ]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "rule": "line/must-not-intersect-or-touch-interior",
+      "note": "",
+      "clean": {
+        "input": [
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                2,
+                2
+              ],
+              [
+                8,
+                2
+              ]
+            ]
+          }
+        ],
+        "other": null
+      },
+      "violation": {
+        "input": [
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                2,
+                2
+              ],
+              [
+                8,
+                2
+              ]
+            ]
+          },
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                5,
+                2
+              ],
+              [
+                5,
+                4
+              ]
+            ]
+          }
+        ],
+        "other": null
+      }
+    },
+    {
+      "rule": "line/must-not-intersect-or-touch-interior-with",
+      "note": "",
+      "clean": {
+        "input": [
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                2,
+                2
+              ],
+              [
+                8,
+                2
+              ]
+            ]
+          }
+        ],
+        "other": [
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                12,
+                2
+              ],
+              [
+                18,
+                2
+              ]
+            ]
+          }
+        ]
+      },
+      "violation": {
+        "input": [
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                2,
+                2
+              ],
+              [
+                8,
+                2
+              ]
+            ]
+          }
+        ],
+        "other": [
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                5,
+                2
+              ],
+              [
+                5,
+                4
+              ]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "rule": "line/must-not-self-intersect",
+      "note": "",
+      "clean": {
+        "input": [
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                2,
+                2
+              ],
+              [
+                8,
+                2
+              ]
+            ]
+          }
+        ],
+        "other": null
+      },
+      "violation": {
+        "input": [
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                0,
+                0
+              ],
+              [
+                4,
+                4
+              ],
+              [
+                0,
+                4
+              ],
+              [
+                4,
+                0
+              ]
+            ]
+          }
+        ],
+        "other": null
+      }
+    },
+    {
+      "rule": "line/must-be-inside",
+      "note": "",
+      "clean": {
+        "input": [
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                2,
+                2
+              ],
+              [
+                8,
+                2
+              ]
+            ]
+          }
+        ],
+        "other": [
+          {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  0,
+                  0
+                ],
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ],
+                [
+                  0,
+                  10
+                ],
+                [
+                  0,
+                  0
+                ]
+              ]
+            ]
+          }
+        ]
+      },
+      "violation": {
+        "input": [
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                -2,
+                5
+              ],
+              [
+                12,
+                5
+              ]
+            ]
+          }
+        ],
+        "other": [
+          {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  0,
+                  0
+                ],
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ],
+                [
+                  0,
+                  10
+                ],
+                [
+                  0,
+                  0
+                ]
+              ]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "rule": "polygon/must-not-overlap",
+      "note": "",
+      "clean": {
+        "input": [
+          {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  0,
+                  0
+                ],
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ],
+                [
+                  0,
+                  10
+                ],
+                [
+                  0,
+                  0
+                ]
+              ]
+            ]
+          },
+          {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  12,
+                  0
+                ],
+                [
+                  22,
+                  0
+                ],
+                [
+                  22,
+                  10
+                ],
+                [
+                  12,
+                  10
+                ],
+                [
+                  12,
+                  0
+                ]
+              ]
+            ]
+          }
+        ],
+        "other": null
+      },
+      "violation": {
+        "input": [
+          {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  0,
+                  0
+                ],
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ],
+                [
+                  0,
+                  10
+                ],
+                [
+                  0,
+                  0
+                ]
+              ]
+            ]
+          },
+          {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  5,
+                  0
+                ],
+                [
+                  15,
+                  0
+                ],
+                [
+                  15,
+                  10
+                ],
+                [
+                  5,
+                  10
+                ],
+                [
+                  5,
+                  0
+                ]
+              ]
+            ]
+          }
+        ],
+        "other": null
+      }
+    },
+    {
+      "rule": "polygon/must-not-overlap-with",
+      "note": "",
+      "clean": {
+        "input": [
+          {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  0,
+                  0
+                ],
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ],
+                [
+                  0,
+                  10
+                ],
+                [
+                  0,
+                  0
+                ]
+              ]
+            ]
+          }
+        ],
+        "other": [
+          {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  12,
+                  0
+                ],
+                [
+                  22,
+                  0
+                ],
+                [
+                  22,
+                  10
+                ],
+                [
+                  12,
+                  10
+                ],
+                [
+                  12,
+                  0
+                ]
+              ]
+            ]
+          }
+        ]
+      },
+      "violation": {
+        "input": [
+          {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  0,
+                  0
+                ],
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ],
+                [
+                  0,
+                  10
+                ],
+                [
+                  0,
+                  0
+                ]
+              ]
+            ]
+          }
+        ],
+        "other": [
+          {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  5,
+                  0
+                ],
+                [
+                  15,
+                  0
+                ],
+                [
+                  15,
+                  10
+                ],
+                [
+                  5,
+                  10
+                ],
+                [
+                  5,
+                  0
+                ]
+              ]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "rule": "polygon/must-not-have-gaps",
+      "note": "Outer boundaries are retained in raw counts but excluded from violation comparisons.",
+      "clean": {
+        "input": [
+          {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  0,
+                  0
+                ],
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ],
+                [
+                  0,
+                  10
+                ],
+                [
+                  0,
+                  0
+                ]
+              ]
+            ]
+          }
+        ],
+        "other": null
+      },
+      "violation": {
+        "input": [
+          {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  0,
+                  0
+                ],
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ],
+                [
+                  0,
+                  10
+                ],
+                [
+                  0,
+                  0
+                ]
+              ],
+              [
+                [
+                  2,
+                  2
+                ],
+                [
+                  2,
+                  4
+                ],
+                [
+                  4,
+                  4
+                ],
+                [
+                  4,
+                  2
+                ],
+                [
+                  2,
+                  2
+                ]
+              ]
+            ]
+          }
+        ],
+        "other": null
+      }
+    },
+    {
+      "rule": "geometry/must-not-be-multipart",
+      "note": "",
+      "clean": {
+        "input": [
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                0,
+                0
+              ],
+              [
+                4,
+                0
+              ]
+            ]
+          }
+        ],
+        "other": null
+      },
+      "violation": {
+        "input": [
+          {
+            "type": "MultiLineString",
+            "coordinates": [
+              [
+                [
+                  2,
+                  2
+                ],
+                [
+                  8,
+                  2
+                ]
+              ],
+              [
+                [
+                  12,
+                  2
+                ],
+                [
+                  18,
+                  2
+                ]
+              ]
+            ]
+          }
+        ],
+        "other": null
+      }
+    },
+    {
+      "rule": "point/must-be-covered-by-lines",
+      "note": "",
+      "clean": {
+        "input": [
+          {
+            "type": "Point",
+            "coordinates": [
+              4,
+              2
+            ]
+          }
+        ],
+        "other": [
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                2,
+                2
+              ],
+              [
+                8,
+                2
+              ]
+            ]
+          }
+        ]
+      },
+      "violation": {
+        "input": [
+          {
+            "type": "Point",
+            "coordinates": [
+              4,
+              4
+            ]
+          }
+        ],
+        "other": [
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                2,
+                2
+              ],
+              [
+                8,
+                2
+              ]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "rule": "point/must-be-covered-by-line-endpoints",
+      "note": "",
+      "clean": {
+        "input": [
+          {
+            "type": "Point",
+            "coordinates": [
+              2,
+              2
+            ]
+          }
+        ],
+        "other": [
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                2,
+                2
+              ],
+              [
+                8,
+                2
+              ]
+            ]
+          }
+        ]
+      },
+      "violation": {
+        "input": [
+          {
+            "type": "Point",
+            "coordinates": [
+              4,
+              2
+            ]
+          }
+        ],
+        "other": [
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                2,
+                2
+              ],
+              [
+                8,
+                2
+              ]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "rule": "point/must-be-covered-by-polygon-boundaries",
+      "note": "",
+      "clean": {
+        "input": [
+          {
+            "type": "Point",
+            "coordinates": [
+              0,
+              2
+            ]
+          }
+        ],
+        "other": [
+          {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  0,
+                  0
+                ],
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ],
+                [
+                  0,
+                  10
+                ],
+                [
+                  0,
+                  0
+                ]
+              ]
+            ]
+          }
+        ]
+      },
+      "violation": {
+        "input": [
+          {
+            "type": "Point",
+            "coordinates": [
+              2,
+              2
+            ]
+          }
+        ],
+        "other": [
+          {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  0,
+                  0
+                ],
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ],
+                [
+                  0,
+                  10
+                ],
+                [
+                  0,
+                  0
+                ]
+              ]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "rule": "line/endpoints-must-be-covered-by-points",
+      "note": "",
+      "clean": {
+        "input": [
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                2,
+                2
+              ],
+              [
+                8,
+                2
+              ]
+            ]
+          }
+        ],
+        "other": [
+          {
+            "type": "Point",
+            "coordinates": [
+              2,
+              2
+            ]
+          },
+          {
+            "type": "Point",
+            "coordinates": [
+              8,
+              2
+            ]
+          }
+        ]
+      },
+      "violation": {
+        "input": [
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                2,
+                2
+              ],
+              [
+                8,
+                2
+              ]
+            ]
+          }
+        ],
+        "other": [
+          {
+            "type": "Point",
+            "coordinates": [
+              2,
+              2
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "rule": "line/must-be-covered-by-polygon-boundaries",
+      "note": "",
+      "clean": {
+        "input": [
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                0,
+                0
+              ],
+              [
+                10,
+                0
+              ]
+            ]
+          }
+        ],
+        "other": [
+          {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  0,
+                  0
+                ],
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ],
+                [
+                  0,
+                  10
+                ],
+                [
+                  0,
+                  0
+                ]
+              ]
+            ]
+          }
+        ]
+      },
+      "violation": {
+        "input": [
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                2,
+                2
+              ],
+              [
+                8,
+                2
+              ]
+            ]
+          }
+        ],
+        "other": [
+          {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  0,
+                  0
+                ],
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ],
+                [
+                  0,
+                  10
+                ],
+                [
+                  0,
+                  0
+                ]
+              ]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "rule": "polygon/boundaries-must-be-covered-by-lines",
+      "note": "",
+      "clean": {
+        "input": [
+          {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  0,
+                  0
+                ],
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ],
+                [
+                  0,
+                  10
+                ],
+                [
+                  0,
+                  0
+                ]
+              ]
+            ]
+          }
+        ],
+        "other": [
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                0,
+                0
+              ],
+              [
+                10,
+                0
+              ],
+              [
+                10,
+                10
+              ],
+              [
+                0,
+                10
+              ],
+              [
+                0,
+                0
+              ]
+            ]
+          }
+        ]
+      },
+      "violation": {
+        "input": [
+          {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  0,
+                  0
+                ],
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ],
+                [
+                  0,
+                  10
+                ],
+                [
+                  0,
+                  0
+                ]
+              ]
+            ]
+          }
+        ],
+        "other": [
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                2,
+                2
+              ],
+              [
+                8,
+                2
+              ]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "rule": "polygon/must-contain-point",
+      "note": "",
+      "clean": {
+        "input": [
+          {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  0,
+                  0
+                ],
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ],
+                [
+                  0,
+                  10
+                ],
+                [
+                  0,
+                  0
+                ]
+              ]
+            ]
+          }
+        ],
+        "other": [
+          {
+            "type": "Point",
+            "coordinates": [
+              2,
+              2
+            ]
+          }
+        ]
+      },
+      "violation": {
+        "input": [
+          {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  0,
+                  0
+                ],
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ],
+                [
+                  0,
+                  10
+                ],
+                [
+                  0,
+                  0
+                ]
+              ]
+            ]
+          }
+        ],
+        "other": [
+          {
+            "type": "Point",
+            "coordinates": [
+              12,
+              2
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "rule": "polygon/must-contain-one-point",
+      "note": "",
+      "clean": {
+        "input": [
+          {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  0,
+                  0
+                ],
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ],
+                [
+                  0,
+                  10
+                ],
+                [
+                  0,
+                  0
+                ]
+              ]
+            ]
+          }
+        ],
+        "other": [
+          {
+            "type": "Point",
+            "coordinates": [
+              2,
+              2
+            ]
+          }
+        ]
+      },
+      "violation": {
+        "input": [
+          {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  0,
+                  0
+                ],
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ],
+                [
+                  0,
+                  10
+                ],
+                [
+                  0,
+                  0
+                ]
+              ]
+            ]
+          }
+        ],
+        "other": [
+          {
+            "type": "Point",
+            "coordinates": [
+              2,
+              2
+            ]
+          },
+          {
+            "type": "Point",
+            "coordinates": [
+              4,
+              4
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "rule": "line/must-not-cross-polygon-boundaries",
+      "note": "",
+      "clean": {
+        "input": [
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                2,
+                2
+              ],
+              [
+                8,
+                2
+              ]
+            ]
+          }
+        ],
+        "other": [
+          {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  0,
+                  0
+                ],
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ],
+                [
+                  0,
+                  10
+                ],
+                [
+                  0,
+                  0
+                ]
+              ]
+            ]
+          }
+        ]
+      },
+      "violation": {
+        "input": [
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                -2,
+                5
+              ],
+              [
+                12,
+                5
+              ]
+            ]
+          }
+        ],
+        "other": [
+          {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  0,
+                  0
+                ],
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ],
+                [
+                  0,
+                  10
+                ],
+                [
+                  0,
+                  0
+                ]
+              ]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "rule": "geometry/must-not-be-contained-by",
+      "note": "",
+      "clean": {
+        "input": [
+          {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  12,
+                  2
+                ],
+                [
+                  14,
+                  2
+                ],
+                [
+                  14,
+                  4
+                ],
+                [
+                  12,
+                  4
+                ],
+                [
+                  12,
+                  2
+                ]
+              ]
+            ]
+          }
+        ],
+        "other": [
+          {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  0,
+                  0
+                ],
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ],
+                [
+                  0,
+                  10
+                ],
+                [
+                  0,
+                  0
+                ]
+              ]
+            ]
+          }
+        ]
+      },
+      "violation": {
+        "input": [
+          {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  2,
+                  2
+                ],
+                [
+                  4,
+                  2
+                ],
+                [
+                  4,
+                  4
+                ],
+                [
+                  2,
+                  4
+                ],
+                [
+                  2,
+                  2
+                ]
+              ]
+            ]
+          }
+        ],
+        "other": [
+          {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  0,
+                  0
+                ],
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ],
+                [
+                  0,
+                  10
+                ],
+                [
+                  0,
+                  0
+                ]
+              ]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "rule": "point/must-be-covered-by-polygons",
+      "note": "",
+      "clean": {
+        "input": [
+          {
+            "type": "Point",
+            "coordinates": [
+              0,
+              2
+            ]
+          }
+        ],
+        "other": [
+          {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  0,
+                  0
+                ],
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ],
+                [
+                  0,
+                  10
+                ],
+                [
+                  0,
+                  0
+                ]
+              ]
+            ]
+          }
+        ]
+      },
+      "violation": {
+        "input": [
+          {
+            "type": "Point",
+            "coordinates": [
+              12,
+              2
+            ]
+          }
+        ],
+        "other": [
+          {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  0,
+                  0
+                ],
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ],
+                [
+                  0,
+                  10
+                ],
+                [
+                  0,
+                  0
+                ]
+              ]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "rule": "point/must-not-be-inside-polygons",
+      "note": "",
+      "clean": {
+        "input": [
+          {
+            "type": "Point",
+            "coordinates": [
+              0,
+              2
+            ]
+          }
+        ],
+        "other": [
+          {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  0,
+                  0
+                ],
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ],
+                [
+                  0,
+                  10
+                ],
+                [
+                  0,
+                  0
+                ]
+              ]
+            ]
+          }
+        ]
+      },
+      "violation": {
+        "input": [
+          {
+            "type": "Point",
+            "coordinates": [
+              2,
+              2
+            ]
+          }
+        ],
+        "other": [
+          {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  0,
+                  0
+                ],
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ],
+                [
+                  0,
+                  10
+                ],
+                [
+                  0,
+                  0
+                ]
+              ]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "rule": "point/must-not-intersect-lines",
+      "note": "",
+      "clean": {
+        "input": [
+          {
+            "type": "Point",
+            "coordinates": [
+              4,
+              4
+            ]
+          }
+        ],
+        "other": [
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                2,
+                2
+              ],
+              [
+                8,
+                2
+              ]
+            ]
+          }
+        ]
+      },
+      "violation": {
+        "input": [
+          {
+            "type": "Point",
+            "coordinates": [
+              4,
+              2
+            ]
+          }
+        ],
+        "other": [
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                2,
+                2
+              ],
+              [
+                8,
+                2
+              ]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "rule": "point/must-not-intersect-polygons",
+      "note": "",
+      "clean": {
+        "input": [
+          {
+            "type": "Point",
+            "coordinates": [
+              12,
+              2
+            ]
+          }
+        ],
+        "other": [
+          {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  0,
+                  0
+                ],
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ],
+                [
+                  0,
+                  10
+                ],
+                [
+                  0,
+                  0
+                ]
+              ]
+            ]
+          }
+        ]
+      },
+      "violation": {
+        "input": [
+          {
+            "type": "Point",
+            "coordinates": [
+              0,
+              2
+            ]
+          }
+        ],
+        "other": [
+          {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  0,
+                  0
+                ],
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ],
+                [
+                  0,
+                  10
+                ],
+                [
+                  0,
+                  0
+                ]
+              ]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "rule": "line/must-be-properly-inside-polygons",
+      "note": "",
+      "clean": {
+        "input": [
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                2,
+                2
+              ],
+              [
+                8,
+                2
+              ]
+            ]
+          }
+        ],
+        "other": [
+          {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  0,
+                  0
+                ],
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ],
+                [
+                  0,
+                  10
+                ],
+                [
+                  0,
+                  0
+                ]
+              ]
+            ]
+          }
+        ]
+      },
+      "violation": {
+        "input": [
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                0,
+                0
+              ],
+              [
+                10,
+                0
+              ]
+            ]
+          }
+        ],
+        "other": [
+          {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  0,
+                  0
+                ],
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ],
+                [
+                  0,
+                  10
+                ],
+                [
+                  0,
+                  0
+                ]
+              ]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "rule": "line/must-not-overlap-with-polygons",
+      "note": "",
+      "clean": {
+        "input": [
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                12,
+                2
+              ],
+              [
+                18,
+                2
+              ]
+            ]
+          }
+        ],
+        "other": [
+          {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  0,
+                  0
+                ],
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ],
+                [
+                  0,
+                  10
+                ],
+                [
+                  0,
+                  0
+                ]
+              ]
+            ]
+          }
+        ]
+      },
+      "violation": {
+        "input": [
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                2,
+                2
+              ],
+              [
+                8,
+                2
+              ]
+            ]
+          }
+        ],
+        "other": [
+          {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  0,
+                  0
+                ],
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ],
+                [
+                  0,
+                  10
+                ],
+                [
+                  0,
+                  0
+                ]
+              ]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "rule": "line/must-not-overlap-polygon-boundaries",
+      "note": "",
+      "clean": {
+        "input": [
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                -2,
+                5
+              ],
+              [
+                12,
+                5
+              ]
+            ]
+          }
+        ],
+        "other": [
+          {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  0,
+                  0
+                ],
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ],
+                [
+                  0,
+                  10
+                ],
+                [
+                  0,
+                  0
+                ]
+              ]
+            ]
+          }
+        ]
+      },
+      "violation": {
+        "input": [
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                0,
+                0
+              ],
+              [
+                10,
+                0
+              ]
+            ]
+          }
+        ],
+        "other": [
+          {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  0,
+                  0
+                ],
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ],
+                [
+                  0,
+                  10
+                ],
+                [
+                  0,
+                  0
+                ]
+              ]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "rule": "line/must-not-intersect-polygons",
+      "note": "",
+      "clean": {
+        "input": [
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                12,
+                2
+              ],
+              [
+                18,
+                2
+              ]
+            ]
+          }
+        ],
+        "other": [
+          {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  0,
+                  0
+                ],
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ],
+                [
+                  0,
+                  10
+                ],
+                [
+                  0,
+                  0
+                ]
+              ]
+            ]
+          }
+        ]
+      },
+      "violation": {
+        "input": [
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                2,
+                2
+              ],
+              [
+                8,
+                2
+              ]
+            ]
+          }
+        ],
+        "other": [
+          {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  0,
+                  0
+                ],
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ],
+                [
+                  0,
+                  10
+                ],
+                [
+                  0,
+                  0
+                ]
+              ]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "rule": "line/endpoints-must-be-covered-by-polygon-boundaries",
+      "note": "",
+      "clean": {
+        "input": [
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                0,
+                5
+              ],
+              [
+                10,
+                5
+              ]
+            ]
+          }
+        ],
+        "other": [
+          {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  0,
+                  0
+                ],
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ],
+                [
+                  0,
+                  10
+                ],
+                [
+                  0,
+                  0
+                ]
+              ]
+            ]
+          }
+        ]
+      },
+      "violation": {
+        "input": [
+          {
+            "type": "LineString",
+            "coordinates": [
+              [
+                2,
+                2
+              ],
+              [
+                8,
+                2
+              ]
+            ]
+          }
+        ],
+        "other": [
+          {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  0,
+                  0
+                ],
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ],
+                [
+                  0,
+                  10
+                ],
+                [
+                  0,
+                  0
+                ]
+              ]
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "rule": "polygon/must-not-contain-points",
+      "note": "",
+      "clean": {
+        "input": [
+          {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  0,
+                  0
+                ],
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ],
+                [
+                  0,
+                  10
+                ],
+                [
+                  0,
+                  0
+                ]
+              ]
+            ]
+          }
+        ],
+        "other": [
+          {
+            "type": "Point",
+            "coordinates": [
+              0,
+              2
+            ]
+          }
+        ]
+      },
+      "violation": {
+        "input": [
+          {
+            "type": "Polygon",
+            "coordinates": [
+              [
+                [
+                  0,
+                  0
+                ],
+                [
+                  10,
+                  0
+                ],
+                [
+                  10,
+                  10
+                ],
+                [
+                  0,
+                  10
+                ],
+                [
+                  0,
+                  0
+                ]
+              ]
+            ]
+          }
+        ],
+        "other": [
+          {
+            "type": "Point",
+            "coordinates": [
+              2,
+              2
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "edge_cases": [
+    {
+      "rule": "point/must-not-overlap",
+      "name": "three coincident points",
+      "input": [
+        {
+          "type": "Point",
+          "coordinates": [
+            2,
+            2
+          ]
+        },
+        {
+          "type": "Point",
+          "coordinates": [
+            2,
+            2
+          ]
+        },
+        {
+          "type": "Point",
+          "coordinates": [
+            2,
+            2
+          ]
+        }
+      ],
+      "expected": 3
+    },
+    {
+      "rule": "point/must-be-inside",
+      "name": "point on polygon boundary",
+      "input": [
+        {
+          "type": "Point",
+          "coordinates": [
+            0,
+            2
+          ]
+        }
+      ],
+      "other": [
+        {
+          "type": "Polygon",
+          "coordinates": [
+            [
+              [
+                0,
+                0
+              ],
+              [
+                10,
+                0
+              ],
+              [
+                10,
+                10
+              ],
+              [
+                0,
+                10
+              ],
+              [
+                0,
+                0
+              ]
+            ]
+          ]
+        }
+      ],
+      "expected": 1
+    },
+    {
+      "rule": "line/must-not-have-dangles",
+      "name": "endpoint on another line interior",
+      "input": [
+        {
+          "type": "LineString",
+          "coordinates": [
+            [
+              0,
+              0
+            ],
+            [
+              10,
+              0
+            ]
+          ]
+        },
+        {
+          "type": "LineString",
+          "coordinates": [
+            [
+              5,
+              0
+            ],
+            [
+              5,
+              5
+            ]
+          ]
+        }
+      ],
+      "expected": 2
+    },
+    {
+      "rule": "line/must-not-intersect",
+      "name": "endpoint meeting",
+      "input": [
+        {
+          "type": "LineString",
+          "coordinates": [
+            [
+              0,
+              0
+            ],
+            [
+              4,
+              0
+            ]
+          ]
+        },
+        {
+          "type": "LineString",
+          "coordinates": [
+            [
+              4,
+              0
+            ],
+            [
+              8,
+              0
+            ]
+          ]
+        }
+      ],
+      "expected": 0
+    },
+    {
+      "rule": "line/must-not-intersect",
+      "name": "overlapping segments",
+      "input": [
+        {
+          "type": "LineString",
+          "coordinates": [
+            [
+              2,
+              2
+            ],
+            [
+              8,
+              2
+            ]
+          ]
+        },
+        {
+          "type": "LineString",
+          "coordinates": [
+            [
+              4,
+              2
+            ],
+            [
+              12,
+              2
+            ]
+          ]
+        }
+      ],
+      "expected": 1
+    },
+    {
+      "rule": "line/must-not-intersect-or-touch-interior",
+      "name": "endpoint meeting",
+      "input": [
+        {
+          "type": "LineString",
+          "coordinates": [
+            [
+              0,
+              0
+            ],
+            [
+              4,
+              0
+            ]
+          ]
+        },
+        {
+          "type": "LineString",
+          "coordinates": [
+            [
+              4,
+              0
+            ],
+            [
+              8,
+              0
+            ]
+          ]
+        }
+      ],
+      "expected": 0
+    },
+    {
+      "rule": "line/must-not-self-intersect",
+      "name": "repeated segment",
+      "input": [
+        {
+          "type": "LineString",
+          "coordinates": [
+            [
+              0,
+              0
+            ],
+            [
+              4,
+              0
+            ],
+            [
+              2,
+              0
+            ]
+          ]
+        }
+      ],
+      "expected": 1
+    },
+    {
+      "rule": "line/must-not-self-intersect",
+      "name": "self touch",
+      "input": [
+        {
+          "type": "LineString",
+          "coordinates": [
+            [
+              0,
+              0
+            ],
+            [
+              4,
+              0
+            ],
+            [
+              4,
+              4
+            ],
+            [
+              2,
+              0
+            ],
+            [
+              0,
+              4
+            ]
+          ]
+        }
+      ],
+      "expected": 0
+    },
+    {
+      "rule": "geometry/must-not-be-multipart",
+      "name": "single-part MultiLineString",
+      "input": [
+        {
+          "type": "MultiLineString",
+          "coordinates": [
+            [
+              [
+                2,
+                2
+              ],
+              [
+                8,
+                2
+              ]
+            ]
+          ]
+        }
+      ],
+      "expected": 0
+    },
+    {
+      "rule": "point/must-be-covered-by-lines",
+      "name": "point on endpoint",
+      "input": [
+        {
+          "type": "Point",
+          "coordinates": [
+            2,
+            2
+          ]
+        }
+      ],
+      "other": [
+        {
+          "type": "LineString",
+          "coordinates": [
+            [
+              2,
+              2
+            ],
+            [
+              8,
+              2
+            ]
+          ]
+        }
+      ],
+      "expected": 0
+    },
+    {
+      "rule": "line/must-not-cross-polygon-boundaries",
+      "name": "tangent at polygon corner",
+      "input": [
+        {
+          "type": "LineString",
+          "coordinates": [
+            [
+              -2,
+              2
+            ],
+            [
+              2,
+              -2
+            ]
+          ]
+        }
+      ],
+      "other": [
+        {
+          "type": "Polygon",
+          "coordinates": [
+            [
+              [
+                0,
+                0
+              ],
+              [
+                10,
+                0
+              ],
+              [
+                10,
+                10
+              ],
+              [
+                0,
+                10
+              ],
+              [
+                0,
+                0
+              ]
+            ]
+          ]
+        }
+      ],
+      "expected": 0
+    },
+    {
+      "rule": "geometry/must-not-be-contained-by",
+      "name": "equal polygons",
+      "input": [
+        {
+          "type": "Polygon",
+          "coordinates": [
+            [
+              [
+                0,
+                0
+              ],
+              [
+                10,
+                0
+              ],
+              [
+                10,
+                10
+              ],
+              [
+                0,
+                10
+              ],
+              [
+                0,
+                0
+              ]
+            ]
+          ]
+        }
+      ],
+      "other": [
+        {
+          "type": "Polygon",
+          "coordinates": [
+            [
+              [
+                0,
+                0
+              ],
+              [
+                10,
+                0
+              ],
+              [
+                10,
+                10
+              ],
+              [
+                0,
+                10
+              ],
+              [
+                0,
+                0
+              ]
+            ]
+          ]
+        }
+      ],
+      "expected": 0
+    },
+    {
+      "rule": "point/must-not-be-inside-polygons",
+      "name": "point on polygon boundary",
+      "input": [
+        {
+          "type": "Point",
+          "coordinates": [
+            0,
+            2
+          ]
+        }
+      ],
+      "other": [
+        {
+          "type": "Polygon",
+          "coordinates": [
+            [
+              [
+                0,
+                0
+              ],
+              [
+                10,
+                0
+              ],
+              [
+                10,
+                10
+              ],
+              [
+                0,
+                10
+              ],
+              [
+                0,
+                0
+              ]
+            ]
+          ]
+        }
+      ],
+      "expected": 0
+    },
+    {
+      "rule": "line/must-not-intersect-polygons",
+      "name": "line follows polygon edge",
+      "input": [
+        {
+          "type": "LineString",
+          "coordinates": [
+            [
+              0,
+              0
+            ],
+            [
+              10,
+              0
+            ]
+          ]
+        }
+      ],
+      "other": [
+        {
+          "type": "Polygon",
+          "coordinates": [
+            [
+              [
+                0,
+                0
+              ],
+              [
+                10,
+                0
+              ],
+              [
+                10,
+                10
+              ],
+              [
+                0,
+                10
+              ],
+              [
+                0,
+                0
+              ]
+            ]
+          ]
+        }
+      ],
+      "expected": 1
+    }
+  ]
+}
