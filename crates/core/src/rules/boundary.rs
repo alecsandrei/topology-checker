@@ -4,7 +4,6 @@ use crate::{
     Error, LayerId, RuleSpec, Topology, Violation, ViolationKind,
     aggregate::{Merge, aggregate},
     engine::line_graph::InputMode,
-    rules::line::parallel,
 };
 use geo::{Euclidean, Length};
 use std::collections::BTreeSet;
@@ -34,78 +33,64 @@ pub(super) fn linework(
     };
     let graph = t.graph_inputs(vec![(spec.layer, primary), (other, secondary)])?;
     let overlap = mode == Boundary::NotShared;
-    let mut violations = Vec::new();
-    let parts: Box<dyn Iterator<Item = usize> + '_> = match t.selected_feature() {
-        Some(key) => Box::new(
-            graph
-                .feature(key)
-                .into_iter()
-                .flat_map(|f| f.parts.iter().copied()),
-        ),
-        None => Box::new(0..graph.parts.len()),
-    };
-    for part_id in parts {
-        crate::cancel::check();
-        let part = &graph.parts[part_id];
-        if part.reference.layer != spec.layer {
+    let mut coverage = vec![Vec::new(); graph.parts.len()];
+    for m in graph.matches() {
+        let [a, b] = m.sources.map(|s| graph.segment(s));
+        let (ar, br) = (graph.parts[a.part].reference, graph.parts[b.part].reference);
+        if ar.layer == br.layer {
             continue;
         }
-        let targets = part
-            .nodes
-            .windows(2)
-            .map(|pair| {
-                let key = [pair[0].min(pair[1]), pair[0].max(pair[1])];
-                let id = graph
-                    .edges
-                    .binary_search_by_key(&key, |edge| edge.nodes)
-                    .expect("source edge");
-                let uses = graph.edges[id].uses(&graph);
-                let own_start = uses.partition_point(|u| u.part < part_id);
-                let own_end = uses.partition_point(|u| u.part <= part_id);
-                let other_start =
-                    uses.partition_point(|u| graph.parts[u.part].reference.layer < other);
-                let other_end =
-                    uses.partition_point(|u| graph.parts[u.part].reference.layer <= other);
-                let mut targets = BTreeSet::new();
-                for target in &uses[other_start..other_end] {
-                    if uses[own_start..own_end]
-                        .iter()
-                        .any(|u| parallel(graph.source(u.source), graph.source(target.source)))
-                    {
-                        targets.insert(graph.parts[target.part].reference);
-                        if !overlap {
-                            break;
-                        }
-                    }
-                }
-                targets
-            })
-            .collect::<Vec<_>>();
-        let destinations: Vec<_> = if overlap {
+        for (s, span, target) in [(a, m.spans[0], br), (b, m.spans[1], ar)] {
+            coverage[s.part].push((s.start as f64 + span[0], s.start as f64 + span[1], target));
+        }
+    }
+    let mut violations = Vec::new();
+    for (part_id, part) in graph.parts.iter().enumerate() {
+        crate::cancel::check();
+        if part.reference.layer != spec.layer
+            || t.selected_feature()
+                .is_some_and(|key| key != part.reference.feature())
+        {
+            continue;
+        }
+        let targets = &coverage[part_id];
+        let destinations = if overlap {
             targets
                 .iter()
-                .flatten()
-                .copied()
+                .map(|x| x.2)
                 .collect::<BTreeSet<_>>()
                 .into_iter()
                 .map(Some)
-                .collect()
+                .collect::<Vec<_>>()
         } else {
             vec![None]
         };
+        let original = graph.original(part_id);
+        let mut cuts = (0..original.0.len()).map(|i| i as f64).collect::<Vec<_>>();
+        cuts.extend(targets.iter().flat_map(|&(a, b, _)| [a, b]));
+        cuts.sort_by(f64::total_cmp);
+        cuts.dedup();
+        let coords = cuts
+            .iter()
+            .map(|&t| {
+                let i = (t.floor() as usize).min(original.0.len() - 2);
+                crate::engine::matching::point(
+                    geo::Line::new(original.0[i], original.0[i + 1]),
+                    t - i as f64,
+                )
+            })
+            .collect::<Vec<_>>();
         for destination in destinations {
-            let coords = &part.coords;
-            let selected = targets
-                .iter()
-                .map(|covered| {
-                    if let Some(r) = destination {
-                        covered.contains(&r)
-                    } else {
-                        covered.is_empty()
-                    }
+            let selected = cuts
+                .windows(2)
+                .map(|pair| {
+                    let covered = targets.iter().any(|&(a, b, r)| {
+                        pair[0] >= a && pair[1] <= b && destination.is_none_or(|d| d == r)
+                    });
+                    if overlap { covered } else { !covered }
                 })
                 .collect::<Vec<_>>();
-            for piece in selected_pieces(coords, &selected) {
+            for piece in selected_pieces(&coords, &selected) {
                 if Euclidean.length(&piece) > t.tolerance() {
                     violations.push(violation(
                         spec,

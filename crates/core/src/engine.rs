@@ -1,9 +1,11 @@
 pub(crate) mod arrangement;
+pub(crate) mod certified;
 pub(crate) mod cluster;
 pub(crate) mod cross;
 pub(crate) mod index;
 pub(crate) mod line_graph;
 pub(crate) mod location;
+pub(crate) mod matching;
 pub(crate) mod polygons;
 pub(crate) mod precision;
 pub(crate) mod storage;

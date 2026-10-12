@@ -338,3 +338,46 @@ def test_boundary_edge_property_2000_triangles() -> None:
             assert uncovered.geometry.is_valid
             assert uncovered.geometry.equals(triangle.boundary.difference(edge))
             assert uncovered.origin is not None and uncovered.origin.fid == 0
+
+
+CASE_FIXTURES = Path(__file__).parent / "fixtures/campaign"
+
+
+def case_geometry(name: str, key: str) -> BaseGeometry:
+    """Load frozen original binary coordinates, without campaign imports."""
+    data = json.loads((CASE_FIXTURES / f"{name}.json").read_text())
+    return shapely.from_wkt(cast(str, data[key]))
+
+
+def case_topology(
+    rule: Rule, a: list[BaseGeometry], b: list[BaseGeometry] | None, tolerance: float
+) -> Topology:
+    """Create explicit layers with stable remapped provenance."""
+    topology = Topology(tolerance=tolerance)
+    source = topology.add_layer(a, fids=[-91 + i for i in range(len(a))])
+    target = (
+        None
+        if b is None
+        else topology.add_layer(b, fids=[872 + i for i in range(len(b))])
+    )
+    topology.add_rule(rule, source, other=target)
+    return topology
+
+
+def assert_equivalent(topology: Topology) -> None:
+    """Require repeated output, valid geometry, and eager/stream equivalence."""
+    report = topology.validate()
+    assert all(v.geometry.is_valid for v in report.violations)
+    assert topology.validate().to_dict() == report.to_dict()
+    with topology.iter_validate(1) as stream:
+        assert [v.to_dict() for v in stream] == [v.to_dict() for v in report.violations]
+        assert (
+            stream.summary is not None
+            and stream.summary.error_count == report.error_count
+        )
+
+
+def case_geometries(name: str) -> list[BaseGeometry]:
+    """Load immutable original source collections for emission checks."""
+    data = json.loads((CASE_FIXTURES / f"{name}.json").read_text())
+    return [shapely.from_wkt(cast(str, wkt)) for wkt in data["geometries"]]

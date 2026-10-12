@@ -11,7 +11,13 @@ import shapely
 from shapely.geometry import GeometryCollection, Polygon, box
 from topology_checker import PrecisionError, Rule, Topology
 
-from .fraction_reference import point, signed_area, union_boundary
+from .fraction_reference import point, signed_area, substantial, union_boundary
+from .test_campaign import (
+    assert_equivalent,
+    case_geometries,
+    case_geometry,
+    case_topology,
+)
 
 TRIANGLE = [
     (-1782079.763005541, -2764781.752256425),
@@ -172,3 +178,73 @@ def test_feature_emission_precision_error_keeps_rule_layer_and_fid() -> None:
         with pytest.raises(PrecisionError, match="polygon feature emission.*FID -91"):
             list(stream)
         assert stream.summary is None
+
+
+@pytest.mark.parametrize("tol", [0.0, 0.001, 1.0])
+def test_dc_intersection_emission_matches_independent_area(tol: float) -> None:
+    """Valid original DC polygons have a 371430.874 square metre intersection."""
+    a, b = [case_geometry("dc_precinct_smd", key) for key in ["A", "B"]]
+    assert a.is_valid and b.is_valid
+    expected = a.intersection(b).area
+    assert expected == pytest.approx(371430.874, abs=0.001)
+    for reverse in [False, True]:
+        inputs = [shapely.reverse(g) for g in [a, b]] if reverse else [a, b]
+        topology = case_topology(Rule.MUST_NOT_OVERLAP, [inputs[0]], [inputs[1]], tol)
+        (v,) = topology.validate().violations
+        assert v.geometry.is_valid and v.geometry.area == pytest.approx(
+            expected, rel=1e-4
+        )
+        assert v.origin is not None and v.origin.part == 0 and v.origin.fid == -91
+        assert (
+            v.destination is not None
+            and v.destination.part == 0
+            and v.destination.fid == 872
+        )
+        assert_equivalent(topology)
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["ons_degree_two", "ons_adjacent_nodes", "ons_source_contacts", "ons_overlap"],
+)
+@pytest.mark.parametrize("tol", [0.0, 0.001, 1.0])
+def test_ons_intersections_preserve_source_order_and_incidence(
+    name: str, tol: float
+) -> None:
+    """Original and minimized ONS inputs must produce a valid substantial overlap."""
+    a, b = [case_geometry(name, key) for key in ["A", "B"]]
+    assert a.is_valid and b.is_valid
+    for reverse in [False, True]:
+        x, y = [shapely.reverse(g) for g in [a, b]] if reverse else [a, b]
+        topology = case_topology(Rule.MUST_NOT_OVERLAP, [x], [y], tol)
+        (v,) = topology.validate().violations
+        assert v.geometry.is_valid and v.geometry.area > 0
+        expected = a.intersection(b).area
+        assert v.geometry.area == pytest.approx(expected, rel=1e-4)
+        assert_equivalent(topology)
+
+
+@pytest.mark.parametrize("name", ["ons_gaps", "brp_contacts"])
+@pytest.mark.parametrize("tol", [0.0, 0.001, 1.0])
+def test_gap_emission_preserves_articulation_contacts(name: str, tol: float) -> None:
+    """Fraction source intervals independently establish shells and retained holes."""
+    inputs = case_geometries(name)
+    assert all(g.is_valid for g in inputs)
+    exact = union_boundary(inputs)
+    expected_holes = sum(substantial(r, tol) for r in exact.holes)
+    for order in itertools.permutations(range(len(inputs))):
+        topology = case_topology(
+            Rule.MUST_NOT_HAVE_GAPS, [inputs[i] for i in order], None, tol
+        )
+        report = topology.validate()
+        assert sum(
+            v.error_type.value == "outer-boundary" for v in report.violations
+        ) == len(exact.shells)
+        assert (
+            sum(v.error_type.value == "gap" for v in report.violations)
+            == expected_holes
+        )
+        assert all(
+            v.geometry.is_valid and v.geometry.is_ring for v in report.violations
+        )
+        assert_equivalent(topology)

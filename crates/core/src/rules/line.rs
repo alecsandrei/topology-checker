@@ -3,7 +3,7 @@ use crate::{
     engine::line_graph::LineGraph, merge::merge_edges,
 };
 use geo::{
-    Coord, Geometry, Kernel, LineString, MultiLineString, Point,
+    Coord, Geometry, Kernel, MultiLineString, Point,
     kernels::{Orientation, RobustKernel},
 };
 use std::collections::BTreeMap;
@@ -12,7 +12,7 @@ type Feature = (LayerId, i64);
 struct Overlap {
     a: FeatureRef,
     b: Option<FeatureRef>,
-    edges: Vec<usize>,
+    spans: BTreeMap<usize, Vec<[f64; 2]>>,
 }
 #[derive(Clone, Copy)]
 struct Meeting {
@@ -62,7 +62,33 @@ pub(super) fn run(t: &Topology, spec: RuleSpec, check: LineCheck) -> Result<Vec<
             let graph = isolated.graph(vec![layer])?;
             let mut errors = overlaps(&graph, spec, true, None);
             if matches!(check, LineCheck::SelfIntersect) {
-                errors.extend(self_crossings(&graph, spec));
+                // Original passages retain crossings that tolerance clustering
+                // would collapse onto a neighboring bend or source endpoint.
+                let mut exact = Topology::new(0.)?;
+                let exact_layer = exact.add_layer(crate::Layer::from_features(
+                    "self",
+                    [(fid, geometry.clone())],
+                ));
+                let original = exact.graph(vec![exact_layer])?;
+                errors.extend(
+                    self_crossings(&original, spec, t.tolerance())
+                        .into_iter()
+                        .filter(|v| {
+                            let Geometry::Point(p) = v.geometry else {
+                                return false;
+                            };
+                            !original.parts.iter().enumerate().any(|(i, part)| {
+                                let coords = &original.original(i).0;
+                                !part.closed()
+                                    && [coords[0], *coords.last().expect("source endpoint")]
+                                        .iter()
+                                        .any(|&q| {
+                                            crate::engine::cluster::distance(p.0, q)
+                                                <= t.tolerance()
+                                        })
+                            })
+                        }),
+                );
             }
             for mut error in errors {
                 if let Some(origin) = &mut error.origin {
@@ -85,7 +111,7 @@ pub(super) fn run(t: &Topology, spec: RuleSpec, check: LineCheck) -> Result<Vec<
         LineCheck::SelfOverlap => overlaps(&graph, spec, true, None),
         LineCheck::SelfIntersect => {
             let mut violations = overlaps(&graph, spec, true, None);
-            violations.extend(self_crossings(&graph, spec));
+            violations.extend(self_crossings(&graph, spec, t.tolerance()));
             violations
         }
         LineCheck::Intersect { touch } => {
@@ -185,126 +211,113 @@ fn feature_pairs(len: usize, chosen: Option<usize>) -> impl Iterator<Item = (usi
                 .map(move |j| (i, j))
         })
 }
-pub(crate) fn parallel(a: geo::Line, b: geo::Line) -> bool {
-    let p = Coord {
-        x: a.end.x - a.start.x,
-        y: a.end.y - a.start.y,
-    };
-    let q = Coord {
-        x: b.end.x - b.start.x,
-        y: b.end.y - b.start.y,
-    };
-    RobustKernel::orient2d(Coord { x: 0., y: 0. }, p, q) == Orientation::Collinear
-}
-fn compatible_overlap(a: geo::Line, b: geo::Line) -> bool {
-    if !parallel(a, b) {
-        return false;
-    }
-    let horizontal = (a.end.x - a.start.x).abs() >= (a.end.y - a.start.y).abs();
-    let values = if horizontal {
-        [a.start.x, a.end.x, b.start.x, b.end.x]
-    } else {
-        [a.start.y, a.end.y, b.start.y, b.end.y]
-    };
-    values[0].min(values[1]).max(values[2].min(values[3]))
-        < values[0].max(values[1]).min(values[2].max(values[3]))
-}
 fn overlaps(
     g: &LineGraph,
     spec: RuleSpec,
     self_rule: bool,
     selected_feature: Option<Feature>,
 ) -> Vec<Violation> {
+    use crate::engine::matching;
     let mut groups: BTreeMap<(Feature, Option<Feature>), Overlap> = BTreeMap::new();
-    let edges: Box<dyn Iterator<Item = (usize, &crate::engine::line_graph::Edge)> + '_> =
-        match selected_feature {
-            Some(key) => Box::new(
-                g.feature(key)
-                    .into_iter()
-                    .flat_map(|f| f.edges.iter().copied())
-                    .map(|id| (id, &g.edges[id])),
-            ),
-            None => Box::new(g.edges.iter().enumerate()),
-        };
-    for (edge_id, edge) in edges {
-        let mut features: BTreeMap<Feature, (FeatureRef, Vec<usize>)> = BTreeMap::new();
-        for usage in edge.uses(g) {
-            let reference = g.parts[usage.part].reference;
-            let entry = features
-                .entry(reference.feature())
-                .or_insert_with(|| (reference, Vec::new()));
-            entry.0.aggregate(reference);
-            entry.1.push(usage.source);
-        }
-        if self_rule {
-            for (key, (reference, count)) in features {
-                if count.iter().enumerate().any(|(i, &a)| {
-                    count[i + 1..]
-                        .iter()
-                        .any(|&b| compatible_overlap(g.source(a), g.source(b)))
-                }) {
-                    let group = groups.entry((key, None)).or_insert(Overlap {
-                        a: reference,
-                        b: None,
-                        edges: Vec::new(),
-                    });
-                    group.a.aggregate(reference);
-                    group.edges.push(edge_id);
-                }
-            }
-        } else {
-            let (features, sources): (Vec<_>, Vec<_>) = features.into_values().unzip();
-            let chosen =
-                selected_feature.and_then(|key| features.iter().position(|r| r.feature() == key));
-            if selected_feature.is_some() && chosen.is_none() {
+    // Choose an immutable representative by geometry, independent of FIDs,
+    // input order and traversal direction. Unequal segmentation remains local.
+    let reversed = (0..g.parts.len())
+        .map(|part| {
+            let coords = &g.original(part).0;
+            coords
+                .iter()
+                .zip(coords.iter().rev())
+                .map(|(a, b)| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)))
+                .find(|o| !o.is_eq())
+                .is_some_and(|o| o.is_gt())
+        })
+        .collect::<Vec<_>>();
+    for matched in g.matches() {
+        crate::cancel::check();
+        let [x, y] = matched.sources;
+        let (xp, yp) = (g.segment(x).part, g.segment(y).part);
+        let (xr, yr) = (g.parts[xp].reference, g.parts[yp].reference);
+        let (a, b) = if self_rule {
+            if xr.feature() != yr.feature() {
                 continue;
             }
-            for (i, j) in feature_pairs(features.len(), chosen) {
-                if !sources[i].iter().any(|&a| {
-                    sources[j]
-                        .iter()
-                        .any(|&b| compatible_overlap(g.source(a), g.source(b)))
-                }) {
-                    continue;
-                }
-                let Some((a, b)) = selected(spec, features[i], features[j]) else {
-                    continue;
-                };
-                if selected_feature.is_some_and(|key| a.feature() != key) {
-                    continue;
-                }
-                let group = groups
-                    .entry((a.feature(), Some(b.feature())))
-                    .or_insert(Overlap {
-                        a,
-                        b: Some(b),
-                        edges: Vec::new(),
-                    });
-                group.a.aggregate(a);
-                if let Some(old) = &mut group.b {
-                    old.aggregate(b);
-                }
-                group.edges.push(edge_id);
+            let mut a = xr;
+            a.aggregate(yr);
+            (a, None)
+        } else {
+            let Some((a, b)) = selected(spec, xr, yr) else {
+                continue;
+            };
+            if selected_feature.is_some_and(|key| a.feature() != key) {
+                continue;
             }
+            (a, Some(b))
+        };
+        let (ac, bc) = (&g.original(xp).0, &g.original(yp).0);
+        let cmp = (0..ac.len().min(bc.len()))
+            .map(|i| {
+                let a = ac[if reversed[xp] { ac.len() - i - 1 } else { i }];
+                let b = bc[if reversed[yp] { bc.len() - i - 1 } else { i }];
+                a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y))
+            })
+            .find(|o| !o.is_eq())
+            .unwrap_or_else(|| ac.len().cmp(&bc.len()));
+        let side = usize::from(cmp.is_gt());
+        let group = groups
+            .entry((a.feature(), b.map(FeatureRef::feature)))
+            .or_insert(Overlap {
+                a,
+                b,
+                spans: BTreeMap::new(),
+            });
+        group.a.aggregate(a);
+        if let (Some(old), Some(b)) = (&mut group.b, b) {
+            old.aggregate(b);
         }
+        group
+            .spans
+            .entry(matched.sources[side])
+            .or_default()
+            .push(matched.spans[side]);
     }
     groups
         .into_values()
-        .map(|group| {
-            let lines = merge_edges(
-                &g.coords,
-                &group
-                    .edges
-                    .into_iter()
-                    .map(|id| g.edges[id].nodes)
-                    .collect::<Vec<_>>(),
-            );
+        .filter_map(|group| {
+            let mut coords = Vec::new();
+            let mut nodes = BTreeMap::new();
+            let mut edges = Vec::new();
+            for (source, spans) in group.spans {
+                for span in matching::union(spans) {
+                    let mut pair = [0; 2];
+                    for (i, t) in span.into_iter().enumerate() {
+                        let p = matching::point(g.source(source), t);
+                        let key = (
+                            crate::engine::cluster::bits(p.x),
+                            crate::engine::cluster::bits(p.y),
+                        );
+                        pair[i] = *nodes.entry(key).or_insert_with(|| {
+                            let id = coords.len();
+                            coords.push(p);
+                            id
+                        });
+                    }
+                    if pair[0] != pair[1] {
+                        edges.push(pair);
+                    }
+                }
+            }
+            let mut lines = merge_edges(&coords, &edges);
+            use geo::Length;
+            lines.retain(|line| geo::Euclidean.length(line) > g.tolerance);
+            if lines.is_empty() {
+                return None;
+            }
             let geometry = if lines.len() == 1 {
-                Geometry::LineString(lines.into_iter().next().unwrap_or_else(LineString::empty))
+                Geometry::LineString(lines.remove(0))
             } else {
                 MultiLineString(lines).into()
             };
-            Violation {
+            Some(Violation {
                 rule: spec.rule,
                 kind: if self_rule {
                     ViolationKind::SelfOverlap
@@ -314,7 +327,7 @@ fn overlaps(
                 geometry,
                 origin: Some(group.a),
                 destination: group.b,
-            }
+            })
         })
         .collect()
 }
@@ -374,6 +387,22 @@ fn meetings(
             if !(a.interior && b.interior || touch && (a.interior || b.interior)) {
                 continue;
             }
+            if g.matched_pair(a.reference.feature(), b.reference.feature())
+                .iter()
+                .any(|&id| {
+                    let m = &g.matches()[id];
+                    m.sources.iter().zip(m.spans).any(|(&s, span)| {
+                        let (t, projected) =
+                            crate::engine::line_graph::projection(g.source(s), g.coords[node]);
+                        t >= span[0]
+                            && t <= span[1]
+                            && crate::engine::cluster::distance(projected, g.coords[node])
+                                <= g.tolerance
+                    })
+                })
+            {
+                continue;
+            }
             // A shared edge is already an overlap, not an extra crossing at every vertex.
             if uses.iter().any(|usage| {
                 let edge = &g.edges[usage.edge];
@@ -423,10 +452,13 @@ fn crosses(origin: Coord, a: [Coord; 2], b: [Coord; 2]) -> bool {
     });
     (0..4).all(|i| rays[i].1 != rays[(i + 1) % 4].1)
 }
-fn self_crossings(g: &LineGraph, spec: RuleSpec) -> Vec<Violation> {
+fn self_crossings(g: &LineGraph, spec: RuleSpec, tolerance: f64) -> Vec<Violation> {
     type Passage = (FeatureRef, [usize; 2]);
     let mut visits: BTreeMap<(usize, Feature), Vec<Passage>> = BTreeMap::new();
-    for part in &g.parts {
+    for (part_id, part) in g.parts.iter().enumerate() {
+        if crate::engine::line_graph::collapsed(g.original(part_id), tolerance) {
+            continue;
+        }
         for triple in part.nodes.windows(3) {
             visits
                 .entry((triple[1], part.reference.feature()))
