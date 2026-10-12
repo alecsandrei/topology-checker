@@ -1,10 +1,9 @@
 //! Indexed validity checks after degenerate-ring cleanup.
+use super::location::Location;
 use crate::engine::index;
 use geo::{
-    BoundingRect, LineIntersection, LineString, Polygon, Relate,
-    line_intersection::line_intersection,
+    BoundingRect, LineIntersection, LineString, Polygon, line_intersection::line_intersection,
 };
-use geo::{coordinate_position::CoordPos, dimensions::Dimensions};
 
 pub(crate) fn ring(ring: &LineString) -> Option<&'static str> {
     let segments = ring.lines().collect::<Vec<_>>();
@@ -118,8 +117,112 @@ pub(crate) fn polygon(polygon: &Polygon) -> Option<(usize, &'static str)> {
     None
 }
 
-pub(crate) fn multipart(a: &Polygon, b: &Polygon) -> bool {
-    let matrix = a.relate(b);
-    matrix.get(CoordPos::Inside, CoordPos::Inside) != Dimensions::Empty
-        || matrix.get(CoordPos::OnBoundary, CoordPos::OnBoundary) == Dimensions::OneDimensional
+pub(crate) fn multipart(a: &Location, b: &Location) -> bool {
+    let (small, large) = if a.segments.len() <= b.segments.len() {
+        (a, b)
+    } else {
+        (b, a)
+    };
+    for segment in &small.segments {
+        crate::cancel::check();
+        #[cfg(test)]
+        SCANNED.with(|n| n.set(n.get() + 1));
+        let mut cuts = Vec::new();
+        for item in large
+            .tree
+            .locate_in_envelope_intersecting(&index::envelope(segment.bounding_rect()))
+        {
+            match line_intersection(*segment, large.segments[item.data]) {
+                Some(LineIntersection::Collinear { .. }) => {
+                    return true;
+                }
+                Some(LineIntersection::SinglePoint {
+                    is_proper: true, ..
+                }) => return true,
+                Some(LineIntersection::SinglePoint { intersection, .. }) => cuts.push(intersection),
+                None => {}
+            }
+        }
+        if !cuts.is_empty() {
+            cuts.extend([segment.start, segment.end]);
+            cuts.sort_by(|a, b| {
+                super::line_graph::projection(*segment, *a)
+                    .0
+                    .total_cmp(&super::line_graph::projection(*segment, *b).0)
+            });
+            cuts.dedup();
+            if cuts
+                .windows(2)
+                .any(|p| super::arrangement::midpoint_inside(large, p[0], p[1]))
+            {
+                return true;
+            }
+        }
+    }
+    // Each exterior and hole boundary is connected. One non-boundary vertex
+    // decides containment after the robust contact checks above.
+    fn contained(a: &Location, b: &Location) -> bool {
+        a.anchors.iter().any(|&range| {
+            a.segments[range.0..range.1]
+                .iter()
+                .map(|s| b.position(s.start))
+                .find(|&p| p != 0)
+                == Some(1)
+        })
+    }
+    contained(a, b) || contained(b, a)
+}
+
+#[cfg(test)]
+thread_local! { static SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn islands_query_small_boundaries_without_rescanning_large_rings() {
+        let n = 20_000;
+        let mut ring = (0..n)
+            .map(|i| {
+                let t = i as f64 * std::f64::consts::TAU / n as f64;
+                geo::Coord {
+                    x: 1000. * t.cos(),
+                    y: 1000. * t.sin(),
+                }
+            })
+            .collect::<Vec<_>>();
+        ring.push(ring[0]);
+        let disc = Location::new(&Polygon::new(LineString(ring), vec![]));
+        SCANNED.with(|n| n.set(0));
+        for i in 0..100 {
+            let x = 800. + (i % 10) as f64 * 9.;
+            let y = 800. + (i / 10) as f64 * 9.;
+            let square = geo::Rect::new(
+                geo::Coord { x, y },
+                geo::Coord {
+                    x: x + 4.,
+                    y: y + 4.,
+                },
+            )
+            .to_polygon();
+            let island = Location::new(&square);
+            assert!(!multipart(&disc, &island));
+            assert!(!multipart(&island, &disc));
+        }
+        assert_eq!(SCANNED.with(|n| n.get()), 800);
+    }
+    #[test]
+    fn crossing_through_vertices_is_not_a_point_contact() {
+        let square =
+            geo::Rect::new(geo::Coord { x: 0., y: 0. }, geo::Coord { x: 2., y: 2. }).to_polygon();
+        let triangle = Polygon::new(
+            LineString::from(vec![(-1., -1.), (3., 3.), (-1., 3.), (-1., -1.)]),
+            vec![],
+        );
+        assert!(multipart(
+            &Location::new(&square),
+            &Location::new(&triangle)
+        ));
+    }
 }

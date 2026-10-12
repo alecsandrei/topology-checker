@@ -716,9 +716,12 @@ fn validate_output(polygons: &[Polygon]) -> Result<(), Error> {
             .enumerate()
             .filter_map(|(i, p)| p.bounding_rect().map(|r| (i, r))),
     );
-    if index::pairs(&tree, &tree, 0., true)
-        .any(|(a, b)| super::validity::multipart(&polygons[a], &polygons[b]))
-    {
+    if index::pairs(&tree, &tree, 0., true).any(|(a, b)| {
+        super::validity::multipart(
+            &super::location::Location::new(&polygons[a]),
+            &super::location::Location::new(&polygons[b]),
+        )
+    }) {
         return Err(precision_error("emitted polygon parts overlap"));
     }
     Ok(())
