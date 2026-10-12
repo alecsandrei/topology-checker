@@ -10,9 +10,20 @@ import time
 import traceback
 from pathlib import Path
 
-from qgis.core import Qgis, QgsApplication, QgsFeature, QgsProject, QgsVectorLayer
+from qgis.core import (
+    Qgis,
+    QgsApplication,
+    QgsFeature,
+    QgsProject,
+    QgsVectorLayer,
+    QgsWkbTypes,
+)
 from qgis.PyQt.QtCore import PYQT_VERSION_STR, QT_VERSION_STR, QMetaObject, Qt, QTimer
-from qgis.PyQt.QtGui import QAction
+
+try:
+    from qgis.PyQt.QtGui import QAction
+except ImportError:
+    from qgis.PyQt.QtWidgets import QAction
 from qgis.PyQt.QtWidgets import (
     QApplication,
     QComboBox,
@@ -58,16 +69,10 @@ def load(path: str, name: str) -> tuple:
 def fresh(source: tuple, name: str) -> QgsVectorLayer:
     """Copy preloaded geometries, then verify actual memory-provider IDs."""
     original, features, ids = source
-    layer = QgsVectorLayer(f"{original.wkbType().name}?crs=EPSG:3857", name, "memory")
-    # Qt enum names can be WKB-prefixed; use the canonical QGIS type string.
-    if not layer.isValid():
-        from qgis.core import QgsWkbTypes
-
-        layer = QgsVectorLayer(
-            f"{QgsWkbTypes.displayString(original.wkbType())}?crs=EPSG:3857",
-            name,
-            "memory",
-        )
+    # Use the canonical type string for both Qt 5 integer and Qt 6 enum types.
+    layer = QgsVectorLayer(
+        f"{QgsWkbTypes.displayString(original.wkbType())}?crs=EPSG:3857", name, "memory"
+    )
     copies = []
     for feature in features:
         copy = QgsFeature()

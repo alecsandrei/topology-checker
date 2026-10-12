@@ -1,0 +1,25 @@
+[project]
+name = "topology-gis-benchmark"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "matplotlib>=3.10,<4",
+    "psycopg[binary]>=3.2,<4",
+    "shapely>=2.1,<3",
+]
+
+[dependency-groups]
+dev = ["pytest>=8,<10", "ruff>=0.11,<1", "pyright>=1.1,<2"]
+
+[tool.ruff]
+target-version = "py312"
+
+[tool.pytest.ini_options]
+pythonpath = ["../.."]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "UP", "B"]
+
+[tool.pyright]
+exclude = ["gvsig_bridge.py", "grass_worker.py", "grass_native.py", "gvsig_native.py", "qgis_worker.py", ".venv"]
+extraPaths = ["../.."]
