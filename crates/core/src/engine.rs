@@ -1,4 +1,5 @@
 pub(crate) mod arrangement;
+pub(crate) mod certified;
 pub(crate) mod cluster;
 pub(crate) mod cross;
 pub(crate) mod index;

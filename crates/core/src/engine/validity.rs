@@ -59,6 +59,8 @@ pub(crate) fn polygon(polygon: &Polygon) -> Option<(usize, &'static str)> {
             .filter_map(|(i, p)| p.bounding_rect().map(|r| (i, r))),
     );
     let mut parents = (0..rings.len()).collect::<Vec<_>>();
+    let mut contact_nodes = std::collections::BTreeMap::new();
+    let mut contact_uses = std::collections::BTreeSet::new();
     fn root(parents: &[usize], mut i: usize) -> usize {
         while parents[i] != i {
             i = parents[i];
@@ -104,13 +106,25 @@ pub(crate) fn polygon(polygon: &Polygon) -> Option<(usize, &'static str)> {
             {
                 return Some((i, "nested or overlapping holes"));
             }
-            for _ in contacts {
-                let a = root(&parents, i);
-                let b = root(&parents, j);
-                if a == b {
-                    return Some((i, "disconnected interior"));
+            for contact in contacts {
+                let node = *contact_nodes.entry(contact).or_insert_with(|| {
+                    let id = parents.len();
+                    parents.push(id);
+                    id
+                });
+                // Contact locations are graph vertices too. Several holes
+                // meeting at one articulation form a star, not a cycle.
+                for ring in [i, j] {
+                    if !contact_uses.insert((ring, node)) {
+                        continue;
+                    }
+                    let a = root(&parents, ring);
+                    let b = root(&parents, node);
+                    if a == b {
+                        return Some((i, "disconnected interior"));
+                    }
+                    parents[a] = b;
                 }
-                parents[a] = b;
             }
         }
     }
@@ -179,6 +193,19 @@ thread_local! { static SCANNED: std::cell::Cell<usize> = const { std::cell::Cell
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn holes_at_one_contact_form_a_star_and_two_contacts_form_a_cycle() {
+        let shell =
+            geo::Rect::new(geo::Coord { x: 0., y: 0. }, geo::Coord { x: 10., y: 10. }).to_polygon();
+        let holes = vec![
+            LineString::from(vec![(5., 5.), (3., 4.), (3., 6.), (5., 5.)]),
+            LineString::from(vec![(5., 5.), (4., 3.), (6., 3.), (5., 5.)]),
+            LineString::from(vec![(5., 5.), (7., 6.), (7., 4.), (5., 5.)]),
+        ];
+        assert!(polygon(&Polygon::new(shell.exterior().clone(), holes)).is_none());
+        let pinched = LineString::from(vec![(0., 4.), (4., 4.), (4., 6.), (0., 6.), (0., 4.)]);
+        assert!(polygon(&Polygon::new(shell.exterior().clone(), vec![pinched])).is_some());
+    }
 
     #[test]
     fn islands_query_small_boundaries_without_rescanning_large_rings() {

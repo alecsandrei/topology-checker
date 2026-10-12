@@ -27,7 +27,7 @@ impl Exact {
     fn input(p: Coord) -> Self {
         Self::Input(p)
     }
-    fn rational(x: Q, y: Q) -> Self {
+    pub(super) fn rational(x: Q, y: Q) -> Self {
         Self::Rational(Box::new((x, y)))
     }
     pub(super) fn xy(&self) -> (Q, Q) {
@@ -181,7 +181,7 @@ fn ends(edge: usize, edges: &[Edge]) -> [usize; 2] {
         [nodes[1], nodes[0]]
     }
 }
-fn angle(a: &Exact, b: &Exact, origin: &Exact) -> Ordering {
+pub(super) fn angle(a: &Exact, b: &Exact, origin: &Exact) -> Ordering {
     if let (Exact::Input(a), Exact::Input(b), Exact::Input(o)) = (a, b, origin) {
         let half = |p: &Coord| p.y < o.y || p.y == o.y && p.x < o.x;
         return half(a)
