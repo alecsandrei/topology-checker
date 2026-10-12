@@ -142,6 +142,19 @@ fn pair(
                     contacts.push(Point(point));
                 }
             }
+            if let Some([span, _]) =
+                crate::engine::matching::interval(segment, boundary, t.tolerance())
+            {
+                let first = i as f64 + span[0];
+                let last = i as f64 + span[1];
+                boundary_intervals.push((first, last));
+                for parameter in span {
+                    cuts.push(Cut {
+                        position: i as f64 + parameter,
+                        point: crate::engine::matching::point(segment, parameter),
+                    });
+                }
+            }
             if mode == LinePolygon::Intersect && t.tolerance() > 0. {
                 // A minimum segment distance occurs at an endpoint projection unless
                 // they cross, which has already supplied an exact contact.

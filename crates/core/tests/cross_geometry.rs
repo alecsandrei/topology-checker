@@ -943,3 +943,126 @@ fn contained_features_support_all_target_families_and_topological_equality() {
     assert_eq!(errors[0].geometry, point(1., 1.));
     assert_eq!(errors[0].destination.unwrap().part, Some(0));
 }
+
+use serde_json::Value;
+use topology_checker_core::geo::Coord;
+
+fn geometry(value: &Value) -> Geometry {
+    let line = |v: &Value| {
+        LineString(
+            v.as_array()
+                .unwrap()
+                .iter()
+                .map(|p| Coord {
+                    x: p[0].as_f64().unwrap(),
+                    y: p[1].as_f64().unwrap(),
+                })
+                .collect(),
+        )
+    };
+    let polygon = |v: &Value| {
+        let rings = v.as_array().unwrap();
+        Polygon::new(line(&rings[0]), rings[1..].iter().map(line).collect())
+    };
+    let coordinates = &value["coordinates"];
+    match value["type"].as_str().unwrap() {
+        "LineString" => line(coordinates).into(),
+        "MultiLineString" => {
+            MultiLineString(coordinates.as_array().unwrap().iter().map(line).collect()).into()
+        }
+        "Polygon" => polygon(coordinates).into(),
+        "MultiPolygon" => MultiPolygon(
+            coordinates
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(polygon)
+                .collect(),
+        )
+        .into(),
+        other => panic!("unexpected fixture geometry {other}"),
+    }
+}
+fn fixture(name: &str) -> Vec<Geometry> {
+    let data: Value = serde_json::from_str(include_str!("fixtures/geometry_cases.json")).unwrap();
+    data[name]["geometries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(geometry)
+        .collect()
+}
+fn topology(rule: Rule, geometries: Vec<Geometry>, binary: bool, tolerance: f64) -> Topology {
+    let mut t = Topology::new(tolerance).unwrap();
+    if binary {
+        let a = t.add_layer(Layer::from_features(
+            "source",
+            [(-91, geometries[0].clone())],
+        ));
+        let b = t.add_layer(Layer::from_features(
+            "target",
+            [(872, geometries[1].clone())],
+        ));
+        t.add_rule(rule, a, Some(b)).unwrap();
+    } else {
+        let a = t.add_layer(Layer::from_features(
+            "source",
+            geometries
+                .into_iter()
+                .enumerate()
+                .map(|(i, g)| (i as i64 - 91, g)),
+        ));
+        t.add_rule(rule, a, None).unwrap();
+    }
+    t
+}
+#[test]
+fn chicago_near_boundary_interval_is_contact() {
+    let t = topology(
+        Rule::LineMustNotCrossPolygonBoundaries,
+        fixture("chicago_boundary"),
+        true,
+        0.001,
+    );
+    assert_eq!(t.validate().unwrap().violation_count(), 0);
+}
+#[test]
+fn nearby_bent_original_intervals_support_both_boundary_coverage_directions() {
+    let a = LineString::from(vec![(0., 0.), (5., 1.), (10., 0.)]);
+    let b = LineString::from(vec![(0., 0.001), (2.5, 0.501), (5., 1.001), (10., 0.001)]);
+    for rule in [
+        Rule::LineMustNotOverlapWith,
+        Rule::LineMustNotIntersectWith,
+        Rule::LineMustNotIntersectOrTouchInteriorWith,
+    ] {
+        let t = topology(rule, vec![a.clone().into(), b.clone().into()], true, 1.);
+        let r = t.validate().unwrap();
+        assert_eq!(r.violation_count(), 1);
+        assert_eq!(r.violations().next().unwrap().kind, ViolationKind::Overlap);
+    }
+    let p = Polygon::new(
+        LineString::from(vec![
+            (0., 0.),
+            (5., 1.),
+            (10., 0.),
+            (10., -5.),
+            (0., -5.),
+            (0., 0.),
+        ]),
+        vec![],
+    );
+    let t = topology(
+        Rule::LineMustBeCoveredByPolygonBoundaries,
+        vec![b.clone().into(), p.clone().into()],
+        true,
+        1.,
+    );
+    assert_eq!(t.validate().unwrap().violation_count(), 0);
+    let t = topology(
+        Rule::PolygonBoundariesMustBeCoveredByLines,
+        vec![p.into(), b.into()],
+        true,
+        1.,
+    );
+    assert_eq!(t.validate().unwrap().violation_count(), 1);
+}
