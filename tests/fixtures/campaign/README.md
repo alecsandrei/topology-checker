@@ -1,1 +1,4 @@
 These immutable regression fixtures were copied from the sibling topology-checker-test campaign of 2026-10-11. geometries.json contains only geometry constants extracted from the minimized reproducers, without their bug-present assertions. The original campaign remains unchanged. Natural Earth supplied BUG-018; BUG-019 contains Boston Census and Washington DC boundaries; BUG-021 contains IGN Argentina pipeline geometry. See the original campaign DATASETS.md for provenance and licenses.
+
+
+`chicago_boundary.json` preserves Chicago transportation FID 31294 and community area FID 57 from the prepared WKB caches. At 1 mm tolerance the excursion lies along a sustained nearby boundary interval. `tiger_near_duplicate.json` preserves the source road reproducer. Bent synthetic copies use original interior vertices and unequal segmentation; their common length is exactly twice sqrt(26).

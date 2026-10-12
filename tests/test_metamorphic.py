@@ -13,7 +13,13 @@ from shapely.geometry import GeometryCollection, LineString, Point, Polygon, box
 from shapely.geometry.base import BaseGeometry
 from topology_checker import Rule, Topology
 
-from .test_campaign import geometry, run
+from .test_campaign import (
+    assert_equivalent,
+    case_geometry,
+    case_topology,
+    geometry,
+    run,
+)
 
 
 def transform(g: BaseGeometry, scale: float, offset: float) -> BaseGeometry:
@@ -198,3 +204,140 @@ def test_duplicate_multipart_pair_aggregates_without_part_product_storage() -> N
     assert len(result) == 1 and result[0].geometry.equals(Point(0, 0))
     assert result[0].origin is not None and result[0].origin.part is None
     assert result[0].destination is not None and result[0].destination.part is None
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [
+        Rule.MUST_NOT_OVERLAP,
+        Rule.MUST_NOT_INTERSECT,
+        Rule.MUST_NOT_INTERSECT_OR_TOUCH_INTERIOR,
+    ],
+)
+@pytest.mark.parametrize("binary", [False, True])
+@pytest.mark.parametrize("tolerance", [0.0, 0.125])
+@pytest.mark.parametrize(
+    "scale,offset", [(1.0, 0.0), (2.0**-8, 256.0), (256.0, -65536.0)]
+)
+def test_nearby_bent_intervals_with_unequal_segmentation(
+    rule: Rule, binary: bool, tolerance: float, scale: float, offset: float
+) -> None:
+    """Equal and unequal segmentation describe the same longitudinal interval."""
+    delta = 0.0 if tolerance == 0 else 2.0**-10
+    a = LineString([(0, 0), (5, 1), (10, 0)])
+    b = LineString(
+        [
+            (0, delta),
+            (2.5, 0.5 + delta),
+            (5, 1 + delta),
+            (7.5, 0.5 + delta),
+            (10, delta),
+        ]
+    )
+    for reverse, order in itertools.product([False, True], [(0, 1), (1, 0)]):
+        geoms = [
+            affine_transform(g, [scale, 0, 0, scale, offset, -offset]) for g in [a, b]
+        ]
+        if reverse:
+            geoms = [shapely.reverse(g) for g in geoms]
+        x, y = [geoms[i] for i in order]
+        far = affine_transform(
+            LineString([(100, 100), (110, 100)]), [scale, 0, 0, scale, offset, -offset]
+        )
+        topology = case_topology(
+            rule,
+            [x, far] if binary else [x, y, far],
+            [y] if binary else None,
+            tolerance * scale,
+        )
+        (violation,) = topology.validate().violations
+        assert violation.error_type.value == "overlap"
+        assert violation.geometry.length == pytest.approx(a.length * scale, rel=1e-10)
+        assert violation.geometry.hausdorff_distance(x) <= max(delta * scale * 2, 1e-9)
+        assert violation.origin is not None and violation.origin.fid == -91
+        assert violation.destination is not None and violation.destination.fid == (
+            872 if binary else -90
+        )
+        assert_equivalent(topology)
+
+
+@pytest.mark.parametrize("tolerance", [0.0, 0.125, 1.0])
+def test_nearby_boundary_intervals_in_both_coverage_directions(
+    tolerance: float,
+) -> None:
+    """Nearby top edges are contact; the remaining three sides total 20 units."""
+    delta = 0.0 if tolerance == 0 else 2.0**-10
+    line = LineString([(0, delta), (5, 1 + delta), (10, delta)])
+    polygon = Polygon([(0, 0), (5, 1), (10, 0), (10, -5), (0, -5)])
+    for reverse in [False, True]:
+        target = shapely.reverse(polygon) if reverse else polygon
+        for rule in [
+            Rule.MUST_NOT_OVERLAP_BOUNDARIES,
+            Rule.MUST_NOT_OVERLAP,
+            Rule.MUST_NOT_INTERSECT,
+        ]:
+            topology = case_topology(rule, [line], [target], tolerance)
+            (v,) = topology.validate().violations
+            assert v.geometry.length == pytest.approx(line.length)
+            assert v.origin is not None and v.origin.fid == -91
+            assert v.destination is not None and v.destination.fid == 872
+            assert_equivalent(topology)
+        assert (
+            case_topology(
+                Rule.MUST_BE_COVERED_BY_BOUNDARIES, [line], [target], tolerance
+            )
+            .validate()
+            .is_valid
+        )
+        assert (
+            case_topology(Rule.MUST_NOT_CROSS_BOUNDARIES, [line], [target], tolerance)
+            .validate()
+            .is_valid
+        )
+        topology = case_topology(
+            Rule.BOUNDARIES_MUST_BE_COVERED_BY, [target], [line], tolerance
+        )
+        assert sum(
+            v.geometry.length for v in topology.validate().violations
+        ) == pytest.approx(20.0)
+        assert_equivalent(topology)
+
+
+def test_chicago_near_boundary_interval_is_contact() -> None:
+    """The tiny interior excursion remains within 1 mm of a shared boundary run."""
+    a, b = [case_geometry("chicago_boundary", key) for key in ["A", "B"]]
+    assert a.crosses(b)
+    assert a.difference(b).length > 0
+    for reverse in [False, True]:
+        x = shapely.reverse(a) if reverse else a
+        assert (
+            case_topology(Rule.MUST_NOT_CROSS_BOUNDARIES, [x], [b], 0.001)
+            .validate()
+            .is_valid
+        )
+        assert (
+            case_topology(Rule.MUST_NOT_CROSS_BOUNDARIES, [x], [b], 0.0)
+            .validate()
+            .error_count
+            == 1
+        )
+
+
+def test_near_duplicate_roads_and_projected_endpoint_cuts() -> None:
+    """Nanometre road differences and projected endpoint cuts retain full runs."""
+    a, b = [case_geometry("tiger_near_duplicate", key) for key in ["ROAD_A", "ROAD_B"]]
+    for rule in [
+        Rule.MUST_NOT_OVERLAP,
+        Rule.MUST_NOT_INTERSECT,
+        Rule.MUST_NOT_INTERSECT_OR_TOUCH_INTERIOR,
+    ]:
+        topology = case_topology(rule, [a], [b], 1.0)
+        (v,) = topology.validate().violations
+        assert v.error_type.value == "overlap" and v.geometry.length == pytest.approx(
+            51.802, abs=0.001
+        )
+        assert_equivalent(topology)
+    a = LineString([(0, 0), (5, 1), (10, 0)])
+    b = affine_transform(a, [1, 0, 0, 1, 2**-10, 0])
+    (v,) = case_topology(Rule.MUST_NOT_OVERLAP, [a], [b], 1.0).validate().violations
+    assert v.geometry.length == pytest.approx(a.length)

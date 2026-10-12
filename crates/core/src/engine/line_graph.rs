@@ -14,12 +14,13 @@ use geo::{
 use num_rational::BigRational;
 use num_traits::ToPrimitive;
 use std::collections::{BTreeMap, HashMap};
+type FeatureKey = (LayerId, i64);
+type MatchPairs = BTreeMap<(FeatureKey, FeatureKey), Vec<usize>>;
 
 #[derive(Debug)]
 pub(crate) struct GraphPart {
     pub reference: FeatureRef,
     pub nodes: Vec<usize>,
-    pub coords: Vec<Coord>,
     pub is_closed: bool,
     original: Shared<LineString>,
 }
@@ -54,7 +55,15 @@ pub(crate) struct LineGraph {
     pub incident: Incidences,
     pub uses: Vec<EdgeUse>,
     sources: Vec<Segment>,
+    matches: Cache<Vec<Matched>>,
+    match_pairs: Cache<MatchPairs>,
+    pub tolerance: f64,
     by_feature: Cache<BTreeMap<(LayerId, i64), FeatureGraph>>,
+}
+#[derive(Debug)]
+pub(crate) struct Matched {
+    pub sources: [usize; 2],
+    pub spans: [[f64; 2]; 2],
 }
 #[derive(Debug, Default)]
 pub(crate) struct FeatureGraph {
@@ -213,6 +222,54 @@ impl IndexedNodes {
     }
 }
 impl LineGraph {
+    pub fn matched_pair(&self, a: (LayerId, i64), b: (LayerId, i64)) -> &[usize] {
+        let key = if a < b { (a, b) } else { (b, a) };
+        self.match_pairs
+            .get_or_init(|| {
+                let mut pairs = BTreeMap::<_, Vec<_>>::new();
+                for (i, m) in self.matches().iter().enumerate() {
+                    let [a, b] = m
+                        .sources
+                        .map(|s| self.parts[self.segment(s).part].reference.feature());
+                    let key = if a < b { (a, b) } else { (b, a) };
+                    pairs.entry(key).or_default().push(i);
+                }
+                pairs
+            })
+            .get(&key)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+    pub fn original(&self, part: usize) -> &LineString {
+        &self.parts[part].original
+    }
+    pub fn segment(&self, source: usize) -> Segment {
+        self.sources[source]
+    }
+    pub fn matches(&self) -> &[Matched] {
+        self.matches.get_or_init(|| {
+            let tree = index::build(
+                self.sources
+                    .iter()
+                    .enumerate()
+                    .map(|(i, _)| (i, self.source(i).bounding_rect())),
+            );
+            let mut result = Vec::new();
+            for (a, b) in index::pairs(&tree, &tree, self.tolerance, true) {
+                crate::cancel::check();
+                if let Some(spans) =
+                    super::matching::interval(self.source(a), self.source(b), self.tolerance)
+                {
+                    result.push(Matched {
+                        sources: [a, b],
+                        spans,
+                    });
+                }
+            }
+            result.sort_unstable_by_key(|m| m.sources);
+            result
+        })
+    }
     pub fn source(&self, index: usize) -> Line {
         self.sources[index].line(&self.parts)
     }
@@ -251,9 +308,6 @@ impl LineGraph {
             .get(&key)
     }
     pub fn build(t: &Topology, layers: &[(LayerId, InputMode)]) -> Result<Self, Error> {
-        let retain_coords = layers
-            .iter()
-            .any(|(_, mode)| *mode == InputMode::PolygonBoundary);
         let mut parts = Vec::new();
         let mut segments = Vec::new();
         let mut endpoints = Vec::new();
@@ -282,11 +336,6 @@ impl LineGraph {
                     // Graphs belong to one topology, so parts carry final layer IDs.
                     reference: reference.at(layer),
                     nodes: Vec::with_capacity(geometry.0.len()),
-                    coords: if retain_coords {
-                        Vec::with_capacity(geometry.0.len())
-                    } else {
-                        Vec::new()
-                    },
                     is_closed: closed,
                     original: geometry.clone(),
                 });
@@ -391,7 +440,6 @@ impl LineGraph {
             cuts.sort_by(|a, b| parameter(line, *a).total_cmp(&parameter(line, *b)));
             cuts.dedup();
             let mut nodes = Vec::new();
-            let mut coords = Vec::new();
             for point in cuts {
                 let node = if let Some(indexed) = &indexed {
                     indexed.node(point)
@@ -400,16 +448,12 @@ impl LineGraph {
                 };
                 if nodes.last() != Some(&node) {
                     nodes.push(node);
-                    coords.push(point);
                 }
             }
             let part = &mut parts[s.part];
-            for (&node, &point) in nodes.iter().zip(&coords) {
+            for &node in &nodes {
                 if part.nodes.last() != Some(&node) {
                     part.nodes.push(node);
-                    if retain_coords {
-                        part.coords.push(point);
-                    }
                 }
             }
             for pair in nodes.windows(2) {
@@ -487,6 +531,9 @@ impl LineGraph {
         }
         let incident = Incidences { offsets, values };
         Ok(Self {
+            matches: Cache::new(),
+            match_pairs: Cache::new(),
+            tolerance: t.tolerance(),
             by_feature: Cache::new(),
             coords,
             sources: segments,
