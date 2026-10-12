@@ -808,5 +808,44 @@
       },
       "note": "Counts, valid geometry, provenance and repeated/eager/streaming equality were asserted for all gap workloads; line and query memory gates and duplicate-stream memory bounds were asserted in isolated processes."
     }
+  },
+  "line_union_coverage": {
+    "before": {
+      "validate_s": 12.708,
+      "violations": 10
+    },
+    "legacy": {
+      "validate_s": 0.099,
+      "violations": 400,
+      "note": "Legacy output count uses different individual-polygon coverage behavior."
+    },
+    "release": {
+      "workload": "line_inside",
+      "ingest_s": 0.009389291051775217,
+      "validate_s": 0.017462999909184873,
+      "violations": 10,
+      "peak_rss_bytes": 83345408,
+      "equivalence": true
+    },
+    "maximum_validate_s": 2.0,
+    "native_structural_bound": "Fewer than 2000 candidate polygon visits for 8000 segments and 40 boxes, rather than 320000 full-route candidates.",
+    "verification": {
+      "rust_workspace_passed": 203,
+      "python_passed": 495,
+      "metamorphic_passed": 63,
+      "clippy": "passed",
+      "ruff": "passed",
+      "pyright": "passed",
+      "frontend_unit_passed": 19,
+      "browser_passed": 10,
+      "bug_018_isolated_s": 0.35,
+      "bug_018_maximum_s": 10,
+      "wheel": "Rebuilt release wheel, regular installation without GeoPandas passed",
+      "source_distribution": "Fresh isolated build from extracted source archive and regular installation passed"
+    },
+    "artifact_sha256": {
+      "wheel_native": "91bd3268722877ec6a2d6b38185f8e152e1d68c7781b6aa24b15766a170fc6d1",
+      "source_build_native": "91bd3268722877ec6a2d6b38185f8e152e1d68c7781b6aa24b15766a170fc6d1"
+    }
   }
 }

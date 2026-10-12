@@ -372,3 +372,41 @@ def test_near_duplicate_roads_and_projected_endpoint_cuts() -> None:
     b = affine_transform(a, [1, 0, 0, 1, 2**-10, 0])
     (v,) = case_topology(Rule.MUST_NOT_OVERLAP, [a], [b], 1.0).validate().violations
     assert v.geometry.length == pytest.approx(a.length)
+
+
+@pytest.mark.parametrize("tol", [0.0, 0.001, 0.1])
+def test_long_routes_are_clipped_against_segment_local_polygon_union(
+    tol: float,
+) -> None:
+    """Independent union clipping preserves outside pieces and original vertices."""
+    lines = [
+        LineString([(i / 8, y + math.sin(i / 8)) for i in range(801)]) for y in [0, 10]
+    ]
+    polygons = [box(x, -5, x + 3, 20) for x in range(0, 100, 10)]
+    for scale, offset in [(1.0, 0.0), (2.0, 2.0**20)]:
+        for reverse in [False, True]:
+            inputs = [
+                transform(shapely.reverse(g) if reverse else g, scale, offset)
+                for g in lines
+            ]
+            targets = [
+                transform(shapely.reverse(g) if reverse else g, scale, offset)
+                for g in polygons
+            ]
+            if reverse:
+                targets.reverse()
+            targets.append(box(-(2.0**30), -(2.0**30), -(2.0**30) + 1, -(2.0**30) + 1))
+            expected = [g.difference(shapely.union_all(targets)) for g in inputs]
+            t = Topology(tolerance=tol * scale)
+            a = t.add_layer(inputs, fids=[-91, 872])
+            b = t.add_layer(targets, fids=list(range(900, 900 + len(targets))))
+            t.add_rule(Rule.MUST_BE_INSIDE, a, other=b)
+            report = t.validate()
+            assert report.error_count == 2
+            for v in report.violations:
+                assert v.origin is not None and v.destination is None
+                reference = expected[0 if v.origin.fid == -91 else 1]
+                assert v.geometry.is_valid
+                assert v.geometry.hausdorff_distance(reference) < 1e-8 * scale
+                assert v.geometry.length == pytest.approx(reference.length, rel=1e-10)
+            assert_equivalent(t)

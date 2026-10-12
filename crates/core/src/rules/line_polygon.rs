@@ -282,74 +282,7 @@ pub(super) fn inside(
         .lines
         .par_iter()
         .flat_map_iter(|line| {
-            let Some(rect) = line.geometry.bounding_rect() else {
-                return Vec::new();
-            };
-            let locations = target
-                .polygon_index()
-                .locate_in_envelope_intersecting(&index::envelope(rect))
-                .map(|item| &target_locations[item.data])
-                .collect::<Vec<_>>();
-            let mut cuts = Vec::new();
-            let mut shared = Vec::new();
-            for (i, s) in line.geometry.lines().enumerate() {
-                crate::cancel::check();
-                cuts.push(Cut {
-                    position: i as f64,
-                    point: s.start,
-                });
-                cuts.push(Cut {
-                    position: (i + 1) as f64,
-                    point: s.end,
-                });
-                for location in &locations {
-                    for item in location
-                        .tree
-                        .locate_in_envelope_intersecting(&index::envelope(s.bounding_rect()))
-                    {
-                        let boundary = location.segments[item.data];
-                        if let Some(contact) = line_intersection(s, boundary) {
-                            let points = match contact {
-                                LineIntersection::SinglePoint {
-                                    intersection,
-                                    is_proper,
-                                } => vec![if is_proper {
-                                    proper_intersection(s, boundary).unwrap_or(intersection)
-                                } else {
-                                    intersection
-                                }],
-                                LineIntersection::Collinear { intersection } => {
-                                    let a = i as f64 + projection(s, intersection.start).0;
-                                    let b = i as f64 + projection(s, intersection.end).0;
-                                    shared.push((a.min(b), a.max(b)));
-                                    vec![intersection.start, intersection.end]
-                                }
-                            };
-                            for point in points {
-                                cuts.push(Cut {
-                                    position: i as f64 + projection(s, point).0,
-                                    point,
-                                });
-                            }
-                        }
-                    }
-                }
-            }
-            cuts.sort_by(|a, b| a.position.total_cmp(&b.position));
-            cuts.dedup_by(|a, b| a.position == b.position);
-            let coords = cuts.iter().map(|c| c.point).collect::<Vec<_>>();
-            let outside = cuts
-                .windows(2)
-                .map(|c| {
-                    !shared
-                        .iter()
-                        .any(|&(a, b)| c[0].position >= a && c[1].position <= b)
-                        && !locations.iter().any(|p| {
-                            crate::engine::arrangement::midpoint_inside(p, c[0].point, c[1].point)
-                        })
-                })
-                .collect::<Vec<_>>();
-            selected_pieces(&coords, &outside)
+            outside_pieces(line.geometry.as_ref(), target, target_locations)
                 .into_iter()
                 .filter(|piece| Euclidean.length(piece) > t.tolerance())
                 .map(|piece| {
@@ -365,4 +298,125 @@ pub(super) fn inside(
         })
         .collect();
     Ok(aggregate(violations, Merge::AllDimensions))
+}
+
+#[cfg(test)]
+thread_local! { static SEGMENT_POLYGONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+
+fn outside_pieces(
+    line: &LineString,
+    target: &crate::model::Parts,
+    locations: &[Location],
+) -> Vec<LineString> {
+    let mut coords = Vec::new();
+    let mut outside = Vec::new();
+    for segment in line.lines() {
+        crate::cancel::check();
+        // Polygon bounds restrict both boundary cuts and interval classification.
+        // A whole-line box can otherwise select every polygon along a long route.
+        let mut candidates = target
+            .polygon_index()
+            .locate_in_envelope_intersecting(&index::envelope(segment.bounding_rect()))
+            .map(|item| item.data)
+            .collect::<Vec<_>>();
+        candidates.sort_unstable();
+        #[cfg(test)]
+        SEGMENT_POLYGONS.with(|n| n.set(n.get() + candidates.len()));
+        let mut cuts = vec![
+            Cut {
+                position: 0.,
+                point: segment.start,
+            },
+            Cut {
+                position: 1.,
+                point: segment.end,
+            },
+        ];
+        let mut shared = Vec::new();
+        for &i in &candidates {
+            let location = &locations[i];
+            for item in location
+                .tree
+                .locate_in_envelope_intersecting(&index::envelope(segment.bounding_rect()))
+            {
+                crate::cancel::check();
+                let boundary = location.segments[item.data];
+                if let Some(contact) = line_intersection(segment, boundary) {
+                    let points = match contact {
+                        LineIntersection::SinglePoint {
+                            intersection,
+                            is_proper,
+                        } => vec![if is_proper {
+                            proper_intersection(segment, boundary).unwrap_or(intersection)
+                        } else {
+                            intersection
+                        }],
+                        LineIntersection::Collinear { intersection } => {
+                            let a = projection(segment, intersection.start).0;
+                            let b = projection(segment, intersection.end).0;
+                            shared.push((a.min(b), a.max(b)));
+                            vec![intersection.start, intersection.end]
+                        }
+                    };
+                    for point in points {
+                        cuts.push(Cut {
+                            position: projection(segment, point).0,
+                            point,
+                        });
+                    }
+                }
+            }
+        }
+        cuts.sort_by(|a, b| a.position.total_cmp(&b.position));
+        cuts.dedup_by(|a, b| a.position == b.position);
+        outside.extend(cuts.windows(2).map(|pair| {
+            !shared
+                .iter()
+                .any(|&(a, b)| pair[0].position >= a && pair[1].position <= b)
+                && !candidates.iter().any(|&i| {
+                    crate::engine::arrangement::midpoint_inside(
+                        &locations[i],
+                        pair[0].point,
+                        pair[1].point,
+                    )
+                })
+        }));
+        if coords.is_empty() {
+            coords.push(cuts[0].point);
+        }
+        coords.extend(cuts[1..].iter().map(|c| c.point));
+    }
+    selected_pieces(&coords, &outside)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn line_coverage_queries_only_segment_local_polygons() {
+        let mut t = Topology::new(0.001).unwrap();
+        let target = t.add_layer(crate::Layer::from_geometries(
+            "boxes",
+            (0..40).map(|i| {
+                let x = i as f64 * 25.;
+                Geometry::Polygon(
+                    geo::Rect::new(Coord { x, y: -5. }, Coord { x: x + 3., y: 5. }).to_polygon(),
+                )
+            }),
+        ));
+        let target = t.parts(target).unwrap();
+        let line = LineString(
+            (0..8000)
+                .map(|i| {
+                    let x = i as f64 / 8.;
+                    Coord { x, y: x.sin() }
+                })
+                .collect(),
+        );
+        SEGMENT_POLYGONS.with(|n| n.set(0));
+        let pieces = outside_pieces(&line, target, location::locations(target));
+        assert_eq!(pieces.len(), 40);
+        assert!(SEGMENT_POLYGONS.with(|n| n.get()) < 2000);
+        assert!(pieces.iter().all(|p| p.0.len() > 2));
+    }
 }
