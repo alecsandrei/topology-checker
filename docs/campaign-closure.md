@@ -188,3 +188,12 @@ The follow-up Rust workspace suite passes 202 checks. The rebuilt release wheel 
 The ONS gap workload completes in 13.904 seconds with 5,174 valid rings; BRP gaps in 1.571 seconds with 5,923 rings. Both pass repeated/eager/streaming equivalence. Valid time-zone inputs retain 383 shells and 43 holes at zero tolerance, and 27 holes at tolerance 1. Repaired inputs retain 20 shells and 139 or 9 holes respectively. All four time-zone jobs finish in under 36 seconds total and peak below 2.7 GB, within the 15-minute and 32-GiB caps.
 
 The 50,000-line workload peaks at 479,576,064 bytes, a 54.6% reduction from the established baseline. The polygon-query workload completes in 0.089 seconds against 28.087 seconds previously. Duplicate streaming returns every one of 3,123,750 and 12,497,500 pairs, with process peaks of 59.8 and 63.5 MB respectively.
+
+
+## Segment-local line coverage
+
+Long routes previously tested every source segment and every cut interval against all polygons intersecting the whole route's bounding box. Segment-local polygon candidates now drive boundary cuts and union coverage classification. Original vertices, boundary coverage, outside pieces and whole-feature provenance are retained.
+
+The supplied ten-route workload (8,000 vertices per route and 40 boxes) drops from 12.708 seconds to 0.017 seconds, passing its two-second gate. It emits ten union-based violations, with independently verified GEOS union-difference geometry and repeated/eager/streaming equivalence. The legacy package takes 0.099 seconds but emits 400 violations under different coverage behavior. A structural native test bounds candidate visits below 2,000 instead of 320,000. Existing tests additionally cover zero and positive tolerance, reversal, binary scaling, translation, polygon order, signed FIDs and unrelated geometry.
+
+The final Rust workspace suite passes 203 checks; all 495 Python checks pass, including 63 metamorphic checks. Clippy, Ruff, formatting, strict Pyright, 19 frontend unit checks and 10 browser checks pass. The unchanged isolated ten-second gap test completes in 0.35 seconds. No TeX compilation or push to master is performed.
