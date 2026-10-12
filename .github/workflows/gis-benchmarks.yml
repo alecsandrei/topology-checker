@@ -7,13 +7,6 @@ on:
         type: choice
         options: [headline, full]
         default: headline
-  push:
-    branches: [gis-benchmarks]
-    paths:
-      - .github/workflows/gis-benchmarks.yml
-      - benchmarks/gis/**
-      - '!benchmarks/gis/results/**'
-      - benchmarks/qgis/*.py
 permissions:
   contents: read
 concurrency:

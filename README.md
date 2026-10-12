@@ -2,7 +2,9 @@
 
 topology-checker checks map data for duplicate points, gaps, overlaps, and disconnected lines. Use it with Python, the command line, or the local web app. See the [documentation](https://alecsandrei.github.io/topology-checker/).
 
-![Measured validation runtime against QGIS Topology Checker](benchmarks/qgis/results/comparison.png)
+![Validation time for topology-checker, QGIS 4.2, GRASS GIS, PostGIS and gvSIG](benchmarks/gis/results/comparison.png)
+
+Two shared topology checks on identical inputs, using the same native Linux runner and one logical CPU. The figure uses the largest common feature count every tool completes correctly. Dots show median validation time; whiskers show the interquartile range. See the [measurements](benchmarks/gis/results/README.md) and [benchmark methodology](benchmarks/gis/README.md).
 
 ## Python API
 
