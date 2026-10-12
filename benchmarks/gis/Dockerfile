@@ -12,13 +12,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gdal-bin git grass libgdal-dev libssl-dev pkg-config postgresql \
     postgresql-postgis python3 python3-gdal python3-venv unzip xvfb xauth \
     && rm -rf /var/lib/apt/lists/*
-RUN curl -fsSL --retry 3 \
+COPY benchmarks/gis/gvsig-download-chain.pem /opt/gvsig-download-chain.pem
+RUN cat /etc/ssl/certs/ca-certificates.crt /opt/gvsig-download-chain.pem > /tmp/gvsig-ca.pem \
+    && curl --cacert /tmp/gvsig-ca.pem \
+    --ciphers 'ECDHE+AESGCM:ECDHE+AES:RSA+AESGCM:RSA+AES' -fsSL --retry 3 \
     https://downloads.gvsig.org/download/gvsig-desktop-testing/dists/2.7.0/builds/5016/gvSIG-desktop-2.7.0-5016-final-lin-x86_64.zip \
     -o /tmp/gvsig.zip \
     && echo '05ce17089583c1a3968f2a26c95488529dcd3f7931854532838e8279cf6881e0  /tmp/gvsig.zip' | sha256sum -c - \
     && unzip -q /tmp/gvsig.zip -d /opt \
     && mv /opt/gvSIG-desktop-2.7.0-5016-final-lin-x86_64 /opt/gvsig \
-    && rm /tmp/gvsig.zip \
+    && rm /tmp/gvsig.zip /tmp/gvsig-ca.pem \
     && rm -rf /opt/gvsig/gvSIG/extensiones/jre
 COPY --from=java_runtime /opt/java/openjdk /opt/gvsig/gvSIG/extensiones/jre
 COPY --from=rust_toolchain /usr/local/cargo /usr/local/cargo

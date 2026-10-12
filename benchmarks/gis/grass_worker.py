@@ -10,6 +10,7 @@ import grass.script as gs
 
 DIRECTORY = Path(os.environ["GIS_WORKER_DIRECTORY"])
 SOURCE_FILES = json.loads(os.environ["GIS_WORKER_FIXTURE"])
+MAP_TYPES = {}
 SELECTIONS = {
     "point/must-be-inside": ("within", True),
     "point/must-be-covered-by-lines": ("intersects", True),
@@ -40,7 +41,9 @@ def rows(map_name: str) -> list[dict]:
     """Recover preserved benchmark IDs from the result map's category table."""
     connection = gs.vector_db(map_name).get(1)
     if connection is None:
-        return []
+        info = gs.vector_info_topo(map_name)
+        count = info.get("areas", 0) or (info.get("points", 0) + info.get("lines", 0))
+        return [{"kind": "violation", "id": None, "layer": 0} for _ in range(count)]
     selected = gs.vector_db_select(map_name, columns="bench_id")
     return [
         {"kind": "violation", "id": int(row[0]), "layer": 0}
@@ -52,6 +55,10 @@ def main() -> None:
     """Import uncleaned templates, then sample with freshly built topology."""
     try:
         for name, path in SOURCE_FILES.items():
+            kind = json.loads(Path(path).read_text())["features"][0]["geometry"]["type"]
+            MAP_TYPES[name] = (
+                "area" if "Polygon" in kind else "point" if "Point" in kind else "line"
+            )
             gs.run_command(
                 "v.in.ogr",
                 input=path,
@@ -113,6 +120,8 @@ def main() -> None:
                     "v.select",
                     ainput="input",
                     binput="other",
+                    atype=MAP_TYPES["input"],
+                    btype=MAP_TYPES["other"],
                     output="errors",
                     operator=operator,
                     flags="r" if reverse else "",

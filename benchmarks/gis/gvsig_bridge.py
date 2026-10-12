@@ -45,6 +45,7 @@ def wkt(geometry):
 def fresh_store(manager, geometries):
     """Copy preloaded native geometries into a fresh in-memory feature store."""
     from org.gvsig.fmap.dal import DataTypes
+    from org.gvsig.fmap.geom import Geometry
 
     store = manager.createMemoryStore(None)
     store.edit()
@@ -52,7 +53,7 @@ def fresh_store(manager, geometries):
     schema.add("bench_id", DataTypes.INT)
     attribute = schema.add("GEOMETRY", DataTypes.GEOMETRY)
     schema.setDefaultGeometryAttributeName("GEOMETRY")
-    attribute.setGeometryType(geometries[0][1].getType(), 2)
+    attribute.setGeometryType(geometries[0][1].getType(), Geometry.SUBTYPES.GEOM2D)
     store.update(schema)
     for fid, geometry in geometries:
         feature = store.createNewFeature()
