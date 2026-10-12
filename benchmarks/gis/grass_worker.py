@@ -39,6 +39,9 @@ def phase(value: str) -> None:
 
 def rows(map_name: str) -> list[dict]:
     """Recover preserved benchmark IDs from the result map's category table."""
+    # v.select produces no vector map when the selected set is empty.
+    if not gs.find_file(map_name, element="vector")["name"]:
+        return []
     connection = gs.vector_db(map_name).get(1)
     if connection is None:
         info = gs.vector_info_topo(map_name)

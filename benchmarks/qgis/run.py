@@ -104,6 +104,16 @@ class QgisSession:
             QGIS_CONTINUOUS_INTEGRATION_RUN="true",
             QT_QPA_PLATFORM=os.environ.get("QT_QPA_PLATFORM", "offscreen"),
         )
+        # QGIS embeds system Python. A runner's venv can otherwise redirect its
+        # interpreter prefix and hide the distribution's Qt bindings.
+        virtual_env = environment.pop("VIRTUAL_ENV", None)
+        environment.pop("PYTHONHOME", None)
+        if virtual_env:
+            environment["PATH"] = os.pathsep.join(
+                part
+                for part in environment.get("PATH", "").split(os.pathsep)
+                if Path(part) != Path(virtual_env) / "bin"
+            )
         # All IPC files are unique to this session, never to the user's app.
         self.process = subprocess.Popen(
             [

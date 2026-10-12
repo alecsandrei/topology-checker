@@ -3,7 +3,10 @@
 import hashlib
 import json
 import os
+import shutil
+import signal
 import subprocess
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -99,7 +102,7 @@ def capture(session: Session, rule: str, timeout: float) -> dict[str, Any]:
 
 def sample_rounds(
     rule: str,
-    sessions: dict[str, Session],
+    sessions: Mapping[str, Session],
     repetitions: int,
     warmups: int,
     timeout: float,
@@ -195,11 +198,23 @@ class WorkerSession:
             return
         self.closed = True
         if self.process.poll() is None:
-            import signal
-
             os.killpg(self.process.pid, signal.SIGTERM)
         close_process(self.process)
+        # A launcher can exit while its JVM is still flushing preferences. Stop
+        # every remaining process in this worker's private group before cleanup.
+        try:
+            os.killpg(self.process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
         self.log.close()
+        app = self.directory / "app"
+        native_log = app / "preferences/gvSIG/gvSIG.log"
+        if native_log.is_file():
+            with native_log.open("rb") as stream:
+                stream.seek(max(0, native_log.stat().st_size - 256000))
+                (self.directory / "gvsig.log").write_bytes(stream.read())
+        if app.is_dir():
+            shutil.rmtree(app)
 
 
 def command_output(parts: list[str]) -> str:

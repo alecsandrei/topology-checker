@@ -9,7 +9,6 @@ on:
       - benchmarks/gis/**
       - '!benchmarks/gis/results/**'
       - benchmarks/qgis/*.py
-      - tests/test_gis_benchmark.py
 permissions:
   contents: read
 concurrency:
@@ -35,7 +34,7 @@ jobs:
       - name: Test adapters and comparison gates
         run: |
           docker run --rm --entrypoint bash topology-gis-benchmark:ci -c \
-            'uv run --project benchmarks/gis --frozen --no-sync pytest tests/test_gis_benchmark.py -q && uv run --project benchmarks/gis --frozen --no-sync ruff check benchmarks/gis tests/test_gis_benchmark.py && uv run --project benchmarks/gis --frozen --no-sync pyright --project benchmarks/gis'
+            'uv run --project benchmarks/gis --frozen --no-sync pytest benchmarks/gis/tests -q && uv run --project benchmarks/gis --frozen --no-sync ruff check benchmarks/gis && uv run --project benchmarks/gis --frozen --no-sync pyright --project benchmarks/gis'
       - name: Native engine smoke checks
         env:
           GIS_SOURCE_REVISION: ${{ github.sha }}

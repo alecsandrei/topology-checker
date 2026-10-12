@@ -14,18 +14,18 @@ LABELS = {
 }
 GVSIG = {
     "point/must-not-overlap": "MustBeDisjointPoint",
-    "point/must-be-inside": "MustBeProperlyInsidePolygonsPoint",
+    "point/must-be-inside": "PointMustBeProperlyInsidePolygon",
     "line/must-not-have-dangles": "MustNotHaveDanglesLine",
     "line/must-not-overlap-with": "MustNotOverlapWithLine",
     "line/must-be-inside": "MustBeInsideLine",
     "line/must-not-intersect": "MustNotIntersectLine",
     "line/must-not-intersect-with": "MustNotIntersectWithLine",
-    "polygon/must-not-overlap": "MustNotOverlapPolygon",
+    "polygon/must-not-overlap": "PolygonMustNotOverlapPolygon",
     "polygon/must-not-have-gaps": "MustNotHaveGapsPolygon",
     "point/must-be-covered-by-lines": "PointsMustBeCoveredByLinePoint",
     "point/must-be-covered-by-line-endpoints": "MustBeCoveredByEndpointOfPoint",
     "point/must-be-covered-by-polygon-boundaries": "MustBeCoveredByBoundaryOfPoint",
-    "polygon/must-contain-point": "ContainsPointPolygon",
+    "polygon/must-contain-point": "PolygonContainsPoint",
 }
 GRASS = {
     "point/must-be-inside": "within, reverse selection",

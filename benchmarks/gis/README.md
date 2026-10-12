@@ -39,8 +39,10 @@ geometries are inside. Response extraction and serialization are outside.
 PostGIS records a server-side duration for GiST indexes, statistics and SQL
 result materialization. GRASS includes native module launch and native output
 writing. QGIS invokes the stock C++ Topology Checker with canvas painting
-disabled. gvSIG invokes a fresh stock TopologyPlan with UI disabled and lazy
-spatial indexes. Unavailable gvSIG factories are reported explicitly.
+disabled. gvSIG invokes a fresh stock TopologyPlan with native memory stores and
+UI disabled. Its private profile disables unrelated addon autoruns to avoid
+background startup work during validation. Native indexing follows each store
+provider's policy. Unavailable gvSIG factories are reported explicitly.
 
 GRASS duplicate removal and dangle cleaning are repair workflows, so their
 timings are retained without validation speedup ratios. The shared figure uses
@@ -77,7 +79,7 @@ the OSS publication gate.
 ## Harness checks
 
 ```sh
-uv run --project benchmarks/gis --group dev pytest tests/test_gis_benchmark.py
-uv run --project benchmarks/gis --group dev ruff check benchmarks/gis tests/test_gis_benchmark.py
+uv run --project benchmarks/gis --group dev pytest benchmarks/gis/tests
+uv run --project benchmarks/gis --group dev ruff check benchmarks/gis
 uv run --project benchmarks/gis --group dev pyright --project benchmarks/gis
 ```

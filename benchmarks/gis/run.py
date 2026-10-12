@@ -140,6 +140,9 @@ def start(
     data: dict[str, Any],
 ) -> Session:
     """Launch a session and record exact engine versions."""
+    available = data["engines"][engine].get("available_rules")
+    if engine == "gvsig" and available and SUPPORT[engine][rule] not in available:
+        raise EngineFailure("unsupported", "Mapped rule absent from installed gvSIG")
     session = create_session(engine, rule, fixture, directory, args.startup_timeout)
     data["engines"][engine].update(session.metadata)
     data["engines"][engine]["status"] = "ready"
@@ -303,7 +306,13 @@ def parse_args() -> argparse.Namespace:
         "--engines", nargs="+", choices=[*ENGINES, "fme"], default=[*ENGINES, "fme"]
     )
     parser.add_argument(
-        "--rules", nargs="+", choices=list(FIXTURES), default=list(FIXTURES)
+        "--rules",
+        nargs="+",
+        choices=list(FIXTURES),
+        default=[
+            *SHARED_RULES,
+            *(rule for rule in FIXTURES if rule not in SHARED_RULES),
+        ],
     )
     parser.add_argument("--sizes", nargs="+", type=int, default=[1000, 10000, 100000])
     parser.add_argument("--repetitions", type=int, default=10)
@@ -382,7 +391,8 @@ def main() -> None:
         failed = [
             f"{r['rule']}: {name}"
             for r in data["rules"]
-            for name in ENGINES
+            for name in args.engines
+            if name in ENGINES
             if not r["workloads"][0]["comparisons"].get(name, {}).get("eligible")
         ]
         if failed:

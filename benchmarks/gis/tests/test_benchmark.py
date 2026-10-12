@@ -51,6 +51,7 @@ def test_rotating_order_and_stop() -> None:
     class Session:
         def __init__(self, name: str) -> None:
             self.name = name
+            self.metadata = {}
 
         def sample(self, rule: str, timeout: float) -> dict:
             calls.append(self.name)

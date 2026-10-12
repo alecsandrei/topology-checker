@@ -7,7 +7,12 @@ gis_distribution="${GIS_GVSIG_HOME:-/opt/gvsig}"
 gis_session_app="$1/app"
 mkdir -p "$gis_session_app"
 cp -as "$gis_distribution/." "$gis_session_app/"
-gis_addon="$gis_session_app/preferences/gvSIG/plugins/org.gvsig.scripting.app.mainplugin/2.7.0/scripts/addons/GisBenchmark"
+gis_addons="$gis_session_app/preferences/gvSIG/plugins/org.gvsig.scripting.app.mainplugin/2.7.0/scripts/addons"
+# Unrelated addon autoruns can continue on background threads after readiness.
+# Remove only descriptors in this private profile; keep the stock gap rule.
+find "$gis_addons" -name autorun.inf \
+  ! -path '*/TopologyRuleMustNotHaveGapsPolygon/*' -delete
+gis_addon="$gis_addons/GisBenchmark"
 mkdir -p "$gis_addon"
 cp /workspace/benchmarks/gis/gvsig_bridge.py "$gis_addon/autorun.py"
 cat > "$gis_addon/autorun.inf" <<'EOF'

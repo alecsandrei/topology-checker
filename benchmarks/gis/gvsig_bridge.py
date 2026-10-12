@@ -49,7 +49,8 @@ def fresh_store(manager, geometries):
 
     store = manager.createMemoryStore(None)
     store.edit()
-    schema = manager.createFeatureType()
+    # Preserve the native memory store's feature-type identity and OID settings.
+    schema = store.getDefaultFeatureType().getEditable()
     schema.add("bench_id", DataTypes.INT)
     attribute = schema.add("GEOMETRY", DataTypes.GEOMETRY)
     schema.setDefaultGeometryAttributeName("GEOMETRY")
@@ -58,7 +59,9 @@ def fresh_store(manager, geometries):
     for fid, geometry in geometries:
         feature = store.createNewFeature()
         feature.set("bench_id", fid)
-        feature.set("GEOMETRY", geometry.cloneGeometry())
+        copied = geometry.cloneGeometry()
+        copied.setProjection(geometry.getProjection())
+        feature.set("GEOMETRY", copied)
         store.insert(feature)
     store.finishEditing()
     return store
@@ -71,43 +74,40 @@ def worker():
 
         uselib.use_plugin("org.gvsig.topology.app.mainplugin")
         from org.gvsig.app import ApplicationLocator
+        from org.gvsig.fmap.crs import CRSFactory
         from org.gvsig.fmap.geom import GeometryLocator
-        from org.gvsig.topology.lib.api import TopologyLocator
+        from org.gvsig.topology.lib.api import TopologyLocator, TopologyServices
+
+        class MemoryServices(TopologyServices):
+            """Resolve stores after the stock plan clears cached dataset handles."""
+
+            def __init__(self):
+                self.stores = {}
+
+            def getFeatureStore(self, dataset):
+                return self.stores[str(dataset.getName())]
 
         manager = ApplicationLocator.getManager().getDataManager()
         geometry_manager = GeometryLocator.getGeometryManager()
         topology_manager = TopologyLocator.getTopologyManager()
+        projection = CRSFactory.getCRS("EPSG:3857")
         files = json.loads(os.environ["GIS_WORKER_FIXTURE"])
         sources = {}
         for name, path in files.items():
             with open(path) as stream:
                 features = json.load(stream)["features"]
-            sources[name] = [
-                (
-                    int(f["properties"]["bench_id"]),
-                    geometry_manager.createFrom(wkt(f["geometry"])),
-                )
-                for f in features
-            ]
+            sources[name] = []
+            for feature in features:
+                geometry = geometry_manager.createFrom(wkt(feature["geometry"]))
+                geometry.setProjection(projection)
+                sources[name].append((int(feature["properties"]["bench_id"]), geometry))
         available = [
             str(factory.getId()) for factory in topology_manager.getRuleFactories()
         ]
         mappings = json.loads(os.environ["GIS_WORKER_MAPPINGS"])
         rule = os.environ["GIS_WORKER_RULE"]
-        aliases = {
-            "point/must-be-inside": ["PointMustBeProperlyInsidePolygon", mappings[rule]]
-            if rule == "point/must-be-inside"
-            else [],
-            "polygon/must-contain-point": ["PolygonContainsPoint", mappings[rule]]
-            if rule == "polygon/must-contain-point"
-            else [],
-            "polygon/must-not-overlap": ["PolygonMustNotOverlapPolygon", mappings[rule]]
-            if rule == "polygon/must-not-overlap"
-            else [],
-        }
-        candidates = aliases.get(rule) or [mappings[rule]]
-        factory_id = next((value for value in candidates if value in available), None)
-        if factory_id is None:
+        factory_id = mappings[rule]
+        if factory_id not in available:
             reply(
                 {
                     "status": "failed",
@@ -123,7 +123,8 @@ def worker():
                 "factory": factory_id,
                 "available_rules": available,
                 "java": System.getProperty("java.version"),
-                "workflow": "stock TopologyPlan, UI disabled",
+                "workflow": "stock TopologyPlan with native memory stores, UI disabled",
+                "profile": "unrelated addon autoruns disabled",
             }
         )
         while True:
@@ -141,12 +142,15 @@ def worker():
                 plan = topology_manager.createTopologyPlan()
                 plan.setUseUI(False)
                 plan.setAcceptExceptions(False)
+                services = MemoryServices()
                 for name in ("input", "other"):
                     if name not in sources:
                         continue
                     store = fresh_store(manager, sources[name])
                     stores.append(store)
+                    services.stores[name] = store
                     plan.addDataSet(name, store)
+                plan.setTopologyServices(services)
                 phase("validating")
                 started = System.nanoTime()
                 plan.addRule(
@@ -155,9 +159,14 @@ def worker():
                 plan.execute()
                 seconds = (System.nanoTime() - started) / 1000000000.0
                 phase("extracting")
+                task = plan.getTaskStatus()
+                if task.isAborted() or task.isCancelled():
+                    raise RuntimeError("gvSIG topology plan aborted or was cancelled")
                 errors = []
                 for line in plan.getReport().getLines():
-                    if line.isException():
+                    # addCodeException produces a row with no geometry; the
+                    # isException flag instead marks user-accepted exceptions.
+                    if line.getGeometry() is None and line.getError() is None:
                         raise RuntimeError(
                             "gvSIG reported an execution exception: "
                             + str(line.getDescription())
@@ -168,7 +177,14 @@ def worker():
                         if reference is None
                         else int(reference.getFeature().get("bench_id"))
                     )
-                    errors.append({"kind": "violation", "id": fid, "layer": 0})
+                    errors.append(
+                        {
+                            "kind": "violation",
+                            "id": fid,
+                            "layer": 0,
+                            "description": str(line.getDescription()),
+                        }
+                    )
                 reply(
                     {
                         "status": "ok",

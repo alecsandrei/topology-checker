@@ -4,7 +4,7 @@ FROM ghcr.io/astral-sh/uv:0.12.23 AS uv_toolchain
 FROM eclipse-temurin:8-jre AS java_runtime
 
 # Official QGIS 4.2 image, pinned to its Linux amd64 manifest.
-FROM qgis/qgis:4.2-questing@sha256:c01e223cb4cfae219765cd251b8dbf1aa216a70588ecea96e052998657b075b5
+FROM qgis/qgis:4.2-questing@sha256:c01e223cb4cfae219765cd251b8dbf1aa216a70588ecea96e052998657b075b5 AS environment
 USER root
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -30,6 +30,8 @@ COPY --from=uv_toolchain /uv /usr/local/bin/uv
 ENV PATH="/usr/local/cargo/bin:${PATH}" RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo
 ENV RAYON_NUM_THREADS=1 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 QT_QPA_PLATFORM=offscreen
 WORKDIR /workspace
+
+FROM environment AS benchmark
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
@@ -38,7 +40,6 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
       --example qgis_benchmark --locked \
     && cp target/release/examples/qgis_benchmark /opt/gis-rust-benchmark
 COPY benchmarks ./benchmarks
-COPY tests/conftest.py tests/test_gis_benchmark.py ./tests/
 COPY python ./python
 RUN uv sync --project benchmarks/gis --frozen --group dev --python /usr/bin/python3 \
     && dpkg-query -W -f='${Package}=${Version}\n' | sort > /opt/gis-packages.lock
