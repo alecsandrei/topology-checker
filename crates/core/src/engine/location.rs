@@ -13,10 +13,21 @@ use geo::{
 pub(crate) struct Location {
     pub segments: Vec<Line>,
     pub tree: Index,
-    bounds: Rect,
+    pub bounds: Rect,
+    pub anchors: Vec<(usize, usize)>,
 }
 impl Location {
     pub fn new(polygon: &Polygon) -> Self {
+        let mut start = 0;
+        let anchors = std::iter::once(polygon.exterior())
+            .chain(polygon.interiors())
+            .map(|ring| {
+                let end = start + ring.0.len() - 1;
+                let range = (start, end);
+                start = end;
+                range
+            })
+            .collect();
         let segments = std::iter::once(polygon.exterior())
             .chain(polygon.interiors())
             .flat_map(|r| r.lines())
@@ -31,6 +42,7 @@ impl Location {
             segments,
             tree,
             bounds: polygon.bounding_rect().expect("clean polygon"),
+            anchors,
         }
     }
     /// -1 outside, 0 boundary, 1 interior. Ray decisions use robust orientations.
