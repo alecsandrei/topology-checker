@@ -2,7 +2,7 @@ name: GIS benchmarks
 on:
   workflow_dispatch:
   push:
-    branches: [codex/gis-benchmarks]
+    branches: [gis-benchmarks]
     paths:
       - .github/workflows/gis-benchmarks.yml
       - .dockerignore
