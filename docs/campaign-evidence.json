@@ -192,5 +192,621 @@
     "total_s": 3.5784325000131503,
     "violations": 100000,
     "peak_rss_bytes": 518160384
+  },
+  "follow_up": {
+    "polygon_validation": {
+      "paired_process_runs": [
+        {
+          "workload": "bgt",
+          "ingest_s": 0.2029134170152247,
+          "validate_s": 4.180174749926664,
+          "violations": 30965,
+          "peak_rss_bytes": 2572337152,
+          "source_sha256": {
+            "pg_nl_bgt_begroeid_enschede": "02866067d82b79caaa52fea34910f3255b1bcd4cc0f7f0c70a67ffca8cff8059"
+          },
+          "package": "/tmp/topology-baseline-package/topology_checker/__init__.py",
+          "equivalence": false,
+          "artifact": "baseline",
+          "pair": 0
+        },
+        {
+          "workload": "bgt",
+          "ingest_s": 0.4094299590215087,
+          "validate_s": 6.182984957937151,
+          "violations": 30965,
+          "peak_rss_bytes": 444022784,
+          "source_sha256": {
+            "pg_nl_bgt_begroeid_enschede": "02866067d82b79caaa52fea34910f3255b1bcd4cc0f7f0c70a67ffca8cff8059"
+          },
+          "package": "/tmp/topology-final-package/topology_checker/__init__.py",
+          "equivalence": false,
+          "artifact": "release",
+          "pair": 0
+        },
+        {
+          "workload": "bgt",
+          "ingest_s": 0.40767708397470415,
+          "validate_s": 6.038850249955431,
+          "violations": 30965,
+          "peak_rss_bytes": 475856896,
+          "source_sha256": {
+            "pg_nl_bgt_begroeid_enschede": "02866067d82b79caaa52fea34910f3255b1bcd4cc0f7f0c70a67ffca8cff8059"
+          },
+          "package": "/tmp/topology-final-package/topology_checker/__init__.py",
+          "equivalence": false,
+          "artifact": "release",
+          "pair": 1
+        },
+        {
+          "workload": "bgt",
+          "ingest_s": 0.19168954202905297,
+          "validate_s": 4.155520917032845,
+          "violations": 30965,
+          "peak_rss_bytes": 2412412928,
+          "source_sha256": {
+            "pg_nl_bgt_begroeid_enschede": "02866067d82b79caaa52fea34910f3255b1bcd4cc0f7f0c70a67ffca8cff8059"
+          },
+          "package": "/tmp/topology-baseline-package/topology_checker/__init__.py",
+          "equivalence": false,
+          "artifact": "baseline",
+          "pair": 1
+        },
+        {
+          "workload": "bgt",
+          "ingest_s": 0.19124737498350441,
+          "validate_s": 3.595566499978304,
+          "violations": 30965,
+          "peak_rss_bytes": 2755330048,
+          "source_sha256": {
+            "pg_nl_bgt_begroeid_enschede": "02866067d82b79caaa52fea34910f3255b1bcd4cc0f7f0c70a67ffca8cff8059"
+          },
+          "package": "/tmp/topology-baseline-package/topology_checker/__init__.py",
+          "equivalence": false,
+          "artifact": "baseline",
+          "pair": 2
+        },
+        {
+          "workload": "bgt",
+          "ingest_s": 0.40449891705065966,
+          "validate_s": 5.870194250019267,
+          "violations": 30965,
+          "peak_rss_bytes": 560431104,
+          "source_sha256": {
+            "pg_nl_bgt_begroeid_enschede": "02866067d82b79caaa52fea34910f3255b1bcd4cc0f7f0c70a67ffca8cff8059"
+          },
+          "package": "/tmp/topology-final-package/topology_checker/__init__.py",
+          "equivalence": false,
+          "artifact": "release",
+          "pair": 2
+        },
+        {
+          "workload": "cbs",
+          "ingest_s": 0.15341633406933397,
+          "validate_s": 2.359763666987419,
+          "violations": 2462,
+          "peak_rss_bytes": 2229731328,
+          "source_sha256": {
+            "pg_nl_cbs_bodemgebruik_2015_enschede": "3236983ecd166e0d79160522a45c762e2e23f4328a92bafef7d0f5d38563ed1e"
+          },
+          "package": "/tmp/topology-baseline-package/topology_checker/__init__.py",
+          "equivalence": false,
+          "artifact": "baseline",
+          "pair": 0
+        },
+        {
+          "workload": "cbs",
+          "ingest_s": 1.1156622909475118,
+          "validate_s": 3.9830094589851797,
+          "violations": 2462,
+          "peak_rss_bytes": 1625718784,
+          "source_sha256": {
+            "pg_nl_cbs_bodemgebruik_2015_enschede": "3236983ecd166e0d79160522a45c762e2e23f4328a92bafef7d0f5d38563ed1e"
+          },
+          "package": "/tmp/topology-final-package/topology_checker/__init__.py",
+          "equivalence": false,
+          "artifact": "release",
+          "pair": 0
+        },
+        {
+          "workload": "cbs",
+          "ingest_s": 1.097136209020391,
+          "validate_s": 3.9482341249240562,
+          "violations": 2462,
+          "peak_rss_bytes": 1609482240,
+          "source_sha256": {
+            "pg_nl_cbs_bodemgebruik_2015_enschede": "3236983ecd166e0d79160522a45c762e2e23f4328a92bafef7d0f5d38563ed1e"
+          },
+          "package": "/tmp/topology-final-package/topology_checker/__init__.py",
+          "equivalence": false,
+          "artifact": "release",
+          "pair": 1
+        },
+        {
+          "workload": "cbs",
+          "ingest_s": 0.13755166600458324,
+          "validate_s": 2.4741957909427583,
+          "violations": 2462,
+          "peak_rss_bytes": 2226176000,
+          "source_sha256": {
+            "pg_nl_cbs_bodemgebruik_2015_enschede": "3236983ecd166e0d79160522a45c762e2e23f4328a92bafef7d0f5d38563ed1e"
+          },
+          "package": "/tmp/topology-baseline-package/topology_checker/__init__.py",
+          "equivalence": false,
+          "artifact": "baseline",
+          "pair": 1
+        },
+        {
+          "workload": "cbs",
+          "ingest_s": 0.13854270800948143,
+          "validate_s": 4.108471584040672,
+          "violations": 2462,
+          "peak_rss_bytes": 2355429376,
+          "source_sha256": {
+            "pg_nl_cbs_bodemgebruik_2015_enschede": "3236983ecd166e0d79160522a45c762e2e23f4328a92bafef7d0f5d38563ed1e"
+          },
+          "package": "/tmp/topology-baseline-package/topology_checker/__init__.py",
+          "equivalence": false,
+          "artifact": "baseline",
+          "pair": 2
+        },
+        {
+          "workload": "cbs",
+          "ingest_s": 1.324352707946673,
+          "validate_s": 4.347968791960739,
+          "violations": 2462,
+          "peak_rss_bytes": 1185464320,
+          "source_sha256": {
+            "pg_nl_cbs_bodemgebruik_2015_enschede": "3236983ecd166e0d79160522a45c762e2e23f4328a92bafef7d0f5d38563ed1e"
+          },
+          "package": "/tmp/topology-final-package/topology_checker/__init__.py",
+          "equivalence": false,
+          "artifact": "release",
+          "pair": 2
+        },
+        {
+          "workload": "vienna",
+          "ingest_s": 0.1737871669465676,
+          "validate_s": 8.19010037498083,
+          "violations": 2,
+          "peak_rss_bytes": 236748800,
+          "source_sha256": {
+            "pg_vienna_realnutzung_2022": "2b6f2e20ec0c2947c9d1af858bb4275142ba6e9cf25a69c875b625dc1757c96d"
+          },
+          "package": "/tmp/topology-baseline-package/topology_checker/__init__.py",
+          "equivalence": false,
+          "artifact": "baseline",
+          "pair": 0
+        },
+        {
+          "workload": "vienna",
+          "ingest_s": 0.33851916703861207,
+          "validate_s": 2.3437069170176983,
+          "violations": 2,
+          "peak_rss_bytes": 199950336,
+          "source_sha256": {
+            "pg_vienna_realnutzung_2022": "2b6f2e20ec0c2947c9d1af858bb4275142ba6e9cf25a69c875b625dc1757c96d"
+          },
+          "package": "/tmp/topology-final-package/topology_checker/__init__.py",
+          "equivalence": false,
+          "artifact": "release",
+          "pair": 0
+        },
+        {
+          "workload": "vienna",
+          "ingest_s": 0.3125845829490572,
+          "validate_s": 2.3058555419556797,
+          "violations": 2,
+          "peak_rss_bytes": 206651392,
+          "source_sha256": {
+            "pg_vienna_realnutzung_2022": "2b6f2e20ec0c2947c9d1af858bb4275142ba6e9cf25a69c875b625dc1757c96d"
+          },
+          "package": "/tmp/topology-final-package/topology_checker/__init__.py",
+          "equivalence": false,
+          "artifact": "release",
+          "pair": 1
+        },
+        {
+          "workload": "vienna",
+          "ingest_s": 0.17231250007171184,
+          "validate_s": 8.916448124917224,
+          "violations": 2,
+          "peak_rss_bytes": 248381440,
+          "source_sha256": {
+            "pg_vienna_realnutzung_2022": "2b6f2e20ec0c2947c9d1af858bb4275142ba6e9cf25a69c875b625dc1757c96d"
+          },
+          "package": "/tmp/topology-baseline-package/topology_checker/__init__.py",
+          "equivalence": false,
+          "artifact": "baseline",
+          "pair": 1
+        },
+        {
+          "workload": "vienna",
+          "ingest_s": 0.2746662499848753,
+          "validate_s": 8.46325633302331,
+          "violations": 2,
+          "peak_rss_bytes": 223444992,
+          "source_sha256": {
+            "pg_vienna_realnutzung_2022": "2b6f2e20ec0c2947c9d1af858bb4275142ba6e9cf25a69c875b625dc1757c96d"
+          },
+          "package": "/tmp/topology-baseline-package/topology_checker/__init__.py",
+          "equivalence": false,
+          "artifact": "baseline",
+          "pair": 2
+        },
+        {
+          "workload": "vienna",
+          "ingest_s": 0.42198670806828886,
+          "validate_s": 3.00147391599603,
+          "violations": 2,
+          "peak_rss_bytes": 207503360,
+          "source_sha256": {
+            "pg_vienna_realnutzung_2022": "2b6f2e20ec0c2947c9d1af858bb4275142ba6e9cf25a69c875b625dc1757c96d"
+          },
+          "package": "/tmp/topology-final-package/topology_checker/__init__.py",
+          "equivalence": false,
+          "artifact": "release",
+          "pair": 2
+        }
+      ],
+      "medians": {
+        "bgt": {
+          "baseline": 4.155520917032845,
+          "release": 6.038850249955431,
+          "ratio": 1.4532113712153647,
+          "maximum_ratio": 2.0,
+          "passed": true
+        },
+        "cbs": {
+          "baseline": 2.4741957909427583,
+          "release": 3.9830094589851797,
+          "ratio": 1.6098198346168509,
+          "maximum_ratio": 2.0,
+          "passed": true
+        },
+        "vienna": {
+          "baseline": 8.46325633302331,
+          "release": 2.3437069170176983,
+          "ratio": 0.2769273226278922,
+          "maximum_ratio": 2.0,
+          "passed": true
+        }
+      },
+      "baseline_package_sha256": "d2db2790e3331bf78239a863f59c9f9866caa65aeb2934bfc7b98de9224f06f3",
+      "release_package_sha256": "bf7bb205bc548835910c90ce7d0e77f5322564ff454778725c190c85bf25150c",
+      "method": "Three isolated process pairs per workload, alternating artifact order, same Python and dependencies; ingestion timed separately from validation."
+    },
+    "multipart_ingestion": {
+      "workload": "ingestion",
+      "ingest_s": 0.4558554170653224,
+      "validate_s": 0.0,
+      "violations": null,
+      "peak_rss_bytes": 216612864,
+      "source_sha256": {},
+      "package": "/tmp/topology-pr3-import/topology_checker/__init__.py",
+      "equivalence": false
+    },
+    "ons_overlap": {
+      "workload": "ons_overlap",
+      "ingest_s": 7.906606458011083,
+      "validate_s": 107.68350995797664,
+      "violations": 2203,
+      "peak_rss_bytes": 1719336960,
+      "source_sha256": {
+        "pg_ons_lad_2021_bgc": "42324fbc2af1b97448957bf9397328a3ba0ccb97fb8a3a9a2771988e94138b6d",
+        "pg_ons_lad_2020_bfc": "2b1600301614f8c7663c7d68c180ff9dd6cdd76e59a3f8c1cc5f413924bcfeeb"
+      },
+      "package": "/tmp/topology-final-package/topology_checker/__init__.py",
+      "equivalence": true
+    },
+    "rounding": {
+      "maximum_float_steps": 64,
+      "assignment_budget": 100000
+    },
+    "verification": {
+      "rust_workspace_passed": 202,
+      "python_passed": 492,
+      "clippy": "passed",
+      "ruff": "passed",
+      "pyright": "passed",
+      "frontend_unit_passed": 19,
+      "browser_passed": 10,
+      "wheel": "regular installation without GeoPandas passed",
+      "source_distribution": "wheel built from extracted archive and regular installation passed"
+    },
+    "previous_polygon_measurements": [
+      {
+        "workload": "bgt",
+        "ingest_s": 0.43986099993344396,
+        "validate_s": 8.574148458079435,
+        "violations": 30965,
+        "peak_rss_bytes": 2263613440,
+        "source_sha256": {
+          "pg_nl_bgt_begroeid_enschede": "02866067d82b79caaa52fea34910f3255b1bcd4cc0f7f0c70a67ffca8cff8059"
+        },
+        "package": "/tmp/topology-baseline-package/topology_checker/__init__.py",
+        "equivalence": false,
+        "artifact": "baseline",
+        "pair": 0
+      },
+      {
+        "workload": "bgt",
+        "ingest_s": 0.9496971250046045,
+        "validate_s": 12.617507499991916,
+        "violations": 30965,
+        "peak_rss_bytes": 561512448,
+        "source_sha256": {
+          "pg_nl_bgt_begroeid_enschede": "02866067d82b79caaa52fea34910f3255b1bcd4cc0f7f0c70a67ffca8cff8059"
+        },
+        "package": "/tmp/topology-final-package/topology_checker/__init__.py",
+        "equivalence": false,
+        "artifact": "release",
+        "pair": 0
+      },
+      {
+        "workload": "bgt",
+        "ingest_s": 0.9364584579598159,
+        "validate_s": 13.353059708024375,
+        "violations": 30965,
+        "peak_rss_bytes": 561315840,
+        "source_sha256": {
+          "pg_nl_bgt_begroeid_enschede": "02866067d82b79caaa52fea34910f3255b1bcd4cc0f7f0c70a67ffca8cff8059"
+        },
+        "package": "/tmp/topology-final-package/topology_checker/__init__.py",
+        "equivalence": false,
+        "artifact": "release",
+        "pair": 1
+      },
+      {
+        "workload": "bgt",
+        "ingest_s": 0.40806699998211116,
+        "validate_s": 7.160630124970339,
+        "violations": 30965,
+        "peak_rss_bytes": 3112697856,
+        "source_sha256": {
+          "pg_nl_bgt_begroeid_enschede": "02866067d82b79caaa52fea34910f3255b1bcd4cc0f7f0c70a67ffca8cff8059"
+        },
+        "package": "/tmp/topology-baseline-package/topology_checker/__init__.py",
+        "equivalence": false,
+        "artifact": "baseline",
+        "pair": 1
+      },
+      {
+        "workload": "bgt",
+        "ingest_s": 0.414822917082347,
+        "validate_s": 6.6468626660062,
+        "violations": 30965,
+        "peak_rss_bytes": 2968551424,
+        "source_sha256": {
+          "pg_nl_bgt_begroeid_enschede": "02866067d82b79caaa52fea34910f3255b1bcd4cc0f7f0c70a67ffca8cff8059"
+        },
+        "package": "/tmp/topology-baseline-package/topology_checker/__init__.py",
+        "equivalence": false,
+        "artifact": "baseline",
+        "pair": 2
+      },
+      {
+        "workload": "bgt",
+        "ingest_s": 1.0063137500546873,
+        "validate_s": 15.217099542031065,
+        "violations": 30965,
+        "peak_rss_bytes": 505921536,
+        "source_sha256": {
+          "pg_nl_bgt_begroeid_enschede": "02866067d82b79caaa52fea34910f3255b1bcd4cc0f7f0c70a67ffca8cff8059"
+        },
+        "package": "/tmp/topology-final-package/topology_checker/__init__.py",
+        "equivalence": false,
+        "artifact": "release",
+        "pair": 2
+      },
+      {
+        "workload": "cbs",
+        "ingest_s": 0.3594887920189649,
+        "validate_s": 7.447951500071213,
+        "violations": 2462,
+        "peak_rss_bytes": 1832927232,
+        "source_sha256": {
+          "pg_nl_cbs_bodemgebruik_2015_enschede": "3236983ecd166e0d79160522a45c762e2e23f4328a92bafef7d0f5d38563ed1e"
+        },
+        "package": "/tmp/topology-baseline-package/topology_checker/__init__.py",
+        "equivalence": false,
+        "artifact": "baseline",
+        "pair": 0
+      },
+      {
+        "workload": "cbs",
+        "ingest_s": 4.464943291037343,
+        "validate_s": 13.085813750047237,
+        "violations": 2462,
+        "peak_rss_bytes": 1563787264,
+        "source_sha256": {
+          "pg_nl_cbs_bodemgebruik_2015_enschede": "3236983ecd166e0d79160522a45c762e2e23f4328a92bafef7d0f5d38563ed1e"
+        },
+        "package": "/tmp/topology-final-package/topology_checker/__init__.py",
+        "equivalence": false,
+        "artifact": "release",
+        "pair": 0
+      },
+      {
+        "workload": "cbs",
+        "ingest_s": 8.538565333001316,
+        "validate_s": 20.77160933392588,
+        "violations": 2462,
+        "peak_rss_bytes": 1058766848,
+        "source_sha256": {
+          "pg_nl_cbs_bodemgebruik_2015_enschede": "3236983ecd166e0d79160522a45c762e2e23f4328a92bafef7d0f5d38563ed1e"
+        },
+        "package": "/tmp/topology-final-package/topology_checker/__init__.py",
+        "equivalence": false,
+        "artifact": "release",
+        "pair": 1
+      },
+      {
+        "workload": "cbs",
+        "ingest_s": 0.5059568750439212,
+        "validate_s": 10.620067917043343,
+        "violations": 2462,
+        "peak_rss_bytes": 1624801280,
+        "source_sha256": {
+          "pg_nl_cbs_bodemgebruik_2015_enschede": "3236983ecd166e0d79160522a45c762e2e23f4328a92bafef7d0f5d38563ed1e"
+        },
+        "package": "/tmp/topology-baseline-package/topology_checker/__init__.py",
+        "equivalence": false,
+        "artifact": "baseline",
+        "pair": 1
+      },
+      {
+        "workload": "cbs",
+        "ingest_s": 0.44192441704217345,
+        "validate_s": 8.52262870897539,
+        "violations": 2462,
+        "peak_rss_bytes": 1688764416,
+        "source_sha256": {
+          "pg_nl_cbs_bodemgebruik_2015_enschede": "3236983ecd166e0d79160522a45c762e2e23f4328a92bafef7d0f5d38563ed1e"
+        },
+        "package": "/tmp/topology-baseline-package/topology_checker/__init__.py",
+        "equivalence": false,
+        "artifact": "baseline",
+        "pair": 2
+      },
+      {
+        "workload": "cbs",
+        "ingest_s": 5.310387915931642,
+        "validate_s": 19.555451832944527,
+        "violations": 2462,
+        "peak_rss_bytes": 1085915136,
+        "source_sha256": {
+          "pg_nl_cbs_bodemgebruik_2015_enschede": "3236983ecd166e0d79160522a45c762e2e23f4328a92bafef7d0f5d38563ed1e"
+        },
+        "package": "/tmp/topology-final-package/topology_checker/__init__.py",
+        "equivalence": false,
+        "artifact": "release",
+        "pair": 2
+      }
+    ],
+    "previous_polygon_measurements_note": "CBS missed the selected gate before indexed ring-containment checks were implemented.",
+    "acceptance": {
+      "lines": {
+        "mode": "lines",
+        "size": 50000,
+        "queries": 2000,
+        "repair": false,
+        "tolerance": 0.0,
+        "prepare_s": 0.9928735829889774,
+        "validate_s": 1.308687291922979,
+        "total_s": 2.3015691669424996,
+        "violations": 100000,
+        "peak_rss_bytes": 479576064
+      },
+      "points": {
+        "mode": "points",
+        "size": 200000,
+        "queries": 2000,
+        "repair": false,
+        "tolerance": 0.0,
+        "prepare_s": 0.2257488330360502,
+        "validate_s": 0.08911145897582173,
+        "total_s": 0.36085037502925843,
+        "violations": 2000,
+        "peak_rss_bytes": 162021376
+      },
+      "duplicates_2500": {
+        "mode": "duplicates",
+        "size": 2500,
+        "queries": 2000,
+        "repair": false,
+        "tolerance": 0.0,
+        "prepare_s": 0.026602374971844256,
+        "validate_s": 14.736947958008386,
+        "total_s": 14.763571958057582,
+        "violations": 3123750,
+        "peak_rss_bytes": 59752448
+      },
+      "duplicates_5000": {
+        "mode": "duplicates",
+        "size": 5000,
+        "queries": 2000,
+        "repair": false,
+        "tolerance": 0.0,
+        "prepare_s": 0.05600758292712271,
+        "validate_s": 39.67163600004278,
+        "total_s": 39.72768220794387,
+        "violations": 12497500,
+        "peak_rss_bytes": 63455232
+      },
+      "gaps_valid_0": {
+        "mode": "gaps",
+        "size": 100000,
+        "queries": 2000,
+        "repair": false,
+        "tolerance": 0.0,
+        "prepare_s": 4.012979375082068,
+        "validate_s": 9.32115795800928,
+        "total_s": 24.70739295799285,
+        "violations": 426,
+        "peak_rss_bytes": 2609774592
+      },
+      "gaps_valid_1": {
+        "mode": "gaps",
+        "size": 100000,
+        "queries": 2000,
+        "repair": false,
+        "tolerance": 1.0,
+        "prepare_s": 3.946507374988869,
+        "validate_s": 9.454778625047766,
+        "total_s": 24.747294957982376,
+        "violations": 410,
+        "peak_rss_bytes": 2694168576
+      },
+      "gaps_repaired_0": {
+        "mode": "gaps",
+        "size": 100000,
+        "queries": 2000,
+        "repair": true,
+        "tolerance": 0.0,
+        "prepare_s": 5.244453541003168,
+        "validate_s": 10.380835374933667,
+        "total_s": 26.761163540999405,
+        "violations": 159,
+        "peak_rss_bytes": 2571747328
+      },
+      "gaps_repaired_1": {
+        "mode": "gaps",
+        "size": 100000,
+        "queries": 2000,
+        "repair": true,
+        "tolerance": 1.0,
+        "prepare_s": 6.6749323749681935,
+        "validate_s": 15.612143874983303,
+        "total_s": 35.107306667021476,
+        "violations": 29,
+        "peak_rss_bytes": 2343600128
+      },
+      "ons_gaps": {
+        "workload": "ons_gaps",
+        "ingest_s": 2.536161541007459,
+        "validate_s": 13.904367625014856,
+        "violations": 5174,
+        "peak_rss_bytes": 2165293056,
+        "source_sha256": {
+          "pg_ons_lad_2020_bfc": "2b1600301614f8c7663c7d68c180ff9dd6cdd76e59a3f8c1cc5f413924bcfeeb"
+        },
+        "package": "/tmp/topology-final-package/topology_checker/__init__.py",
+        "equivalence": true
+      },
+      "brp": {
+        "workload": "brp",
+        "ingest_s": 0.3873856249265373,
+        "validate_s": 1.5709482920356095,
+        "violations": 5923,
+        "peak_rss_bytes": 415875072,
+        "source_sha256": {
+          "pg_nl_brp_gewaspercelen_enschede": "e7f141b858fb2c20e64571fcc132ec91c591f5a131034e52c1a4eb94d75b53c3"
+        },
+        "package": "/tmp/topology-final-package/topology_checker/__init__.py",
+        "equivalence": true
+      },
+      "note": "Counts, valid geometry, provenance and repeated/eager/streaming equality were asserted for all gap workloads; line and query memory gates and duplicate-stream memory bounds were asserted in isolated processes."
+    }
   }
 }

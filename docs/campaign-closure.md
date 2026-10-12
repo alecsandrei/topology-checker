@@ -1,6 +1,6 @@
 # Campaign closure, 2026-10-12
 
-All 21 correctness findings have affirmative regressions against a freshly built
+All 21 correctness findings have tests against a freshly built
 release extension. The four performance findings pass the representative gates
 below. The sibling `topology-checker-test` campaign was read only. Its minimized
 geometry was copied into `tests/fixtures/campaign`; its bug-present assertions
@@ -15,11 +15,11 @@ is named. Every row passed on the rebuilt release artifact.
 | :--- | :--- | :--- | :--- |
 | BUG-001 | Explicit shared boundary intervals do not become crossings. | `test_bug_001_boundary_runs_do_not_cross`, at zero and positive tolerance | Closed |
 | BUG-002 | Line and polygon overlap emits the original shared edge. | `test_bug_002_003_shared_edge_is_line_geometry`, geometry, validity and provenance | Closed |
-| BUG-003 | Line and polygon intersection emits the shared edge as a line. | Same regression, both rule variants and three tolerances | Closed |
+| BUG-003 | Line and polygon intersection emits the shared edge as a line. | Same test, both rule variants and three tolerances | Closed |
 | BUG-004 | Polygon coverage uses local original coordinates and exact interval classification. | `test_bug_004_boundary_coverage_survives_distant_features` | Closed |
 | BUG-005 | Self-intersecting polygon rings are rejected after cleanup. | `test_bug_005_007_020_invalid_polygons_rejected_atomically`, layer/FID/part/ring diagnostics and rollback | Closed |
 | BUG-006 | Closed boundaries have no endpoint at their chosen start vertex. | `test_bug_006_ring_rotation_has_no_endpoint`, all four rotations | Closed |
-| BUG-007 | Invalid nested or overlapping MultiPolygon parts are rejected. | Atomic rejection regression for both original fixtures | Closed |
+| BUG-007 | Invalid nested or overlapping MultiPolygon parts are rejected. | Atomic rejection test for both original fixtures | Closed |
 | BUG-008 | Boundary intervals fail properly-inside checks. | `test_bug_008_boundary_is_never_properly_inside`, three tolerances | Closed |
 | BUG-009 | Self-rules operate only on the original feature's parts. | `test_bug_009_self_rules_ignore_other_features`, both self-rules | Closed |
 | BUG-010 | Original multipart operands aggregate before exact intersection geometry is rounded. | `test_bug_010_valid_overlap_from_valid_multipart_inputs`, valid geometry and Shapely area | Closed |
@@ -32,7 +32,7 @@ is named. Every row passed on the rebuilt release artifact.
 | BUG-017 | Line reversal preserves contact and overlap classification. | `test_bug_017_line_reversal`, all four affected rule variants | Closed |
 | BUG-018 | Exact component overlay has finite face and boundary traversal. | `test_bug_018_release_gaps_finishes_correctly`, 236 valid original parts, isolated process finished in 0.40 s, 10-second timeout, Shapely shell and filtered-hole references | Closed |
 | BUG-019 | Zero tolerance retains positive-area overlap decisions. | `test_bug_019_zero_tolerance_positive_area_decisions`, original real-world pairs; the exact-area triangle and every ring rotation/reversal in `test_polygon_precision.py` | Closed |
-| BUG-020 | Closing spikes in either winding direction are rejected. | Atomic rejection regression for both original spikes; original-ring diagnostics after cleanup | Closed |
+| BUG-020 | Closing spikes in either winding direction are rejected. | Atomic rejection test for both original spikes; original-ring diagnostics after cleanup | Closed |
 | BUG-021 | Collapsed parts cannot acquire graph spikes or overlap geometry. | `test_bug_021_collapsed_lines_cannot_grow_spikes`, self-rules, pair overlap and boundary coverage | Closed |
 | PERF-1 | Shared coordinates, lazy indexes, sparse source cuts and compact graph incidences reduce retained and construction memory. | Same-machine line and large-polygon workloads, 50.8% and 83.2% lower peak RSS | Closed on measured workloads |
 | PERF-2 | Rust sinks, bounded Python streams, binary transport and disk-backed exports preserve every pair. | 3,123,750 and 12,497,500 streamed pairs; eager equivalence for all 38 variants; cancellation, consumer failure, pagination and export tests | Closed |
@@ -92,14 +92,14 @@ script reads prepared WKB directly and never imports campaign cache writers.
   responsiveness and stale-job exercise was run explicitly and passed in 2.70 s.
 - Clippy for all workspace targets with warnings denied, and Rust formatting:
   passed.
-- Python suite: 427 tests, including all original campaign regressions,
+- Python suite: 427 tests, including all original campaign tests,
   deterministic streams, early close, consumer failure and snapshot ownership.
 - The boundary-edge property test checks 2,000 triangles at tolerance zero and
   0.001, across eight rules, including geometry, validity and provenance.
 - Metamorphic checks cover feature permutations, signed FID remapping, line
   reversal, ring rotation, translation, binary scaling, distant features, and
   unary versus binary line-rule equivalence.
-  A signed-zero regression also checks polygon union and intersection winding.
+  A signed-zero test also checks polygon union and intersection winding.
   A crossing between adjacent floating-point coordinates verifies exact interval
   midpoints at zero and positive tolerance against Shapely.
 - Ruff lint and formatting, and strict Pyright: passed.
@@ -153,7 +153,7 @@ The audit records source-side evidence for every GEOS ring, including this one.
 Output conversion fixes original vertices and shares one coordinate for every
 exact intersection node, including exactly representable intersections that are
 not original vertices. Nearest rounding is verified first. Independent affected
-neighborhoods search within 1, 2, 4, 8 and 16 floating-point steps, with at most
+neighborhoods search within 1, 2, 4, 8, 16, 32 and 64 floating-point steps, with at most
 100,000 candidate assignments each and cooperative cancellation. Distinct nodes,
 source ordering, orientation, hole ownership, intended contacts and valid,
 non-overlapping parts are constraints. An unsatisfied constraint or exhausted
@@ -161,10 +161,30 @@ budget raises Rust `Error::Precision` or Python `PrecisionError` (`RuntimeError`
 Adjacent polygon collections also retain their original geometry for decisions
 and emit exact feature unions for point-count and containment violations. Those
 emissions propagate precision failures with rule, layer and FID context.
-The campaign fixtures complete successfully; the precision-error regression
+The campaign fixtures complete successfully; the precision-error test
 covers a separate unrepresentable fixture. Failed streams have no final summary,
 and failed exports and web jobs publish no partial results.
 
 Optional system-GDAL builds and wheels for other platforms were not rebuilt in
 this environment. Default pure Rust I/O, the macOS arm64 wheel, and the frontend
 were rebuilt and checked. No TeX compilation was run.
+
+
+## Follow-up closure, 2026-10-12
+
+Nearby original line intervals now cover interior vertices and unequal segmentation at positive tolerance. Zero tolerance requires exact shared intervals. The same interval evidence drives line overlap, intersection and both boundary-coverage directions. Chicago boundary proximity remains contact; genuine TfL self-crossings survive tolerance clustering. Tests are integrated into `test_metamorphic.py` and the native cross-geometry suite, including original source fixtures, transformations, provenance and eager/streaming equivalence.
+
+Constrained polygon emission preserves original vertices, exact node identities, source order, ring orientation, contact incidence and hole ownership. Ordinary bends use non-overlap constraints; deterministic domain pruning and forward checking precede bounded search. The search radius reaches 64 adjacent floating-point steps with the unchanged 100,000-assignment limit and cancellation. Original DC, ONS and BRP pairs, including minimized distinct contact failures, emit valid geometry. DC overlap agrees with the independent reference at tolerances 0, 0.001 and 1. Genuine precision failures retain their typed eager, stream and export behavior.
+
+Multipart ingestion prepares source segment and point-location indexes once. Structural checks verify local scans for islands and representative containment checks for long hole rings. The original 200,000-vertex disc/island workload completes in 0.456 seconds, within its two-second gate. Polygon validation uses certified interval decisions, exact fallback when needed, cached rational rounding and canonical rational hashes. Original contribution and containment evidence replaces repeated overlays; rounded output never determines subsequent source decisions.
+
+Three paired isolated baseline/release processes per dataset measure ingestion separately from validation. All selected validation gates pass: BGT overlap has medians 4.156 and 6.039 seconds (1.453 times baseline), CBS gaps 2.474 and 3.983 seconds (1.610 times), and Vienna overlap 8.463 and 2.344 seconds (0.277 times). The limit is twice the paired baseline median. The initial CBS gate miss is retained in machine-readable evidence alongside the corrected measurements.
+
+The full ONS overlap workload completes in 107.7 seconds with 2,203 valid outputs and repeated/eager/streaming equivalence. Its process peaks at 1.72 GB. Additional follow-up acceptance runs and artifact identifiers are recorded in `campaign-evidence.json`.
+
+The follow-up Rust workspace suite passes 202 checks. The rebuilt release wheel passes all 492 Python checks, Clippy, Ruff and strict Pyright. Frontend checks pass 19 unit and 10 browser tests. Regular wheel installation and a wheel rebuilt from the source archive pass without GeoPandas. No TeX compilation is performed, and the sibling campaign remains read only.
+
+
+The ONS gap workload completes in 13.904 seconds with 5,174 valid rings; BRP gaps in 1.571 seconds with 5,923 rings. Both pass repeated/eager/streaming equivalence. Valid time-zone inputs retain 383 shells and 43 holes at zero tolerance, and 27 holes at tolerance 1. Repaired inputs retain 20 shells and 139 or 9 holes respectively. All four time-zone jobs finish in under 36 seconds total and peak below 2.7 GB, within the 15-minute and 32-GiB caps.
+
+The 50,000-line workload peaks at 479,576,064 bytes, a 54.6% reduction from the established baseline. The polygon-query workload completes in 0.089 seconds against 28.087 seconds previously. Duplicate streaming returns every one of 3,123,750 and 12,497,500 pairs, with process peaks of 59.8 and 63.5 MB respectively.

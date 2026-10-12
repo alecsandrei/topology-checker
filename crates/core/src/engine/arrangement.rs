@@ -2,7 +2,7 @@
 //!
 //! Nodes retain exact binary input coordinates or exact rational intersections.
 //! Directed faces carry winding counts. Only emitted vertices are rounded.
-use super::{index, location::Location};
+use super::{certified, index, location::Location};
 use geo::{
     BoundingRect, Coord, Kernel, Line, Polygon, Rect, Winding,
     kernels::{Orientation, RobustKernel},
@@ -14,6 +14,7 @@ use num_traits::{ToPrimitive, Zero};
 use std::{
     cmp::Ordering,
     collections::{HashMap, VecDeque},
+    hash::{Hash, Hasher},
 };
 
 // Original vertices stay compact. Rational values are allocated only for actual
@@ -21,14 +22,26 @@ use std::{
 #[derive(Debug, Clone)]
 pub(super) enum Exact {
     Input(Coord),
-    Rational(Box<(Q, Q)>),
+    Rational(Box<RationalNode>),
+}
+#[derive(Debug, Clone)]
+pub(super) struct RationalNode {
+    xy: (Q, Q),
+    rounded: Coord,
 }
 impl Exact {
     fn input(p: Coord) -> Self {
         Self::Input(p)
     }
     pub(super) fn rational(x: Q, y: Q) -> Self {
-        Self::Rational(Box::new((x, y)))
+        let rounded = Coord {
+            x: x.to_f64().expect("finite intersection"),
+            y: y.to_f64().expect("finite intersection"),
+        };
+        Self::Rational(Box::new(RationalNode {
+            xy: (x, y),
+            rounded,
+        }))
     }
     pub(super) fn xy(&self) -> (Q, Q) {
         match self {
@@ -36,31 +49,17 @@ impl Exact {
                 Q::from_float(p.x).expect("finite input"),
                 Q::from_float(p.y).expect("finite input"),
             ),
-            Self::Rational(p) => (**p).clone(),
+            Self::Rational(p) => p.xy.clone(),
         }
     }
     pub(super) fn output(&self) -> Coord {
         match self {
             Self::Input(p) => *p,
-            Self::Rational(p) => Coord {
-                x: p.0.to_f64().expect("finite intersection"),
-                y: p.1.to_f64().expect("finite intersection"),
-            },
+            Self::Rational(p) => p.rounded,
         }
     }
     fn compare(&self, other: &Self) -> Ordering {
-        match (self, other) {
-            (Self::Input(a), Self::Input(b)) => {
-                a.x.partial_cmp(&b.x)
-                    .expect("finite")
-                    .then_with(|| a.y.partial_cmp(&b.y).expect("finite"))
-            }
-            _ => {
-                let a = self.xy();
-                let b = other.xy();
-                a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1))
-            }
-        }
+        certified::compare(self, other, 0).then_with(|| certified::compare(self, other, 1))
     }
 }
 pub(super) fn orient(a: &Exact, b: &Exact, c: &Exact) -> Q {
@@ -69,6 +68,21 @@ pub(super) fn orient(a: &Exact, b: &Exact, c: &Exact) -> Q {
             Orientation::Clockwise => (-1).into(),
             Orientation::Collinear => 0.into(),
             Orientation::CounterClockwise => 1.into(),
+        });
+    }
+    let [ax, ay] = certified::coordinates(a);
+    let [bx, by] = certified::coordinates(b);
+    let [cx, cy] = certified::coordinates(c);
+    if let Some(order) = bx
+        .sub(ax)
+        .mul(cy.sub(ay))
+        .sub(by.sub(ay).mul(cx.sub(ax)))
+        .sign()
+    {
+        return Q::from_integer(match order {
+            Ordering::Less => (-1).into(),
+            Ordering::Greater => 1.into(),
+            Ordering::Equal => 0.into(),
         });
     }
     let (ax, ay) = a.xy();
@@ -80,13 +94,11 @@ pub(super) fn on(a: &Exact, b: &Exact, p: &Exact) -> bool {
     if !orient(a, b, p).is_zero() {
         return false;
     }
-    let (ax, ay) = a.xy();
-    let (bx, by) = b.xy();
-    let (px, py) = p.xy();
-    px >= ax.clone().min(bx.clone())
-        && px <= ax.max(bx)
-        && py >= ay.clone().min(by.clone())
-        && py <= ay.max(by)
+    (0..2).all(|axis| {
+        let x = certified::compare(p, a, axis);
+        let y = certified::compare(p, b, axis);
+        x.is_eq() || y.is_eq() || x != y
+    })
 }
 pub(super) fn intersects(a: &Exact, b: &Exact, c: &Exact, d: &Exact) -> bool {
     let ab_c = orient(a, b, c);
@@ -133,20 +145,40 @@ struct Edge {
 #[derive(Default)]
 struct NodeIds {
     inputs: HashMap<(u64, u64), usize>,
-    rational: HashMap<(Q, Q), usize>,
+    rational: HashMap<RationalKey, usize>,
+}
+// All rationals here are normalized by num-rational's constructors and arithmetic.
+// Hashing canonical numerators and denominators avoids Ratio's Euclidean hash,
+// which supports unnormalized external values and repeatedly divides big integers.
+struct RationalKey((Q, Q));
+impl PartialEq for RationalKey {
+    fn eq(&self, b: &Self) -> bool {
+        self.0.0.numer() == b.0.0.numer()
+            && self.0.0.denom() == b.0.0.denom()
+            && self.0.1.numer() == b.0.1.numer()
+            && self.0.1.denom() == b.0.1.denom()
+    }
+}
+impl Eq for RationalKey {}
+impl Hash for RationalKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.0.0.numer().hash(state);
+        self.0.0.denom().hash(state);
+        self.0.1.numer().hash(state);
+        self.0.1.denom().hash(state);
+    }
 }
 fn node(point: Exact, nodes: &mut Vec<Exact>, ids: &mut NodeIds) -> usize {
     if let Exact::Rational(p) = &point {
         let rounded = point.output();
-        if Exact::input(rounded).xy() == **p {
-            // Only original vertices are fixed during output rounding. A binary
-            // representable intersection still belongs to the local solver.
-            if let Some(&id) = ids.inputs.get(&(
-                super::cluster::bits(rounded.x),
-                super::cluster::bits(rounded.y),
-            )) {
-                return id;
-            }
+        // Only original vertices are fixed during output rounding. A binary
+        // representable intersection still belongs to the local solver.
+        if let Some(&id) = ids.inputs.get(&(
+            super::cluster::bits(rounded.x),
+            super::cluster::bits(rounded.y),
+        )) && Exact::input(rounded).xy() == p.xy
+        {
+            return id;
         }
     }
     let id = nodes.len();
@@ -154,7 +186,7 @@ fn node(point: Exact, nodes: &mut Vec<Exact>, ids: &mut NodeIds) -> usize {
         Exact::Input(p) => ids
             .inputs
             .insert((super::cluster::bits(p.x), super::cluster::bits(p.y)), id),
-        Exact::Rational(p) => ids.rational.insert((**p).clone(), id),
+        Exact::Rational(p) => ids.rational.insert(RationalKey(p.xy.clone()), id),
     };
     if let Some(old) = old {
         // Restore the existing identity; a contact may occur on many segments.
@@ -164,7 +196,7 @@ fn node(point: Exact, nodes: &mut Vec<Exact>, ids: &mut NodeIds) -> usize {
                     .insert((super::cluster::bits(p.x), super::cluster::bits(p.y)), old);
             }
             Exact::Rational(p) => {
-                ids.rational.insert((**p).clone(), old);
+                ids.rational.insert(RationalKey(p.xy.clone()), old);
             }
         }
         old
@@ -192,14 +224,13 @@ pub(super) fn angle(a: &Exact, b: &Exact, origin: &Exact) -> Ordering {
                 Orientation::Collinear => Ordering::Equal,
             });
     }
-    let (ox, oy) = origin.xy();
-    let (ax, ay) = a.xy();
-    let (bx, by) = b.xy();
-    let (ax, ay, bx, by) = (ax - &ox, ay - &oy, bx - ox, by - oy);
-    let half = |x: &Q, y: &Q| y < &Q::zero() || y.is_zero() && x < &Q::zero();
-    half(&ax, &ay)
-        .cmp(&half(&bx, &by))
-        .then_with(|| (&ax * &by - &ay * &bx).cmp(&Q::zero()).reverse())
+    let half = |p: &Exact| {
+        let y = certified::compare(p, origin, 1);
+        y.is_lt() || y.is_eq() && certified::compare(p, origin, 0).is_lt()
+    };
+    half(a)
+        .cmp(&half(b))
+        .then_with(|| orient(origin, a, b).cmp(&Q::zero()).reverse())
 }
 fn envelope(a: Coord, b: Coord) -> rstar::AABB<[f64; 2]> {
     rstar::AABB::from_corners(
@@ -237,24 +268,29 @@ fn witness(h: usize, edges: &[Edge], nodes: &[Exact], tree: &index::Index) -> Ex
     panic!("rational face witness failed to make progress");
 }
 fn contains_exact(location: &Location, point: &Exact) -> bool {
+    position_exact(location, point) == 1
+}
+fn position_exact(location: &Location, point: &Exact) -> i8 {
     let p = point.output();
     let query = rstar::AABB::from_corners(
         [p.x.next_down(), p.y.next_down()],
         [f64::MAX, p.y.next_up()],
     );
-    let (_, py) = point.xy();
     let mut inside = false;
     for item in location.tree.locate_in_envelope_intersecting(&query) {
         let s = location.segments[item.data];
         let a = Exact::input(s.start);
         let b = Exact::input(s.end);
-        let (_, ay) = a.xy();
-        let (_, by) = b.xy();
-        if (ay > py) != (by > py) && (orient(&a, &b, point) > Q::zero()) == (by > ay) {
+        if on(&a, &b, point) {
+            return 0;
+        }
+        if certified::compare(&a, point, 1).is_gt() != certified::compare(&b, point, 1).is_gt()
+            && (orient(&a, &b, point) > Q::zero()) == (s.end.y > s.start.y)
+        {
             inside = !inside;
         }
     }
-    inside
+    if inside { 1 } else { -1 }
 }
 fn selected(w: [i32; 2], intersection: bool) -> bool {
     if intersection {
@@ -413,6 +449,12 @@ fn component(polygons: &[(&Polygon, usize)], intersection: bool) -> super::preci
         .iter()
         .map(|&(p, operand)| (Location::new(p), operand))
         .collect::<Vec<_>>();
+    let location_bounds = index::build(
+        polygons
+            .iter()
+            .enumerate()
+            .filter_map(|(i, (p, _))| p.bounding_rect().map(|r| (i, r))),
+    );
     let mut adjacent = vec![Vec::new(); representatives.len()];
     for (i, e) in edges.iter().enumerate() {
         let left = faces[i * 2];
@@ -427,7 +469,13 @@ fn component(polygons: &[(&Polygon, usize)], intersection: bool) -> super::preci
         }
         let sample = witness(representatives[seed], &edges, &nodes, &tree);
         let mut value = [0, 0];
-        for (location, operand) in &locations {
+        let p = sample.output();
+        let query = rstar::AABB::from_corners(
+            [p.x.next_down(), p.y.next_down()],
+            [p.x.next_up(), p.y.next_up()],
+        );
+        for item in location_bounds.locate_in_envelope_intersecting(&query) {
+            let (location, operand) = &locations[item.data];
             if contains_exact(location, &sample) {
                 value[*operand] += 1;
             }
@@ -566,18 +614,102 @@ pub(crate) fn overlay<'a>(
 }
 
 pub(crate) fn midpoint_inside(location: &Location, a: Coord, b: Coord) -> bool {
+    midpoint_position(location, a, b) == 1
+}
+pub(crate) fn midpoint_position(location: &Location, a: Coord, b: Coord) -> i8 {
+    if let Some(position) = certified_midpoint_position(location, a, b) {
+        return position;
+    }
     let (ax, ay) = Exact::input(a).xy();
     let (bx, by) = Exact::input(b).xy();
     let two = Q::from_integer(2.into());
-    contains_exact(
+    position_exact(
         location,
         &Exact::rational((ax + bx) / &two, (ay + by) / two),
     )
 }
 
+fn certified_midpoint_position(location: &Location, a: Coord, b: Coord) -> Option<i8> {
+    use certified::Interval;
+    let a = certified::coordinates(&Exact::input(a));
+    let b = certified::coordinates(&Exact::input(b));
+    let p = [
+        a[0].add(b[0]).mul(Interval(0.5, 0.5)),
+        a[1].add(b[1]).mul(Interval(0.5, 0.5)),
+    ];
+    if p.iter().any(|i| !i.0.is_finite() || !i.1.is_finite()) {
+        return None;
+    }
+    let query = rstar::AABB::from_corners([p[0].0, p[1].0], [f64::MAX, p[1].1]);
+    let above = |y: f64| {
+        if y > p[1].1 {
+            Some(true)
+        } else if y <= p[1].0 {
+            Some(false)
+        } else {
+            None
+        }
+    };
+    let mut inside = false;
+    for item in location.tree.locate_in_envelope_intersecting(&query) {
+        crate::cancel::check();
+        let s = location.segments[item.data];
+        let bounds = s.bounding_rect();
+        let contact_possible = p[0].1 >= bounds.min().x
+            && p[0].0 <= bounds.max().x
+            && p[1].1 >= bounds.min().y
+            && p[1].0 <= bounds.max().y;
+        if s.start.y == s.end.y && !contact_possible {
+            continue;
+        }
+        let (Some(a_above), Some(b_above)) = (above(s.start.y), above(s.end.y)) else {
+            return None;
+        };
+        if a_above == b_above && !contact_possible {
+            continue;
+        }
+        let [ax, ay] = certified::coordinates(&Exact::input(s.start));
+        let [bx, by] = certified::coordinates(&Exact::input(s.end));
+        let side = bx
+            .sub(ax)
+            .mul(p[1].sub(ay))
+            .sub(by.sub(ay).mul(p[0].sub(ax)))
+            .sign();
+        let side = side?;
+        if a_above != b_above && side.is_gt() == b_above {
+            inside = !inside;
+        }
+    }
+    Some(if inside { 1 } else { -1 })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn midpoint_certification_keeps_boundary_and_sub_ulp_fallbacks() {
+        let rectangle = |left, right| {
+            Location::new(
+                &Rect::new(Coord { x: left, y: 0. }, Coord { x: right, y: 4. }).to_polygon(),
+            )
+        };
+        let square = rectangle(0., 4.);
+        let (a, b) = (Coord { x: 1., y: 2. }, Coord { x: 3., y: 2. });
+        assert_eq!(certified_midpoint_position(&square, a, b), Some(1));
+        let (a, b) = (Coord { x: 0., y: 1. }, Coord { x: 0., y: 3. });
+        assert_eq!(certified_midpoint_position(&square, a, b), None);
+        assert_eq!(midpoint_position(&square, a, b), 0);
+        let (a, b) = (
+            Coord { x: 1., y: 2. },
+            Coord {
+                x: 1f64.next_up(),
+                y: 2.,
+            },
+        );
+        let narrow = rectangle(a.x, b.x);
+        assert_eq!(certified_midpoint_position(&narrow, a, b), None);
+        assert_eq!(midpoint_position(&narrow, a, b), 1);
+    }
     #[test]
     fn representable_intersections_are_movable_unless_they_are_original_vertices() {
         let mut nodes = Vec::new();

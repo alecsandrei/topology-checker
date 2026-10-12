@@ -41,6 +41,9 @@ pub(crate) fn polygon(polygon: &Polygon) -> Option<(usize, &'static str)> {
             return Some((i, reason));
         }
     }
+    if polygon.interiors().is_empty() {
+        return None;
+    }
     let rings = std::iter::once(polygon.exterior())
         .chain(polygon.interiors())
         .collect::<Vec<_>>();
@@ -68,7 +71,7 @@ pub(crate) fn polygon(polygon: &Polygon) -> Option<(usize, &'static str)> {
         i
     }
     for i in 1..rings.len() {
-        if rings[i].0.iter().any(|&p| locations[0].position(p) < 0) {
+        if representative_position(&locations[i], &locations[0]) < 0 {
             return Some((i, "hole outside shell or crossing shell"));
         }
         for item in boxes.locate_in_envelope_intersecting(&index::envelope(
@@ -79,18 +82,27 @@ pub(crate) fn polygon(polygon: &Polygon) -> Option<(usize, &'static str)> {
                 continue;
             }
             let mut contacts = std::collections::BTreeSet::new();
-            for a in &locations[i].segments {
-                for item in locations[j]
+            let i_is_small = locations[i].segments.len() <= locations[j].segments.len();
+            let (small, large) = if i_is_small {
+                (&locations[i], &locations[j])
+            } else {
+                (&locations[j], &locations[i])
+            };
+            for a in &small.segments {
+                crate::cancel::check();
+                let mut cuts = Vec::new();
+                for item in large
                     .tree
                     .locate_in_envelope_intersecting(&index::envelope(a.bounding_rect()))
                 {
-                    if let Some(contact) = line_intersection(*a, locations[j].segments[item.data]) {
+                    if let Some(contact) = line_intersection(*a, large.segments[item.data]) {
                         match contact {
                             LineIntersection::Collinear { .. }
                             | LineIntersection::SinglePoint {
                                 is_proper: true, ..
                             } => return Some((i, "crossing or overlapping polygon rings")),
                             LineIntersection::SinglePoint { intersection, .. } => {
+                                cuts.push(intersection);
                                 contacts.insert((
                                     crate::engine::cluster::bits(intersection.x),
                                     crate::engine::cluster::bits(intersection.y),
@@ -99,10 +111,29 @@ pub(crate) fn polygon(polygon: &Polygon) -> Option<(usize, &'static str)> {
                         }
                     }
                 }
+                if !cuts.is_empty() {
+                    cuts.extend([a.start, a.end]);
+                    cuts.sort_by(|p, q| {
+                        super::line_graph::projection(*a, *p)
+                            .0
+                            .total_cmp(&super::line_graph::projection(*a, *q).0)
+                    });
+                    cuts.dedup();
+                    if cuts.windows(2).any(|pair| {
+                        let side = super::arrangement::midpoint_position(large, pair[0], pair[1]);
+                        if j == 0 && i_is_small {
+                            side < 0
+                        } else {
+                            side > 0
+                        }
+                    }) {
+                        return Some((i, "crossing or overlapping polygon rings"));
+                    }
+                }
             }
             if j > 0
-                && (rings[i].0.iter().any(|&p| locations[j].position(p) == 1)
-                    || rings[j].0.iter().any(|&p| locations[i].position(p) == 1))
+                && (representative_position(&locations[i], &locations[j]) == 1
+                    || representative_position(&locations[j], &locations[i]) == 1)
             {
                 return Some((i, "nested or overlapping holes"));
             }
@@ -131,13 +162,95 @@ pub(crate) fn polygon(polygon: &Polygon) -> Option<(usize, &'static str)> {
     None
 }
 
+// After indexed contact checks, a connected ring has one containment state.
+// An inscribed ring can have every original vertex on the other boundary, so
+// exact source-edge midpoints provide the fallback representative.
+fn representative_position(a: &Location, b: &Location) -> i8 {
+    for segment in &a.segments {
+        crate::cancel::check();
+        #[cfg(test)]
+        CLASSIFIED_VERTICES.with(|n| n.set(n.get() + 1));
+        let position = b.position(segment.start);
+        if position != 0 {
+            return position;
+        }
+    }
+    a.segments
+        .iter()
+        .map(|s| super::arrangement::midpoint_position(b, s.start, s.end))
+        .find(|&p| p != 0)
+        .unwrap_or(0)
+}
+
+/// Reuse original boundary and ray indexes, scanning the smaller boundary only.
+/// With crossings and shared edges excluded, a boundary component has a single
+/// inside/outside state except at isolated contacts. Midpoints distinguish a
+/// crossing through a vertex from a permitted point tangency.
 pub(crate) fn multipart(a: &Location, b: &Location) -> bool {
+    relation(a, b, true)
+}
+/// Positive-area contribution, using the same original boundary evidence as
+/// multipart validation. Shared edges count only when their interior sides agree.
+pub(crate) fn interiors_overlap(a: &Location, b: &Location) -> bool {
+    relation(a, b, false)
+}
+/// Certify a contained original polygon without constructing another overlay.
+/// A container with holes stays on the general overlay path.
+pub(crate) fn covered_by(a: &Location, b: &Location) -> bool {
+    if b.anchors.len() != 1
+        || a.bounds.min().x < b.bounds.min().x
+        || a.bounds.min().y < b.bounds.min().y
+        || a.bounds.max().x > b.bounds.max().x
+        || a.bounds.max().y > b.bounds.max().y
+    {
+        return false;
+    }
+    for segment in &a.segments {
+        crate::cancel::check();
+        if b.position(segment.start) < 0 {
+            return false;
+        }
+        let mut cuts = Vec::new();
+        for item in b
+            .tree
+            .locate_in_envelope_intersecting(&index::envelope(segment.bounding_rect()))
+        {
+            match line_intersection(*segment, b.segments[item.data]) {
+                Some(LineIntersection::SinglePoint {
+                    is_proper: true, ..
+                }) => return false,
+                Some(LineIntersection::SinglePoint { intersection, .. }) => cuts.push(intersection),
+                Some(LineIntersection::Collinear { intersection }) => {
+                    cuts.extend([intersection.start, intersection.end])
+                }
+                None => {}
+            }
+        }
+        if !cuts.is_empty() {
+            cuts.extend([segment.start, segment.end]);
+            cuts.sort_by(|a, b| {
+                super::line_graph::projection(*segment, *a)
+                    .0
+                    .total_cmp(&super::line_graph::projection(*segment, *b).0)
+            });
+            cuts.dedup();
+            if cuts
+                .windows(2)
+                .any(|p| super::arrangement::midpoint_position(b, p[0], p[1]) < 0)
+            {
+                return false;
+            }
+        }
+    }
+    true
+}
+fn relation(a: &Location, b: &Location, reject_shared: bool) -> bool {
     let (small, large) = if a.segments.len() <= b.segments.len() {
         (a, b)
     } else {
         (b, a)
     };
-    for segment in &small.segments {
+    for (i, segment) in small.segments.iter().enumerate() {
         crate::cancel::check();
         #[cfg(test)]
         SCANNED.with(|n| n.set(n.get() + 1));
@@ -148,7 +261,18 @@ pub(crate) fn multipart(a: &Location, b: &Location) -> bool {
         {
             match line_intersection(*segment, large.segments[item.data]) {
                 Some(LineIntersection::Collinear { .. }) => {
-                    return true;
+                    let other = large.segments[item.data];
+                    let same_direction = if segment.start.x != segment.end.x {
+                        (segment.end.x > segment.start.x) == (other.end.x > other.start.x)
+                    } else {
+                        (segment.end.y > segment.start.y) == (other.end.y > other.start.y)
+                    };
+                    if reject_shared
+                        || (small.interior_left[i] == large.interior_left[item.data])
+                            == same_direction
+                    {
+                        return true;
+                    }
                 }
                 Some(LineIntersection::SinglePoint {
                     is_proper: true, ..
@@ -189,10 +313,40 @@ pub(crate) fn multipart(a: &Location, b: &Location) -> bool {
 
 #[cfg(test)]
 thread_local! { static SCANNED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+#[cfg(test)]
+thread_local! { static CLASSIFIED_VERTICES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn hole_containment_classifies_one_representative_after_contact_checks() {
+        let shell =
+            geo::Rect::new(geo::Coord { x: -2., y: -2. }, geo::Coord { x: 2., y: 2. }).to_polygon();
+        let mut ring = (0..4096)
+            .map(|i| {
+                let t = i as f64 * std::f64::consts::TAU / 4096.;
+                geo::Coord {
+                    x: t.cos(),
+                    y: t.sin(),
+                }
+            })
+            .collect::<Vec<_>>();
+        ring.push(ring[0]);
+        CLASSIFIED_VERTICES.with(|n| n.set(0));
+        assert!(
+            polygon(&Polygon::new(
+                shell.exterior().clone(),
+                vec![LineString(ring)]
+            ))
+            .is_none()
+        );
+        assert_eq!(CLASSIFIED_VERTICES.with(|n| n.get()), 1);
+        let inscribed = LineString::from(vec![(-2., 0.), (0., 2.), (2., 0.), (-2., 0.)]);
+        assert!(polygon(&Polygon::new(shell.exterior().clone(), vec![inscribed])).is_some());
+        let contact = LineString::from(vec![(-2., 0.), (-1., 1.), (1., 0.), (-2., 0.)]);
+        assert!(polygon(&Polygon::new(shell.exterior().clone(), vec![contact])).is_none());
+    }
     #[test]
     fn holes_at_one_contact_form_a_star_and_two_contacts_form_a_cycle() {
         let shell =
@@ -206,7 +360,6 @@ mod tests {
         let pinched = LineString::from(vec![(0., 4.), (4., 4.), (4., 6.), (0., 6.), (0., 4.)]);
         assert!(polygon(&Polygon::new(shell.exterior().clone(), vec![pinched])).is_some());
     }
-
     #[test]
     fn islands_query_small_boundaries_without_rescanning_large_rings() {
         let n = 20_000;

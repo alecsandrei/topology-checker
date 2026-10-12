@@ -1,6 +1,6 @@
 use crate::{
     Error, LayerId, RuleSpec, Topology, Violation, ViolationKind,
-    engine::{arrangement, index, polygons},
+    engine::{arrangement, index, location, polygons, precision, validity},
 };
 use rayon::prelude::*;
 use std::collections::BTreeMap;
@@ -9,6 +9,8 @@ pub(crate) fn overlap(t: &Topology, spec: RuleSpec) -> Result<Vec<Violation>, Er
     let (a_layer, b_layer) = (spec.layer, spec.other.unwrap_or(spec.layer));
     let a = t.parts(a_layer)?;
     let b = t.full_parts(b_layer)?;
+    let al = location::locations(a);
+    let bl = location::locations(b);
     let ranks = t.layer(spec.layer)?.ranks();
     let mut groups = BTreeMap::<(i64, i64), (Vec<usize>, Vec<usize>)>::new();
     for (i, j) in index::pairs(
@@ -27,6 +29,12 @@ pub(crate) fn overlap(t: &Topology, spec: RuleSpec) -> Result<Vec<Violation>, Er
         {
             continue;
         }
+        // Touch-only candidates cannot contribute area or original provenance.
+        // Reuse the prepared source indexes instead of rebuilding exact overlays
+        // for every adjacent pair and then again for each original part.
+        if !validity::interiors_overlap(&al[i], &bl[j]) {
+            continue;
+        }
         let (ai, bj) = groups
             .entry((ap.reference.fid, bp.reference.fid))
             .or_default();
@@ -42,6 +50,17 @@ pub(crate) fn overlap(t: &Topology, spec: RuleSpec) -> Result<Vec<Violation>, Er
             bj.dedup();
             let geometry = t
                 .cancellable(|| {
+                    if ai.len() == 1 && bj.len() == 1 {
+                        let (i, j) = (ai[0], bj[0]);
+                        if a.polygons[i].geometry.as_ref() == b.polygons[j].geometry.as_ref()
+                            || validity::covered_by(&al[i], &bl[j])
+                        {
+                            return Ok(precision::original(&a.polygons[i].geometry, t.tolerance()));
+                        }
+                        if validity::covered_by(&bl[j], &al[i]) {
+                            return Ok(precision::original(&b.polygons[j].geometry, t.tolerance()));
+                        }
+                    }
                     arrangement::overlay(
                         ai.iter().map(|&i| a.polygons[i].geometry.as_ref()),
                         bj.iter().map(|&j| b.polygons[j].geometry.as_ref()),
@@ -63,42 +82,8 @@ pub(crate) fn overlap(t: &Topology, spec: RuleSpec) -> Result<Vec<Violation>, Er
             if geometry.0.is_empty() {
                 return Ok(None);
             }
-            // Bounding-box candidates that only touch must not clear original
-            // part provenance. Classify contribution on exact original operands.
-            let contributing_a = if ai.len() == 1 {
-                ai.clone()
-            } else {
-                ai.iter()
-                    .copied()
-                    .filter(|&i| {
-                        t.cancellable(|| {
-                            arrangement::overlay(
-                                [a.polygons[i].geometry.as_ref()],
-                                bj.iter().map(|&j| b.polygons[j].geometry.as_ref()),
-                                true,
-                            )
-                            .has_area()
-                        })
-                    })
-                    .collect()
-            };
-            let contributing_b = if bj.len() == 1 {
-                bj.clone()
-            } else {
-                bj.iter()
-                    .copied()
-                    .filter(|&j| {
-                        t.cancellable(|| {
-                            arrangement::overlay(
-                                ai.iter().map(|&i| a.polygons[i].geometry.as_ref()),
-                                [b.polygons[j].geometry.as_ref()],
-                                true,
-                            )
-                            .has_area()
-                        })
-                    })
-                    .collect()
-            };
+            let contributing_a = ai;
+            let contributing_b = bj;
             let mut origin = a.polygons[contributing_a[0]].reference.at(a_layer);
             let mut destination = b.polygons[contributing_b[0]].reference.at(b_layer);
             for &i in &contributing_a[1..] {
