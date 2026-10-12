@@ -59,7 +59,9 @@ GRASS = {
     ]: "v.to.db coordinates, SQLite duplicate-pair query, native error vectors",
     NATIVE_RULES[1]: "v.clean break, native node degree and original categories",
     NATIVE_RULES[2]: "native spatial index and attributed v.overlay intersection pairs",
-    NATIVE_RULES[3]: "v.clean break,rmdupl,bpol and bounded uncovered native faces",
+    NATIVE_RULES[
+        3
+    ]: "v.clean break,rmdupl,bpol and original-ring coverage of bounded native faces",
 }
 SUPPORT = {
     "qgis": {rule: mapping[0] for rule, mapping in MAPPINGS.items()},

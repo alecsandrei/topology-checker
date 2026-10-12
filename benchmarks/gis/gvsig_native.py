@@ -69,6 +69,23 @@ def validate(rule, geometries):
                             else 1
                         )
                 if uses == 1:
+                    coordinates = geometry.getCoordinates()
+                    for position in range(len(coordinates) - 1):
+                        if (
+                            position == 0
+                            and endpoint.equalsTopo(geometry.getStartPoint())
+                        ) or (
+                            position == len(coordinates) - 2
+                            and endpoint.equalsTopo(geometry.getEndPoint())
+                        ):
+                            continue
+                        segment = geometry.getFactory().createLineString(
+                            [coordinates[position], coordinates[position + 1]]
+                        )
+                        if segment.getLength() > 0 and segment.intersects(endpoint):
+                            uses += 2
+                            break
+                if uses == 1:
                     errors.append((fid, None, endpoint))
             continue
         for other_id, other in index.query(geometry.getEnvelopeInternal()):

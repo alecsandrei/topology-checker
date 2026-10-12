@@ -88,6 +88,18 @@ def additional_cases(rule: str) -> list[dict[str, Any]]:
         }
         for name, geometries, expected, identity in cases.get(rule, [])
     ]
+    if rule == "line/must-not-have-dangles":
+        result.append(
+            {
+                "name": "both endpoints connect to own interior",
+                "input": [
+                    line((0, 0), (2, 0), (2, 2), (-2, 2), (-2, -2), (0, -2), (0, 2))
+                ],
+                "other": None,
+                "expected": 0,
+                "identity": {"primary_ids": []},
+            }
+        )
     if rule == "polygon/must-not-have-gaps":
         bounded = polygon(2, 2, 6)
         with_island = polygon(2, 2, 6)
@@ -96,4 +108,24 @@ def additional_cases(rule: str) -> list[dict[str, Any]]:
             result, ([bounded], [with_island], []), strict=True
         ):
             case["expected_gaps"] = geometries
+        result.extend(
+            [
+                {
+                    "name": "covered overlap faces",
+                    "input": [polygon(0, 0, 4), polygon(2, 0, 4)],
+                    "other": None,
+                    "expected": 0,
+                    "identity": {},
+                    "expected_gaps": [],
+                },
+                {
+                    "name": "filled hole",
+                    "input": [hole, polygon(2, 2, 6)],
+                    "other": None,
+                    "expected": 0,
+                    "identity": {},
+                    "expected_gaps": [],
+                },
+            ]
+        )
     return result

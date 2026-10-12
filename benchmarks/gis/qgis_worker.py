@@ -74,6 +74,20 @@ def validate(rule: str, geometries: dict) -> list:
                         2 if ends[0] == ends[-1] or (xy.x(), xy.y()) not in ends else 1
                     )
                 if uses == 1:
+                    # An open line can connect its endpoint to its own interior.
+                    for position, (first, last) in enumerate(
+                        zip(coordinates, coordinates[1:], strict=False)
+                    ):
+                        if (position == 0 and (xy.x(), xy.y()) == endpoints[0]) or (
+                            position == len(coordinates) - 2
+                            and (xy.x(), xy.y()) == endpoints[-1]
+                        ):
+                            continue
+                        segment = QgsGeometry.fromPolylineXY([first, last])
+                        if segment.length() > 0 and segment.intersects(endpoint):
+                            uses += 2
+                            break
+                if uses == 1:
                     errors.append((fid, None, endpoint))
             continue
         for candidate in index.intersects(geometry.boundingBox()):

@@ -72,7 +72,11 @@ def _query(rule: str) -> str:
             "ends AS (SELECT id,(ST_Dump(ST_Boundary(geom))).geom FROM parts), "
             "degree AS (SELECT e.id,e.geom,(SELECT SUM(CASE WHEN ST_IsClosed(p.geom) "
             "THEN 2 WHEN ST_Equals(ST_StartPoint(p.geom),e.geom) OR "
-            "ST_Equals(ST_EndPoint(p.geom),e.geom) THEN 1 ELSE 2 END) "
+            "ST_Equals(ST_EndPoint(p.geom),e.geom) THEN CASE WHEN c.id=e.id AND EXISTS "
+            "(SELECT 1 FROM ST_DumpSegments(p.geom) s WHERE ST_Length(s.geom)>0 "
+            "AND NOT (s.path[1]=1 AND ST_Equals(ST_StartPoint(p.geom),e.geom)) "
+            "AND NOT (s.path[1]=ST_NPoints(p.geom)-1 AND ST_Equals(ST_EndPoint(p.geom),e.geom)) "
+            "AND ST_Intersects(s.geom,e.geom)) THEN 3 ELSE 1 END ELSE 2 END) "
             "FROM a c CROSS JOIN LATERAL ST_Dump(c.geom) p "
             "WHERE c.geom && e.geom AND ST_Intersects(p.geom,e.geom)) uses FROM ends e) "
         )

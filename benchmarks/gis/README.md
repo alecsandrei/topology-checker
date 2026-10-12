@@ -55,12 +55,14 @@ is excluded, and covered islands remain holes in the gap geometry.
 | Duplicate points | `QgsSpatialIndex`, geometry equality | `v.to.db` coordinates, indexed SQLite pair query, native error points | Indexed `ST_Equals` pairs | Native STRtree, JTS equality |
 | Line dangles | Indexed endpoint incidence | Native noding and node-degree inspection | Indexed endpoint-incidence SQL | Native STRtree, JTS endpoint incidence |
 | Polygon overlaps | Indexed positive-area intersection | Native spatial candidates and attributed `v.overlay` on original polygons | Indexed positive-area `ST_Intersection` | Native STRtree, positive-area JTS intersection |
-| Polygon gaps | Native union and bounded void difference | Bounded uncovered faces in native vector topology | Native union and bounded void difference | Native JTS union and bounded void difference |
+| Polygon gaps | Native union and bounded void difference | Bounded native faces with original-ring coverage classification | Native union and bounded void difference | Native JTS union and bounded void difference |
 
 Each record names the operation actually used. GRASS retains separate original
 polygon maps for overlays so equal or contained source features keep their IDs.
 Its duplicate query reads coordinates extracted by GRASS and writes native error
-vectors. Noding constructs topology without repairing or removing violations.
+vectors. Gap faces without centroids are classified against indexed original
+rings using the native GRASS point-in-ring operation, so covered overlap faces
+are retained as coverage. Noding constructs topology without repairing or removing violations.
 gvSIG uses its bundled JTS geometry plugin for the four additional workflows.
 The stock topology plans remain in use for containment and other mapped rules.
 
@@ -88,7 +90,7 @@ for another tool.
 Clean, violating, boundary and hole containment probes remain separate from the
 six headline checks. Additional probes cover duplicate triples, T junctions,
 closed lines, equal and contained polygons, boundary touches, bounded holes and
-islands. All measured repetitions must match Rust and all probes must pass.
+islands, covered overlap faces and self-connected line endpoints. All measured repetitions must match Rust and all probes must pass.
 
 ## Results and publication
 

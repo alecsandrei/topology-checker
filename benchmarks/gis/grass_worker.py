@@ -76,9 +76,13 @@ def main() -> None:
                 quiet=True,
             )
         polygon_names = []
+        coverage_rings = {}
         if os.environ["GIS_WORKER_RULE"] == "polygon/must-not-overlap":
             features = json.loads(Path(SOURCE_FILES["input"]).read_text())["features"]
             polygon_names = grass_native.polygon_templates(features)
+        if os.environ["GIS_WORKER_RULE"] == "polygon/must-not-have-gaps":
+            features = json.loads(Path(SOURCE_FILES["input"]).read_text())["features"]
+            coverage_rings = grass_native.coverage_templates(features)
         reply(
             {
                 "status": "ready",
@@ -124,7 +128,11 @@ def main() -> None:
                 )
                 for support in ("topo", "sidx", "cidx", "fidx"):
                     (vector / support).unlink(missing_ok=True)
-            for template in ["source_index", *polygon_names] if polygon_names else []:
+            for template in (
+                ["source_index", *polygon_names]
+                if polygon_names or coverage_rings
+                else []
+            ):
                 target = template.replace("source_", "")
                 root = vector.parent
                 shutil.rmtree(root / target, ignore_errors=True)
@@ -155,7 +163,7 @@ def main() -> None:
             elif rule == "polygon/must-not-overlap":
                 materialized = grass_native.overlaps(polygon_names)
             elif rule == "polygon/must-not-have-gaps":
-                materialized = grass_native.gaps()
+                materialized = grass_native.gaps(coverage_rings)
             else:
                 raise ValueError("unsupported native GRASS rule")
             seconds = time.perf_counter() - started

@@ -7,7 +7,23 @@ from string import Template
 import grass.lib.vector as libvect
 import grass.script as gs
 from grass.pygrass.vector import Vector, VectorTopo
+from grass.pygrass.vector.basic import Bbox
 from grass.pygrass.vector.geometry import Boundary, Centroid, Point
+
+
+def coverage_templates(features: list[dict]) -> dict:
+    """Preload original native rings and an unindexed, attributed boundary map."""
+    rings = {}
+    index = VectorTopo("source_index")
+    index.open("w")
+    for feature in features:
+        fid = int(feature["properties"]["bench_id"])
+        rings[fid] = [
+            Boundary(points=ring) for ring in feature["geometry"]["coordinates"]
+        ]
+        index.write(rings[fid][0], cat=fid)
+    index.close()
+    return rings
 
 
 def polygon_templates(features: list[dict]) -> list[str]:
@@ -169,7 +185,7 @@ def overlaps(names: list[str]) -> list[dict]:
     return records
 
 
-def gaps() -> list[dict]:
+def gaps(rings: dict) -> list[dict]:
     """Extract bounded uncovered faces, retaining any covered islands as holes."""
     gs.run_command(
         "v.clean",
@@ -180,11 +196,36 @@ def gaps() -> list[dict]:
         overwrite=True,
         quiet=True,
     )
+    build("index")
+    index = VectorTopo("index")
+    index.open("r")
     vector = VectorTopo("faces")
     vector.open("r")
     records = []
     for area in vector.viter("areas"):
         if area.centroid() is None and area.area() > 0:
+            x, y = ctypes.c_double(), ctypes.c_double()
+            if (
+                libvect.Vect_get_point_in_area(
+                    vector.c_mapinfo, area.id, ctypes.byref(x), ctypes.byref(y)
+                )
+                < 0
+            ):
+                raise ValueError("Cannot find native face interior")
+            box = Bbox(north=y.value, south=y.value, east=x.value, west=x.value)
+            covered = False
+            for candidate in index.find_by_bbox.geos(box, type="boundary") or []:
+                original = rings[candidate.cat]
+                if libvect.Vect_point_in_poly(
+                    x.value, y.value, original[0].c_points
+                ) > 0 and not any(
+                    libvect.Vect_point_in_poly(x.value, y.value, ring.c_points) > 0
+                    for ring in original[1:]
+                ):
+                    covered = True
+                    break
+            if covered:
+                continue
             records.append(
                 {
                     "kind": "gap",
@@ -195,6 +236,7 @@ def gaps() -> list[dict]:
                 }
             )
     vector.close()
+    index.close()
     return records
 
 
