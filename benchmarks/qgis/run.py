@@ -13,7 +13,10 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from fixtures import CATALOG, FIXTURES, HERE, MAPPINGS, ROOT, workload, write_case
+if __package__:
+    from .fixtures import CATALOG, FIXTURES, HERE, MAPPINGS, ROOT, workload, write_case
+else:
+    from fixtures import CATALOG, FIXTURES, HERE, MAPPINGS, ROOT, workload, write_case
 
 DEFAULT_QGIS = "/Applications/QGIS-final-4_2_2.app/Contents/MacOS/QGIS-final-4_2_2"
 
