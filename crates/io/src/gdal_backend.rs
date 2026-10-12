@@ -65,8 +65,22 @@ pub(crate) fn write_sources(
             options.push("TARGET_ARCGIS_VERSION=ARCGIS_PRO_3_2_OR_LATER");
         }
         let mut inferred = None;
+        let mut integer64 = vec![false; l.fields.len()];
         for row in source.records() {
             let row = row?;
+            // Infer ranges from repeatable records, including disk-backed sources.
+            for (i, field) in l.fields.iter().enumerate() {
+                if field.kind == FieldType::Integer
+                    && !integer64[i]
+                    && row
+                        .properties
+                        .get(&field.name)
+                        .and_then(serde_json::Value::as_i64)
+                        .is_some_and(|n| i32::try_from(n).is_err())
+                {
+                    integer64[i] = true;
+                }
+            }
             if let Some(g) = &row.geometry {
                 let ty = g.to_gdal()?.geometry_type();
                 inferred = Some(inferred.map_or(ty, |old| {
@@ -98,11 +112,13 @@ pub(crate) fn write_sources(
         layer.create_defn_fields(
             &l.fields
                 .iter()
-                .map(|f| {
+                .enumerate()
+                .map(|(i, f)| {
                     (
                         f.name.as_str(),
                         match f.kind {
                             FieldType::Boolean => OGRFieldType::OFTInteger,
+                            FieldType::Integer if !integer64[i] => OGRFieldType::OFTInteger,
                             FieldType::Integer => OGRFieldType::OFTInteger64,
                             FieldType::Real => OGRFieldType::OFTReal,
                             FieldType::Text => OGRFieldType::OFTString,
