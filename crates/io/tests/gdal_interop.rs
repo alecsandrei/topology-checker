@@ -13,9 +13,11 @@ use geo::{
 };
 use serde_json::json;
 use std::path::Path;
+use topology_checker_core::{Layer, Rule, Topology};
 use topology_checker_io::{
     crs, read, registry,
-    write::{self, DatasetLayer, Field, FieldType, Record},
+    report_store::DiskReport,
+    write::{self, DatasetLayer, Field, FieldType, Record, ReportLayout},
 };
 fn sample_geometries() -> Vec<Geometry> {
     let line = LineString::from(vec![(5., 52.), (6., 53.)]);
@@ -432,6 +434,202 @@ fn additional_filegdb_and_mapinfo_drivers_preserve_layers_and_replace_outputs() 
             .to_string_lossy()
             .starts_with(".topology-output-")
     }));
+}
+
+fn field_types(path: &Path) -> Vec<(String, OGRFieldType::Type)> {
+    let ds = Dataset::open(path).unwrap();
+    ds.layer(0)
+        .unwrap()
+        .defn()
+        .fields()
+        .map(|f| (f.name(), f.field_type()))
+        .collect()
+}
+
+fn filegdb_wide_type() -> OGRFieldType::Type {
+    if gdal::version::version_info("VERSION_NUM")
+        .parse::<u32>()
+        .unwrap()
+        >= 3_090_000
+    {
+        OGRFieldType::OFTInteger64
+    } else {
+        OGRFieldType::OFTReal
+    }
+}
+
+fn assert_filegdb_integer(actual: &serde_json::Value, expected: i64) {
+    if filegdb_wide_type() == OGRFieldType::OFTInteger64 {
+        if expected.unsigned_abs() > 9_007_199_254_740_991 {
+            assert_eq!(actual, &json!(expected.to_string()));
+        } else {
+            assert_eq!(actual.as_i64(), Some(expected));
+        }
+    } else {
+        assert_eq!(actual.as_f64(), Some(expected as f64));
+    }
+}
+
+#[test]
+fn additional_integer_fields_use_actual_ranges_and_ignore_null_or_missing_values() {
+    let dir = tempfile::tempdir().unwrap();
+    for (driver, ext) in [("OpenFileGDB", "gdb"), ("MapInfo File", "tab")] {
+        let path = dir.path().join(format!("ranges.{ext}"));
+        let properties = [
+            json!({"bounded": 42, "null_only": null}),
+            json!({"bounded": i32::MIN}),
+            json!({"bounded": i32::MAX, "null_only": null}),
+            json!({"bounded": null}),
+            json!({}),
+        ];
+        let mut original = DatasetLayer::new(
+            "ranges",
+            Some(crs::parse("EPSG:4326").unwrap()),
+            properties
+                .iter()
+                .enumerate()
+                .map(|(i, p)| Record {
+                    id: None,
+                    geometry: Some(Point::new(5. + i as f64, 52.).into()),
+                    properties: p.as_object().unwrap().clone(),
+                })
+                .collect(),
+        );
+        original.fields = ["bounded", "null_only", "missing"]
+            .map(|name| Field {
+                name: name.into(),
+                kind: FieldType::Integer,
+            })
+            .into();
+        write::dataset(&path, Some(driver), false, &[original]).unwrap();
+        assert_eq!(
+            field_types(&path),
+            ["bounded", "null_only", "missing"].map(|name| (name.into(), OGRFieldType::OFTInteger))
+        );
+        let imported = read::read_with_attributes(&path, None, "ranges", true).unwrap();
+        assert_eq!(imported[0].attributes.len(), properties.len());
+        for (actual, expected) in imported[0].attributes.iter().zip(&properties) {
+            // MapInfo represents unset numeric fields as zero.
+            if !expected["bounded"].is_null() {
+                assert_eq!(actual["bounded"], expected["bounded"], "{driver}");
+            } else if driver == "OpenFileGDB" {
+                assert!(actual["bounded"].is_null());
+            }
+            if driver == "OpenFileGDB" {
+                assert!(actual["null_only"].is_null());
+                assert!(actual["missing"].is_null());
+            }
+        }
+    }
+
+    for outlier in [
+        i64::from(i32::MAX) + 1,
+        i64::from(i32::MIN) - 1,
+        9007199254740993,
+        -9007199254740993,
+    ] {
+        let path = dir.path().join(format!("wide-{outlier}.gdb"));
+        let values = [
+            Some(42),
+            Some(i64::from(i32::MAX)),
+            None,
+            None,
+            Some(outlier),
+        ];
+        let original = DatasetLayer::new(
+            "wide",
+            Some(crs::parse("EPSG:4326").unwrap()),
+            values
+                .iter()
+                .enumerate()
+                .map(|(i, v)| Record {
+                    id: None,
+                    // The late outlier must be scanned even without geometry.
+                    geometry: (i == 0).then(|| Point::new(5., 52.).into()),
+                    properties: if i == 3 {
+                        serde_json::Map::new()
+                    } else {
+                        json!({"integer": v}).as_object().unwrap().clone()
+                    },
+                })
+                .collect(),
+        );
+        write::dataset(&path, Some("OpenFileGDB"), false, &[original]).unwrap();
+        assert_eq!(
+            field_types(&path),
+            [("integer".into(), filegdb_wide_type())]
+        );
+        let ds = Dataset::open(&path).unwrap();
+        let mut layer = ds.layer(0).unwrap();
+        assert_eq!(layer.feature_count(), values.len() as u64);
+        for (feature, expected) in layer.features().zip(values) {
+            let index = feature.field_index("integer").unwrap();
+            match expected {
+                Some(value) if filegdb_wide_type() == OGRFieldType::OFTInteger64 => {
+                    assert_eq!(feature.field_as_integer64(index).unwrap(), Some(value));
+                }
+                Some(value) => {
+                    assert_eq!(feature.field_as_double(index).unwrap(), Some(value as f64));
+                }
+                None => assert!(feature.field(index).unwrap().is_none()),
+            }
+        }
+    }
+}
+
+#[test]
+fn filegdb_eager_and_disk_reports_infer_equivalent_integer_fields() {
+    let dir = tempfile::tempdir().unwrap();
+    let srs = crs::parse("EPSG:4326").unwrap();
+    for (case, fids) in [
+        ("bounded", [42, i64::from(i32::MIN), i64::from(i32::MAX)]),
+        ("wide", [42, 9007199254740993, -9007199254740993]),
+    ] {
+        let mut topology = Topology::new(0.).unwrap();
+        let lines = topology.add_layer(Layer::from_geometries("empty_lines", []));
+        for (i, fid) in fids.into_iter().enumerate() {
+            let points = topology.add_layer(Layer::from_features(
+                format!("points_{i}"),
+                [(fid, Point::new(5., 52.).into())],
+            ));
+            topology
+                .add_rule(Rule::PointMustBeCoveredByLines, points, Some(lines))
+                .unwrap();
+        }
+        let eager = topology.validate().unwrap();
+        let stored = DiskReport::validate(&topology, Some(dir.path())).unwrap();
+        assert_eq!(stored.violation_count(), fids.len());
+        for layout in [ReportLayout::Complete, ReportLayout::ByFamily] {
+            let a = dir.path().join(format!("eager-{case}-{layout:?}.gdb"));
+            let b = dir.path().join(format!("stored-{case}-{layout:?}.gdb"));
+            write::report(&a, Some("OpenFileGDB"), false, Some(&srs), &eager, layout).unwrap();
+            write::stored_report(&b, Some("OpenFileGDB"), false, Some(&srs), &stored, layout)
+                .unwrap();
+            let schema = field_types(&a);
+            assert_eq!(schema, field_types(&b));
+            for (name, ty) in &schema {
+                let expected = match name.as_str() {
+                    "origin_fid" if case == "wide" => filegdb_wide_type(),
+                    "violation_id" | "origin_fid" | "origin_part" | "destination_fid"
+                    | "destination_part" => OGRFieldType::OFTInteger,
+                    _ => OGRFieldType::OFTString,
+                };
+                assert_eq!(*ty, expected, "{case} {layout:?} {name}");
+            }
+            let a = read::read_with_attributes(&a, None, "report", true).unwrap();
+            let b = read::read_with_attributes(&b, None, "report", true).unwrap();
+            assert_eq!(a[0].attributes, b[0].attributes);
+            assert_eq!(a[0].attributes.len(), fids.len());
+            for (actual, fid) in a[0].attributes.iter().zip(fids) {
+                if case == "wide" {
+                    assert_filegdb_integer(&actual["origin_fid"], fid);
+                } else {
+                    assert_eq!(actual["origin_fid"].as_i64(), Some(fid));
+                }
+                assert!(actual["destination_fid"].is_null());
+            }
+        }
+    }
 }
 #[test]
 fn gdal_fallback_crs_and_invalid_coordinate_errors_are_explicit() {
