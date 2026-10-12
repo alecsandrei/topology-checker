@@ -1,6 +1,7 @@
 //! Exact overlay boundaries and constrained conversion to binary output coordinates.
 use super::{
     arrangement::{Exact, intersects, on, orient},
+    certified::{self, Interval},
     index,
 };
 use crate::Error;
@@ -8,11 +9,18 @@ use geo::{BoundingRect, Coord, Kernel, Line, LineString, MultiPolygon, Polygon, 
 use num_rational::BigRational as Q;
 use num_traits::{Signed, ToPrimitive, Zero};
 use std::{
+    borrow::Cow,
     collections::{BTreeSet, HashMap},
     sync::OnceLock,
 };
 
+const ROUNDING_RADII: [i32; 7] = [1, 2, 4, 8, 16, 32, 64];
+const MAX_ROUNDING_STEPS: i32 = 64;
+const ASSIGNMENT_BUDGET: usize = 100_000;
+
 pub(super) fn area(nodes: &[Exact], ring: &[usize]) -> Q {
+    #[cfg(test)]
+    EXACT_AREAS.with(|n| n.set(n.get() + 1));
     let (ox, oy) = nodes[ring[0]].xy();
     let mut result = Q::zero();
     for pair in ring.windows(2) {
@@ -23,58 +31,23 @@ pub(super) fn area(nodes: &[Exact], ring: &[usize]) -> Q {
     }
     result / Q::from_integer(2.into())
 }
-// Outward-rounded interval arithmetic certifies the common case. Exact
-// rational arithmetic handles cancellation and sub-ULP intersections.
-#[derive(Clone, Copy)]
-struct Interval(f64, f64);
-impl Interval {
-    fn add(self, b: Self) -> Self {
-        Self((self.0 + b.0).next_down(), (self.1 + b.1).next_up())
-    }
-    fn sub(self, b: Self) -> Self {
-        Self((self.0 - b.1).next_down(), (self.1 - b.0).next_up())
-    }
-    fn mul(self, b: Self) -> Self {
-        let v = [self.0 * b.0, self.0 * b.1, self.1 * b.0, self.1 * b.1];
-        if v.iter().any(|x| !x.is_finite()) {
-            return Self(f64::NEG_INFINITY, f64::INFINITY);
-        }
-        Self(
-            v.iter().copied().fold(f64::INFINITY, f64::min).next_down(),
-            v.iter()
-                .copied()
-                .fold(f64::NEG_INFINITY, f64::max)
-                .next_up(),
-        )
-    }
-}
-pub(super) fn area_sign(nodes: &[Exact], ring: &[usize]) -> std::cmp::Ordering {
-    fn intervals(p: &Exact) -> (Interval, Interval) {
-        let q = p.output();
-        if matches!(p, Exact::Input(_)) {
-            (Interval(q.x, q.x), Interval(q.y, q.y))
-        } else {
-            (
-                Interval(q.x.next_down(), q.x.next_up()),
-                Interval(q.y.next_down(), q.y.next_up()),
-            )
-        }
-    }
-    let (ox, oy) = intervals(&nodes[ring[0]]);
+#[cfg(test)]
+thread_local! { static EXACT_AREAS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+fn area_bounds(nodes: &[Exact], ring: &[usize]) -> Interval {
+    let [ox, oy] = certified::coordinates(&nodes[ring[0]]);
     let mut sum = Interval(0., 0.);
     for pair in ring.windows(2) {
         crate::cancel::check();
-        let (ax, ay) = intervals(&nodes[pair[0]]);
-        let (bx, by) = intervals(&nodes[pair[1]]);
+        let [ax, ay] = certified::coordinates(&nodes[pair[0]]);
+        let [bx, by] = certified::coordinates(&nodes[pair[1]]);
         sum = sum.add(ax.sub(ox).mul(by.sub(oy)).sub(ay.sub(oy).mul(bx.sub(ox))));
     }
-    if sum.0 > 0. {
-        std::cmp::Ordering::Greater
-    } else if sum.1 < 0. {
-        std::cmp::Ordering::Less
-    } else {
-        area(nodes, ring).cmp(&Q::zero())
-    }
+    sum.mul(Interval(0.5, 0.5))
+}
+pub(super) fn area_sign(nodes: &[Exact], ring: &[usize]) -> std::cmp::Ordering {
+    area_bounds(nodes, ring)
+        .sign()
+        .unwrap_or_else(|| area(nodes, ring).cmp(&Q::zero()))
 }
 #[derive(Debug)]
 struct ExactLocation {
@@ -101,7 +74,6 @@ impl ExactLocation {
         Self { edges, tree }
     }
     fn position(&self, nodes: &[Exact], p: &Exact) -> i8 {
-        let (_, py) = p.xy();
         let rounded = p.output();
         let query = rstar::AABB::from_corners(
             [rounded.x.next_down(), rounded.y.next_down()],
@@ -114,9 +86,9 @@ impl ExactLocation {
             if on(a, b, p) {
                 return 0;
             }
-            let (_, ay) = a.xy();
-            let (_, by) = b.xy();
-            if (ay > py) != (by > py) && (orient(a, b, p) > Q::zero()) == (by > ay) {
+            if certified::compare(a, p, 1).is_gt() != certified::compare(b, p, 1).is_gt()
+                && (orient(a, b, p) > Q::zero()) == certified::compare(b, a, 1).is_gt()
+            {
                 inside = !inside;
             }
         }
@@ -126,6 +98,33 @@ impl ExactLocation {
 // Rational bounds for each square root. Refinement certifies the inclusive
 // threshold, including equality when all edge lengths are rational.
 fn substantial(nodes: &[Exact], rings: &[&[usize]], tolerance: f64) -> bool {
+    let a_bounds = area_bounds(nodes, rings[0]).abs();
+    let a_bounds = rings[1..]
+        .iter()
+        .fold(a_bounds, |sum, r| sum.sub(area_bounds(nodes, r).abs()));
+    if a_bounds.1 <= 0. {
+        return false;
+    }
+    if tolerance == 0. && a_bounds.0 > 0. {
+        return true;
+    }
+    if tolerance > 0. && a_bounds.0 > 0. {
+        let perimeter =
+            rings
+                .iter()
+                .flat_map(|r| r.windows(2))
+                .fold(Interval(0., 0.), |sum, edge| {
+                    let [ax, ay] = certified::coordinates(&nodes[edge[0]]);
+                    let [bx, by] = certified::coordinates(&nodes[edge[1]]);
+                    sum.add(bx.sub(ax).square().add(by.sub(ay).square()).sqrt())
+                });
+        let margin = a_bounds
+            .mul(Interval(2., 2.))
+            .sub(perimeter.mul(Interval(tolerance, tolerance)));
+        if let Some(sign) = margin.sign() {
+            return sign.is_gt();
+        }
+    }
     let a =
         area(nodes, rings[0]).abs() - rings[1..].iter().map(|r| area(nodes, r).abs()).sum::<Q>();
     if a <= Q::zero() {
@@ -178,12 +177,25 @@ pub(super) struct ExactPolygon {
     pub shell: Vec<usize>,
     pub holes: Vec<Vec<usize>>,
 }
+struct Selection<'a> {
+    shell: &'a [usize],
+    holes: Vec<&'a [usize]>,
+}
+impl<'a> Selection<'a> {
+    fn polygon(p: &'a ExactPolygon) -> Self {
+        Self {
+            shell: &p.shell,
+            holes: p.holes.iter().map(Vec::as_slice).collect(),
+        }
+    }
+}
 #[derive(Debug)]
 pub(super) struct Component {
     nodes: Vec<Exact>,
     polygons: Vec<ExactPolygon>,
     source_order: Vec<(usize, usize, usize)>,
-    locations: Vec<ExactLocation>,
+    locations: crate::cache::Cache<Vec<ExactLocation>>,
+    coordinates: crate::cache::Cache<Result<Vec<Coord>, Error>>,
 }
 impl Component {
     pub fn new(
@@ -192,10 +204,14 @@ impl Component {
         holes: Vec<Vec<usize>>,
         source_order: Vec<(usize, usize, usize)>,
     ) -> Self {
-        let shell_locations = shells
-            .iter()
-            .map(|r| ExactLocation::new(&nodes, [r]))
-            .collect::<Vec<_>>();
+        let shell_locations = if holes.is_empty() {
+            vec![]
+        } else {
+            shells
+                .iter()
+                .map(|r| ExactLocation::new(&nodes, [r]))
+                .collect::<Vec<_>>()
+        };
         let shell_areas = shells
             .iter()
             .map(|_| OnceLock::<Q>::new())
@@ -204,6 +220,7 @@ impl Component {
             shells
                 .iter()
                 .enumerate()
+                .filter(|_| !holes.is_empty())
                 .map(|(i, r)| (i, ring_bounds(&nodes, r))),
         );
         let mut polygons = shells
@@ -236,32 +253,68 @@ impl Component {
                 .data;
             polygons[owner].holes.push(hole);
         }
-        let locations = polygons
-            .iter()
-            .map(|p| ExactLocation::new(&nodes, std::iter::once(&p.shell).chain(&p.holes)))
-            .collect();
         Self {
             nodes,
             polygons,
             source_order,
-            locations,
+            locations: crate::cache::Cache::new(),
+            coordinates: crate::cache::Cache::new(),
         }
     }
-    fn rings(&self) -> Vec<&[usize]> {
-        self.polygons
-            .iter()
-            .flat_map(|p| {
-                std::iter::once(p.shell.as_slice()).chain(p.holes.iter().map(Vec::as_slice))
-            })
-            .collect()
+    fn locations(&self) -> &[ExactLocation] {
+        self.locations.get_or_init(|| {
+            self.polygons
+                .iter()
+                .map(|p| ExactLocation::new(&self.nodes, std::iter::once(&p.shell).chain(&p.holes)))
+                .collect()
+        })
     }
-    fn coordinates(&self) -> Result<Vec<Coord>, Error> {
+    fn coordinates(&self) -> Result<&[Coord], Error> {
+        self.coordinates
+            .get_or_init(|| self.solve_coordinates())
+            .as_ref()
+            .map(Vec::as_slice)
+            .map_err(Clone::clone)
+    }
+    fn selected_coordinates<'a>(
+        &'a self,
+        selected: &[Selection<'_>],
+    ) -> Result<Cow<'a, [Coord]>, Error> {
+        let all = selected.len() == self.polygons.len()
+            && selected.iter().zip(&self.polygons).all(|(s, p)| {
+                std::ptr::eq(s.shell, p.shell.as_slice()) && s.holes.len() == p.holes.len()
+            });
+        if all {
+            self.coordinates().map(Cow::Borrowed)
+        } else {
+            self.solve_selected(selected).map(Cow::Owned)
+        }
+    }
+    fn solve_coordinates(&self) -> Result<Vec<Coord>, Error> {
+        self.solve_selected(
+            &self
+                .polygons
+                .iter()
+                .map(Selection::polygon)
+                .collect::<Vec<_>>(),
+        )
+    }
+    fn solve_selected(&self, selected: &[Selection<'_>]) -> Result<Vec<Coord>, Error> {
         let mut output = self.nodes.iter().map(Exact::output).collect::<Vec<_>>();
-        let rings = self.rings();
+        let rings = selected
+            .iter()
+            .flat_map(|p| std::iter::once(p.shell).chain(p.holes.iter().copied()))
+            .collect::<Vec<_>>();
         let active = rings
             .iter()
             .flat_map(|r| r.iter().copied())
             .collect::<BTreeSet<_>>();
+        if active
+            .iter()
+            .all(|&i| matches!(self.nodes[i], Exact::Input(_)))
+        {
+            return Ok(output);
+        }
         let edges = rings
             .iter()
             .flat_map(|r| r.windows(2).map(|p| [p[0], p[1]]))
@@ -274,6 +327,11 @@ impl Component {
                 .map(|(i, e)| (i, expanded_bounds(output[e[0]], output[e[1]]))),
         );
         let mut constraints = Vec::new();
+        let mut neighbors = vec![BTreeSet::new(); self.nodes.len()];
+        for &[a, b] in &edges {
+            neighbors[a].insert(b);
+            neighbors[b].insert(a);
+        }
         for (i, a) in edges.iter().enumerate() {
             crate::cancel::check();
             for item in tree.locate_in_envelope_intersecting(&index::envelope(expanded_bounds(
@@ -288,24 +346,33 @@ impl Component {
                 if let Some(o) = shared {
                     let x = *a.iter().find(|&&id| id != o).expect("nonzero edge");
                     let y = *b.iter().find(|&&id| id != o).expect("nonzero edge");
-                    constraints.push(Constraint::Angle(
-                        o,
-                        x,
-                        y,
-                        orient(&self.nodes[o], &self.nodes[x], &self.nodes[y]).cmp(&Q::zero()),
-                    ));
+                    constraints.push(Constraint::NonOverlap(o, x, y));
                 } else {
                     constraints.push(Constraint::Disjoint(*a, b));
                 }
             }
             constraints.push(Constraint::Distinct(a[0], a[1]));
         }
-        for &(a, b, axis) in &self.source_order {
-            if active.contains(&a) && active.contains(&b) {
-                let (ax, ay) = self.nodes[a].xy();
-                let (bx, by) = self.nodes[b].xy();
-                let order = if axis == 0 { ax.cmp(&bx) } else { ay.cmp(&by) };
-                constraints.push(Constraint::Order(a, b, axis, order));
+        for (o, rays) in neighbors.iter().enumerate() {
+            if rays.len() > 2 {
+                let mut rays = rays.iter().copied().collect::<Vec<_>>();
+                rays.sort_by(|&a, &b| {
+                    super::arrangement::angle(&self.nodes[a], &self.nodes[b], &self.nodes[o])
+                });
+                constraints.push(Constraint::Incidence(o, rays));
+            }
+        }
+        for &(a, b, _) in &self.source_order {
+            if active.contains(&a)
+                && active.contains(&b)
+                && !(matches!(self.nodes[a], Exact::Input(_))
+                    && matches!(self.nodes[b], Exact::Input(_)))
+            {
+                constraints.push(Constraint::Order(
+                    a,
+                    b,
+                    Box::new(Direction::new(&self.nodes[a], &self.nodes[b])),
+                ));
             }
         }
         for ring in &rings {
@@ -314,8 +381,8 @@ impl Component {
                 area_sign(&self.nodes, ring).is_gt(),
             ));
         }
-        for polygon in &self.polygons {
-            let shell = ExactLocation::new(&self.nodes, [&polygon.shell]);
+        for polygon in selected {
+            let shell = ExactLocation::new(&self.nodes, [polygon.shell]);
             for hole in &polygon.holes {
                 let anchor = *hole
                     .iter()
@@ -323,8 +390,11 @@ impl Component {
                     .expect("exact interior hole anchor");
                 let p = output[anchor];
                 let query = rstar::AABB::from_corners(
-                    [step(p.x, -16), step(p.y, -16)],
-                    [f64::MAX, step(p.y, 16)],
+                    [
+                        step(p.x, -MAX_ROUNDING_STEPS),
+                        step(p.y, -MAX_ROUNDING_STEPS),
+                    ],
+                    [f64::MAX, step(p.y, MAX_ROUNDING_STEPS)],
                 );
                 let ray_edges = shell
                     .tree
@@ -334,6 +404,35 @@ impl Component {
                 constraints.push(Constraint::Ownership(ray_edges, anchor));
             }
         }
+        // Constraints certified over the entire largest candidate box cannot
+        // couple independent rounding neighborhoods. In particular, long source
+        // intervals must not join every intersection along a large ring into one
+        // backtracking problem merely because they share incidence.
+        let domains = self
+            .nodes
+            .iter()
+            .map(|p| {
+                let q = p.output();
+                if matches!(p, Exact::Input(_)) {
+                    [Interval(q.x, q.x), Interval(q.y, q.y)]
+                } else {
+                    [
+                        Interval(
+                            step(q.x, -MAX_ROUNDING_STEPS),
+                            step(q.x, MAX_ROUNDING_STEPS),
+                        ),
+                        Interval(
+                            step(q.y, -MAX_ROUNDING_STEPS),
+                            step(q.y, MAX_ROUNDING_STEPS),
+                        ),
+                    ]
+                }
+            })
+            .collect::<Vec<_>>();
+        constraints.retain(|c| {
+            crate::cancel::check();
+            !c.guaranteed(&domains)
+        });
         // Constraint incidence defines independent affected neighborhoods.
         let failed = constraints
             .iter()
@@ -405,7 +504,7 @@ impl Component {
                 .iter()
                 .map(|&id| self.nodes[id].output())
                 .collect::<Vec<_>>();
-            for radius in [1, 2, 4, 8, 16] {
+            for radius in ROUNDING_RADII {
                 let candidates = candidates(radius);
                 if search(
                     &ids,
@@ -418,13 +517,13 @@ impl Component {
                     solved = true;
                     break;
                 }
-                if assignments >= 100_000 {
+                if assignments >= ASSIGNMENT_BUDGET {
                     break;
                 }
             }
             if !solved {
                 return Err(precision_error(
-                    "rounding constraints unsatisfied within 16 floating-point steps and 100000 assignments per neighborhood",
+                    "rounding constraints unsatisfied within 64 floating-point steps and 100000 assignments per neighborhood",
                 ));
             }
         }
@@ -447,21 +546,39 @@ fn ring_bounds(nodes: &[Exact], ring: &[usize]) -> Rect {
         .bounding_rect()
         .expect("ring bounds")
 }
-fn step(mut x: f64, n: i32) -> f64 {
-    for _ in 0..n.unsigned_abs() {
-        x = if n < 0 { x.next_down() } else { x.next_up() };
+fn step(x: f64, n: i32) -> f64 {
+    if n == 0 {
+        return x;
     }
-    x
+    if x == 0. {
+        return f64::from_bits(n.unsigned_abs() as u64).copysign(n as f64);
+    }
+    let magnitude = x.to_bits() & 0x7fff_ffff_ffff_ffff;
+    let delta = if x.is_sign_negative() {
+        -(n as i64)
+    } else {
+        n as i64
+    };
+    if delta >= 0 {
+        let bits = magnitude
+            .saturating_add(delta as u64)
+            .min(f64::INFINITY.to_bits());
+        f64::from_bits(bits).copysign(x)
+    } else if magnitude >= delta.unsigned_abs() {
+        f64::from_bits(magnitude - delta.unsigned_abs()).copysign(x)
+    } else {
+        f64::from_bits(delta.unsigned_abs() - magnitude).copysign(-x)
+    }
 }
 fn expanded_bounds(a: Coord, b: Coord) -> Rect {
     Rect::new(
         Coord {
-            x: step(a.x.min(b.x), -16),
-            y: step(a.y.min(b.y), -16),
+            x: step(a.x.min(b.x), -MAX_ROUNDING_STEPS),
+            y: step(a.y.min(b.y), -MAX_ROUNDING_STEPS),
         },
         Coord {
-            x: step(a.x.max(b.x), 16),
-            y: step(a.y.max(b.y), 16),
+            x: step(a.x.max(b.x), MAX_ROUNDING_STEPS),
+            y: step(a.y.max(b.y), MAX_ROUNDING_STEPS),
         },
     )
 }
@@ -472,21 +589,139 @@ fn candidates(radius: i32) -> Vec<(i32, i32)> {
     offsets.sort_by_key(|&(x, y)| (x.abs().max(y.abs()), x.abs() + y.abs(), x, y));
     offsets
 }
+/// Strict longitudinal order is a positive projection onto the exact source
+/// direction. A bend at degree two may use the other coordinate when a dominant
+/// coordinate lies between adjacent floats. Horizontal sources still require a
+/// strictly ordered x coordinate, including the unrepresentable regression.
+#[derive(Debug)]
+struct Direction {
+    a: Exact,
+    b: Exact,
+    bounds: [Interval; 2],
+    exact: OnceLock<(Q, Q)>,
+}
+impl Direction {
+    fn new(a: &Exact, b: &Exact) -> Self {
+        let [ax, ay] = certified::coordinates(a);
+        let [bx, by] = certified::coordinates(b);
+        Self {
+            a: a.clone(),
+            b: b.clone(),
+            bounds: [bx.sub(ax), by.sub(ay)],
+            exact: OnceLock::new(),
+        }
+    }
+    fn forward(&self, a: Coord, b: Coord) -> bool {
+        let [ax, ay] = certified::coordinates(&Exact::Input(a));
+        let [bx, by] = certified::coordinates(&Exact::Input(b));
+        let dot = bx
+            .sub(ax)
+            .mul(self.bounds[0])
+            .add(by.sub(ay).mul(self.bounds[1]));
+        if let Some(sign) = dot.sign() {
+            return sign.is_gt();
+        }
+        let (x, y) = self.exact.get_or_init(|| {
+            let (ax, ay) = self.a.xy();
+            let (bx, by) = self.b.xy();
+            (bx - ax, by - ay)
+        });
+        let (ax, ay) = Exact::Input(a).xy();
+        let (bx, by) = Exact::Input(b).xy();
+        (bx - ax) * x + (by - ay) * y > Q::zero()
+    }
+}
+fn turn_bounds(o: [Interval; 2], a: [Interval; 2], b: [Interval; 2]) -> Interval {
+    a[0].sub(o[0])
+        .mul(b[1].sub(o[1]))
+        .sub(a[1].sub(o[1]).mul(b[0].sub(o[0])))
+}
 #[derive(Debug)]
 enum Constraint {
     Distinct(usize, usize),
-    Order(usize, usize, usize, std::cmp::Ordering),
+    Order(usize, usize, Box<Direction>),
     Disjoint([usize; 2], [usize; 2]),
-    Angle(usize, usize, usize, std::cmp::Ordering),
+    NonOverlap(usize, usize, usize),
+    Incidence(usize, Vec<usize>),
     Orientation(Vec<usize>, bool),
     Ownership(Vec<[usize; 2]>, usize),
 }
 impl Constraint {
+    fn guaranteed(&self, boxes: &[[Interval; 2]]) -> bool {
+        match self {
+            Self::Distinct(a, b) => {
+                (0..2).any(|axis| boxes[*a][axis].sub(boxes[*b][axis]).sign().is_some())
+            }
+            Self::Order(a, b, d) => {
+                boxes[*b][0]
+                    .sub(boxes[*a][0])
+                    .mul(d.bounds[0])
+                    .add(boxes[*b][1].sub(boxes[*a][1]).mul(d.bounds[1]))
+                    .0
+                    > 0.
+            }
+            Self::NonOverlap(o, a, b) => {
+                let (o, a, b) = (boxes[*o], boxes[*a], boxes[*b]);
+                turn_bounds(o, a, b).sign().is_some()
+                    || a[0]
+                        .sub(o[0])
+                        .mul(b[0].sub(o[0]))
+                        .add(a[1].sub(o[1]).mul(b[1].sub(o[1])))
+                        .1
+                        < 0.
+            }
+            Self::Disjoint(a, b) => {
+                let (a, b, c, d) = (boxes[a[0]], boxes[a[1]], boxes[b[0]], boxes[b[1]]);
+                let separated = |o, x, y, z| {
+                    let (s, t) = (turn_bounds(o, x, y), turn_bounds(o, x, z));
+                    s.0 > 0. && t.0 > 0. || s.1 < 0. && t.1 < 0.
+                };
+                separated(a, b, c, d) || separated(c, d, a, b)
+            }
+            Self::Orientation(ring, positive) => {
+                let origin = boxes[ring[0]];
+                let area = ring.windows(2).fold(Interval(0., 0.), |sum, edge| {
+                    sum.add(turn_bounds(origin, boxes[edge[0]], boxes[edge[1]]))
+                });
+                area.sign().is_some_and(|s| s.is_gt() == *positive)
+            }
+            Self::Ownership(edges, anchor) => {
+                let p = boxes[*anchor];
+                let above = |q: [Interval; 2]| {
+                    if q[1].0 > p[1].1 {
+                        Some(true)
+                    } else if q[1].1 < p[1].0 {
+                        Some(false)
+                    } else {
+                        None
+                    }
+                };
+                let mut inside = false;
+                for &[a, b] in edges {
+                    let (a, b) = (boxes[a], boxes[b]);
+                    let (Some(above_a), Some(above_b)) = (above(a), above(b)) else {
+                        return false;
+                    };
+                    if above_a != above_b {
+                        let Some(side) = turn_bounds(a, b, p).sign() else {
+                            return false;
+                        };
+                        if side.is_gt() == above_b {
+                            inside = !inside;
+                        }
+                    }
+                }
+                inside
+            }
+            _ => false,
+        }
+    }
     fn ids(&self) -> Vec<usize> {
         match self {
             Self::Distinct(a, b) | Self::Order(a, b, ..) => vec![*a, *b],
             Self::Disjoint(a, b) => vec![a[0], a[1], b[0], b[1]],
-            Self::Angle(o, a, b, _) => vec![*o, *a, *b],
+            Self::NonOverlap(o, a, b) => vec![*o, *a, *b],
+            Self::Incidence(o, rays) => std::iter::once(*o).chain(rays.iter().copied()).collect(),
             Self::Orientation(r, _) => r.clone(),
             Self::Ownership(edges, anchor) => std::iter::once(*anchor)
                 .chain(edges.iter().flatten().copied())
@@ -497,29 +732,25 @@ impl Constraint {
         let p = |i| Exact::Input(coords[i]);
         match self {
             Self::Distinct(a, b) => coords[*a] != coords[*b],
-            Self::Order(a, b, axis, order) => {
-                let a = coords[*a];
-                let b = coords[*b];
-                (if *axis == 0 {
-                    a.x.total_cmp(&b.x)
-                } else {
-                    a.y.total_cmp(&b.y)
-                }) == *order
-            }
+            Self::Order(a, b, direction) => direction.forward(coords[*a], coords[*b]),
             Self::Disjoint(a, b) => geo::line_intersection::line_intersection(
                 Line::new(coords[a[0]], coords[a[1]]),
                 Line::new(coords[b[0]], coords[b[1]]),
             )
             .is_none(),
-            Self::Angle(o, a, b, order) => {
-                let actual = orient(&p(*o), &p(*a), &p(*b)).cmp(&Q::zero());
-                if order.is_eq() {
-                    // Opposite collinear edges may bend, but cannot overlap.
-                    actual != std::cmp::Ordering::Equal
-                        || !on(&p(*o), &p(*a), &p(*b)) && !on(&p(*o), &p(*b), &p(*a))
-                } else {
-                    actual == *order
-                }
+            Self::Incidence(o, rays) => {
+                let mut actual = rays.clone();
+                actual.sort_by(|&a, &b| super::arrangement::angle(&p(a), &p(b), &p(*o)));
+                let start = actual
+                    .iter()
+                    .position(|id| *id == rays[0])
+                    .expect("same incidences");
+                actual.rotate_left(start);
+                actual == *rays
+            }
+            Self::NonOverlap(o, a, b) => {
+                !orient(&p(*o), &p(*a), &p(*b)).is_zero()
+                    || !on(&p(*o), &p(*a), &p(*b)) && !on(&p(*o), &p(*b), &p(*a))
             }
             Self::Ownership(edges, anchor) => {
                 let point = coords[*anchor];
@@ -560,65 +791,227 @@ fn search(
     coords: &mut [Coord],
     assignments: &mut usize,
 ) -> bool {
-    // Iterative backtracking keeps stack and candidate storage bounded even for
-    // a crowded neighborhood. Constraints run as soon as their last variable
-    // is assigned, so unrelated ring vertices are never copied per candidate.
-    let positions = ids
+    let previous = ids
+        .iter()
+        .map(|&id| (id, coords[id]))
+        .collect::<HashMap<_, _>>();
+    let variables = ids.iter().copied().collect::<BTreeSet<_>>();
+    let mut domains = Vec::new();
+    for (&id, &nearest) in ids.iter().zip(nearest) {
+        let unary = constraints
+            .iter()
+            .copied()
+            .filter(|c| {
+                c.ids()
+                    .into_iter()
+                    .filter(|i| variables.contains(i))
+                    .all(|i| i == id)
+            })
+            .collect::<Vec<_>>();
+        let mut domain = Vec::new();
+        for &(x, y) in candidates {
+            crate::cancel::check();
+            if *assignments >= ASSIGNMENT_BUDGET {
+                for (&id, &p) in &previous {
+                    coords[id] = p;
+                }
+                return false;
+            }
+            *assignments += 1;
+            let p = Coord {
+                x: step(nearest.x, x),
+                y: step(nearest.y, y),
+            };
+            if !p.x.is_finite() || !p.y.is_finite() {
+                continue;
+            }
+            coords[id] = p;
+            if unary.iter().all(|c| c.satisfied(coords)) {
+                domain.push(p);
+            }
+        }
+        coords[id] = previous[&id];
+        if domain.is_empty() {
+            for (&id, &p) in &previous {
+                coords[id] = p;
+            }
+            return false;
+        }
+        domains.push((id, domain));
+    }
+    // Arc consistency removes unsupported candidates before committing any
+    // backtracking assignment. Coalesce all binary constraints for the same
+    // pair so support satisfies them together. The optional pruning work is
+    // bounded; reaching its cap leaves the remaining domains conservative.
+    let initial_positions = domains
         .iter()
         .enumerate()
-        .map(|(i, &id)| (id, i))
+        .map(|(i, (id, _))| (*id, i))
+        .collect::<HashMap<_, _>>();
+    let mut pairs = std::collections::BTreeMap::<(usize, usize), Vec<&Constraint>>::new();
+    let mut weights = vec![0; domains.len()];
+    for &c in constraints {
+        let mut vars = c
+            .ids()
+            .iter()
+            .filter_map(|id| initial_positions.get(id))
+            .copied()
+            .collect::<Vec<_>>();
+        vars.sort_unstable();
+        vars.dedup();
+        for &v in &vars {
+            weights[v] += 1;
+        }
+        if vars.len() == 2 {
+            pairs.entry((vars[0], vars[1])).or_default().push(c);
+        }
+    }
+    let mut work = 0;
+    'prune: loop {
+        let mut changed = false;
+        for (&(a, b), checks) in &pairs {
+            for (a, b) in [(a, b), (b, a)] {
+                let (aid, bid) = (domains[a].0, domains[b].0);
+                let mut retained = Vec::new();
+                for &p in &domains[a].1 {
+                    crate::cancel::check();
+                    coords[aid] = p;
+                    let mut supported = false;
+                    for &q in &domains[b].1 {
+                        crate::cancel::check();
+                        work += 1;
+                        if work > ASSIGNMENT_BUDGET {
+                            for (&id, &p) in &previous {
+                                coords[id] = p;
+                            }
+                            break 'prune;
+                        }
+                        coords[bid] = q;
+                        if checks.iter().all(|c| c.satisfied(coords)) {
+                            supported = true;
+                            break;
+                        }
+                    }
+                    if supported {
+                        retained.push(p);
+                    }
+                }
+                coords[aid] = previous[&aid];
+                coords[bid] = previous[&bid];
+                if retained.is_empty() {
+                    for (&id, &p) in &previous {
+                        coords[id] = p;
+                    }
+                    return false;
+                }
+                changed |= retained.len() != domains[a].1.len();
+                domains[a].1 = retained;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    // Smallest domains first, then the most constrained variable. Exact
+    // geometric order is the stable final tie break.
+    domains.sort_by_key(|(id, domain)| {
+        (
+            domain.len(),
+            std::cmp::Reverse(weights[initial_positions[id]]),
+            ids.iter().position(|i| i == id),
+        )
+    });
+    let positions = domains
+        .iter()
+        .enumerate()
+        .map(|(i, (id, _))| (*id, i))
         .collect::<HashMap<_, _>>();
     let mut ready = vec![Vec::new(); ids.len()];
+    let mut incidence = vec![Vec::new(); ids.len()];
     for &constraint in constraints {
         crate::cancel::check();
-        let last = constraint
+        let mut vars = constraint
             .ids()
             .iter()
             .filter_map(|id| positions.get(id))
             .copied()
-            .max()
-            .expect("local constraint incidence");
-        ready[last].push(constraint);
+            .collect::<Vec<_>>();
+        vars.sort_unstable();
+        vars.dedup();
+        if let Some(&last) = vars.last() {
+            ready[last].push(constraint);
+        }
+        for &id in &vars {
+            incidence[id].push((constraint, vars.clone()));
+        }
     }
-    let previous = ids.iter().map(|&id| coords[id]).collect::<Vec<_>>();
     let mut choices = vec![0; ids.len()];
     let mut depth = 0;
-    while *assignments < 100_000 {
+    while *assignments < ASSIGNMENT_BUDGET {
         crate::cancel::check();
-        if choices[depth] == candidates.len() {
+        if choices[depth] == domains[depth].1.len() {
             choices[depth] = 0;
-            coords[ids[depth]] = previous[depth];
+            coords[domains[depth].0] = previous[&domains[depth].0];
             if depth == 0 {
                 break;
             }
             depth -= 1;
             continue;
         }
-        let (x, y) = candidates[choices[depth]];
-        choices[depth] += 1;
         *assignments += 1;
-        let candidate = Coord {
-            x: step(nearest[depth].x, x),
-            y: step(nearest[depth].y, y),
-        };
-        if !candidate.x.is_finite() || !candidate.y.is_finite() {
+        coords[domains[depth].0] = domains[depth].1[choices[depth]];
+        choices[depth] += 1;
+        if !ready[depth].iter().all(|c| c.satisfied(coords)) {
             continue;
         }
-        coords[ids[depth]] = candidate;
-        if ready[depth].iter().all(|c| c.satisfied(coords)) {
+        // Forward checking: every constraint with one remaining variable must
+        // retain support in that variable's pruned domain before descending.
+        let mut supported = true;
+        for target in depth + 1..domains.len() {
+            let checks = incidence[target]
+                .iter()
+                .filter(|(_, vars)| vars.iter().all(|&v| v <= depth || v == target))
+                .map(|(c, _)| *c)
+                .collect::<Vec<_>>();
+            if checks.is_empty() {
+                continue;
+            }
+            let id = domains[target].0;
+            let old = coords[id];
+            let mut found = false;
+            for &p in &domains[target].1 {
+                crate::cancel::check();
+                if *assignments >= ASSIGNMENT_BUDGET {
+                    break;
+                }
+                coords[id] = p;
+                if checks.iter().all(|c| c.satisfied(coords)) {
+                    found = true;
+                    break;
+                }
+            }
+            coords[id] = old;
+            if !found {
+                supported = false;
+                break;
+            }
+        }
+        if supported {
             depth += 1;
-            if depth == ids.len() {
+            if depth == domains.len() {
                 return true;
             }
         }
     }
-    for (&id, &value) in ids.iter().zip(&previous) {
-        coords[id] = value;
+    for (&id, &p) in &previous {
+        coords[id] = p;
     }
     false
 }
+
 #[derive(Debug, Default)]
 pub(crate) struct Geometry(pub(super) Vec<Component>);
+
 impl Geometry {
     pub fn has_area(&self) -> bool {
         self.0.iter().any(|c| {
@@ -652,7 +1045,12 @@ impl Geometry {
             if selected.is_empty() {
                 continue;
             }
-            let coords = component.coordinates()?;
+            let coords = component.selected_coordinates(
+                &selected
+                    .iter()
+                    .map(|p| Selection::polygon(p))
+                    .collect::<Vec<_>>(),
+            )?;
             let ring = |r: &[usize]| LineString(r.iter().map(|&i| coords[i]).collect());
             polygons.extend(
                 selected.into_iter().map(|p| {
@@ -677,12 +1075,37 @@ impl Geometry {
                         .collect::<Vec<_>>()
                 })
                 .collect::<Vec<_>>();
-            let coords = c.coordinates()?;
+            let selections = c
+                .polygons
+                .iter()
+                .zip(&selected)
+                .map(|(p, keep)| Selection {
+                    shell: &p.shell,
+                    holes: p
+                        .holes
+                        .iter()
+                        .zip(keep)
+                        .filter_map(|(h, &keep)| keep.then_some(h.as_slice()))
+                        .collect(),
+                })
+                .collect::<Vec<_>>();
+            let coords = c.selected_coordinates(&selections)?;
             let ring = |r: &[usize]| LineString(r.iter().map(|&i| coords[i]).collect());
             let polygons = c
                 .polygons
                 .iter()
-                .map(|p| Polygon::new(ring(&p.shell), p.holes.iter().map(|r| ring(r)).collect()))
+                .zip(&selected)
+                .map(|(p, keep)| {
+                    Polygon::new(
+                        ring(&p.shell),
+                        p.holes
+                            .iter()
+                            .zip(keep)
+                            .filter(|(_, keep)| **keep)
+                            .map(|(r, _)| ring(r))
+                            .collect(),
+                    )
+                })
                 .collect::<Vec<_>>();
             validate_output(&polygons)?;
             for (p, selected) in c.polygons.iter().zip(selected) {
@@ -716,12 +1139,13 @@ fn validate_output(polygons: &[Polygon]) -> Result<(), Error> {
             .enumerate()
             .filter_map(|(i, p)| p.bounding_rect().map(|r| (i, r))),
     );
-    if index::pairs(&tree, &tree, 0., true).any(|(a, b)| {
-        super::validity::multipart(
-            &super::location::Location::new(&polygons[a]),
-            &super::location::Location::new(&polygons[b]),
-        )
-    }) {
+    let locations = polygons
+        .iter()
+        .map(super::location::Location::new)
+        .collect::<Vec<_>>();
+    if index::pairs(&tree, &tree, 0., true)
+        .any(|(a, b)| super::validity::multipart(&locations[a], &locations[b]))
+    {
         return Err(precision_error("emitted polygon parts overlap"));
     }
     Ok(())
@@ -781,7 +1205,7 @@ impl Geometry {
         let p = Exact::Input(point);
         self.0
             .iter()
-            .flat_map(|c| c.locations.iter().map(|l| l.position(&c.nodes, &p)))
+            .flat_map(|c| c.locations().iter().map(|l| l.position(&c.nodes, &p)))
             .max()
             .unwrap_or(-1)
     }
@@ -790,7 +1214,7 @@ impl Geometry {
         let tolerance = Q::from_float(tolerance).expect("finite tolerance");
         let squared = &tolerance * &tolerance;
         self.0.iter().any(|c| {
-            c.locations.iter().any(|l| {
+            c.locations().iter().any(|l| {
                 l.tree
                     .locate_in_envelope_intersecting(&index::at(
                         point,
@@ -810,7 +1234,7 @@ impl Geometry {
         let tol = Q::from_float(tolerance).expect("finite tolerance");
         let squared = &tol * &tol;
         for c in &self.0 {
-            for location in &c.locations {
+            for location in c.locations() {
                 for segment in line.lines() {
                     crate::cancel::check();
                     let (x, y) = (Exact::Input(segment.start), Exact::Input(segment.end));
@@ -842,14 +1266,79 @@ impl Geometry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn bounded_float_steps_match_successive_adjacent_values() {
+        for x in [
+            -f64::MAX,
+            -1.,
+            -f64::MIN_POSITIVE,
+            -f64::from_bits(1),
+            -0.,
+            0.,
+            f64::from_bits(1),
+            f64::MIN_POSITIVE,
+            1.,
+            f64::MAX,
+        ] {
+            for n in -MAX_ROUNDING_STEPS..=MAX_ROUNDING_STEPS {
+                let mut expected = x;
+                for _ in 0..n.unsigned_abs() {
+                    expected = if n < 0 {
+                        expected.next_down()
+                    } else {
+                        expected.next_up()
+                    };
+                }
+                assert_eq!(step(x, n).to_bits(), expected.to_bits(), "{x} {n}");
+            }
+        }
+    }
     fn input(x: f64, y: f64) -> Exact {
         Exact::Input(Coord { x, y })
     }
     fn rational(x: Q, y: Q) -> Exact {
-        Exact::Rational(Box::new((x, y)))
+        Exact::rational(x, y)
     }
     fn q(x: f64) -> Q {
         Q::from_float(x).unwrap()
+    }
+    #[test]
+    fn certified_area_and_perimeter_avoid_exact_fallback_for_large_rings() {
+        let n = 4096;
+        let nodes = (0..n)
+            .map(|i| {
+                let t = i as f64 * std::f64::consts::TAU / n as f64;
+                input(1000. * t.cos(), 1000. * t.sin())
+            })
+            .collect::<Vec<_>>();
+        let mut ring = (0..n).collect::<Vec<_>>();
+        ring.push(0);
+        EXACT_AREAS.with(|n| n.set(0));
+        for tolerance in [0., 0.001, 1., 1000.] {
+            assert_eq!(substantial(&nodes, &[&ring], tolerance), tolerance < 1000.);
+        }
+        assert_eq!(EXACT_AREAS.with(|n| n.get()), 0);
+    }
+    #[test]
+    fn projected_source_order_uses_both_coordinates_at_adjacent_floats() {
+        let x = 1f64.next_up();
+        let middle = (q(1.) + q(x)) / Q::from_integer(2.into());
+        let nodes = vec![
+            input(0., 0.),
+            input(1., 1.),
+            rational(middle, q(1.) - q(2f64.powi(-55))),
+            input(x, 1.),
+            input(0., 2.),
+        ];
+        let geometry = Geometry(vec![Component::new(
+            nodes,
+            vec![vec![0, 1, 2, 3, 4, 0]],
+            vec![],
+            vec![(1, 2, 0), (2, 3, 0)],
+        )]);
+        let emitted = geometry.emit(0.).unwrap();
+        assert!(super::super::validity::polygon(&emitted.0[0]).is_none());
+        assert_eq!(emitted.0[0].exterior().0.len(), 6);
     }
     #[test]
     fn collapsed_intersections_retain_distinct_identities() {
