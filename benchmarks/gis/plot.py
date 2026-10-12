@@ -170,7 +170,11 @@ def draw(data: dict[str, Any], output: Path) -> None:
         color="#475569",
     )
     figure.tight_layout(rect=(0, 0.075, 1, 0.94))
-    figure.savefig(output / "comparison.svg", metadata={"Date": None})
+    svg = output / "comparison.svg"
+    figure.savefig(svg, metadata={"Date": None})
+    svg.write_text(
+        "\n".join(line.rstrip() for line in svg.read_text().splitlines()) + "\n"
+    )
     figure.savefig(output / "comparison.png", dpi=160)
     plt.close(figure)
 
@@ -252,7 +256,7 @@ def publish(data: dict[str, Any], output: Path) -> None:
     for engine, metadata in data["engines"].items():
         lines.append(
             f"- {LABELS[engine]}: {metadata.get('status', 'ready')}. "
-            f"{metadata.get('reason', '')}"
+            f"{metadata.get('reason', '')}".rstrip()
         )
     lines.extend(
         [
@@ -268,7 +272,7 @@ def publish(data: dict[str, Any], output: Path) -> None:
     (output / "README.md").write_text("\n".join(lines))
     fields = sorted({key for row in csv_rows for key in row})
     with (output / "samples.csv").open("w", newline="") as stream:
-        writer = csv.DictWriter(stream, fieldnames=fields)
+        writer = csv.DictWriter(stream, fieldnames=fields, lineterminator="\n")
         writer.writeheader()
         writer.writerows(csv_rows)
     marker = output / "publishable.json"

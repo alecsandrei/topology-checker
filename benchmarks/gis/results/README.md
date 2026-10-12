@@ -88,11 +88,11 @@ Times include fresh index or topology construction and materialized violations. 
 
 ## Engine availability
 
-- topology-checker: ready. 
-- QGIS: ready. 
-- GRASS GIS: ready. 
-- PostGIS SQL: ready. 
-- gvSIG: ready. 
+- topology-checker: ready.
+- QGIS: ready.
+- GRASS GIS: ready.
+- PostGIS SQL: ready.
+- gvSIG: ready.
 - FME: unavailable. No licensed FME IPC worker configured
 
 ## Provenance
