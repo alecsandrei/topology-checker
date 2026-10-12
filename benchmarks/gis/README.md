@@ -2,8 +2,9 @@
 
 This suite compares topology-checker, QGIS 4.2, GRASS GIS, PostGIS SQL workflows
 and gvSIG in one Linux container. The root README figure uses two shared
-containment checks with 10,000 primary and 10,000 secondary features. The complete
-report includes every supported rule, failures and differences in semantics.
+containment checks at the largest common size every tool completes correctly,
+with at least 1,000 primary and 1,000 secondary features. Full-suite mode includes
+every supported rule, failures and differences in semantics.
 
 QGIS is the official 4.2.3 Ubuntu image pinned by digest. gvSIG is the official
 2.7.0 build 5016 archive pinned by SHA-256, running with OpenJDK. The image records
@@ -13,19 +14,27 @@ existing licensed worker; the suite never registers accounts or acquires license
 ## Run
 
 ```sh
-docker build -f benchmarks/gis/Dockerfile -t topology-gis-benchmark .
+docker build --platform linux/amd64 -f benchmarks/gis/Dockerfile -t topology-gis-benchmark .
 mkdir -p builds/gis-run
-docker run --rm --cpuset-cpus=0 \
+docker run --rm --platform linux/amd64 --cpuset-cpus=0 \
   -v "$PWD/builds/gis-run:/results" topology-gis-benchmark \
-  python -m benchmarks.gis.run --output /results/results --work /results/work
+  python -m benchmarks.gis.run --output /results/results --work /tmp/gis-work
 ```
 
 Use `--smoke` for short integration checks. Select workloads with `--rules`,
 `--sizes` and `--engines`. Defaults are all 38 Rust rules, the supported external
 counterparts, 1,000/10,000/100,000 features, two warmups and ten measured samples.
 
+Keep the work directory inside the container's Linux filesystem. This avoids
+case-sensitive gvSIG assets colliding on macOS bind mounts; reports are saved
+to the mounted results directory.
+
 The `GIS benchmarks` GitHub Actions workflow runs the same image on a native
-x86_64 Linux runner. Local emulated runs are useful for testing but cannot produce
+x86_64 Linux runner. Its `headline` mode measures both shared checks at 1,000
+features with all correctness probes, two warmups and ten repetitions. Select
+`full` to measure every rule at all three sizes. Benchmark runs are dispatched
+manually after this branch is merged; normal CI remains limited to checks.
+Local emulated runs are useful for testing but cannot produce
 the publication marker. All engines run sequentially with rotating order on one
 logical CPU. The new Linux measurements must not be mixed with the historical
 macOS measurements in `../qgis/results`.
@@ -55,7 +64,10 @@ complete every repetition before its timing is eligible for a comparison.
 The output contains `results.json`, `samples.csv`, `README.md`, `comparison.png`
 and `comparison.svg`. The workflow uploads partial measurements, fixture files
 and engine logs even on failure. `publishable.json` is produced only when every
-OSS engine passes both shared comparisons on native Linux CI.
+OSS engine passes both shared comparisons at the same feature count on native
+Linux CI. A larger workload timing out cannot be paired with another tool's
+smaller workload. Reports are uploaded separately from diagnostic files so an
+application profile cannot prevent saving the measurements.
 
 Retrieve a successful CI artifact, copy its results into this directory's
 `results` folder, and update the root README image only when that marker exists.

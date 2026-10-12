@@ -41,15 +41,39 @@ def summary(samples: list[dict[str, Any]]) -> dict[str, Any] | None:
     }
 
 
+def headline_size(data: dict[str, Any]) -> int:
+    """Choose the largest common size with complete comparisons for every tool."""
+    paired_sizes = []
+    measured_sizes = []
+    for rule in SHARED_RULES:
+        work = [w for r in data["rules"] if r["rule"] == rule for w in r["workloads"]]
+        measured_sizes.append({w["size"] for w in work if w["size"] >= 1000})
+        paired_sizes.append(
+            {
+                w["size"]
+                for w in work
+                if w["size"] >= 1000
+                and all(
+                    w["comparisons"].get(name, {}).get("eligible", False)
+                    for name in ENGINES
+                )
+            }
+        )
+    paired = set.intersection(*paired_sizes)
+    measured = set.intersection(*measured_sizes)
+    return max(paired or measured, default=10000)
+
+
 def headline_workload(data: dict[str, Any], rule: str) -> dict[str, Any] | None:
-    """Select the same fixed feature count for both headline checks."""
+    """Use one common feature count across both panels and all tools."""
+    size = headline_size(data)
     return next(
         (
             w
             for r in data["rules"]
             if r["rule"] == rule
             for w in r["workloads"]
-            if w["size"] == 10000
+            if w["size"] == size
         ),
         None,
     )
@@ -140,7 +164,7 @@ def draw(data: dict[str, Any], output: Path) -> None:
     figure.text(
         0.5,
         0.025,
-        "10,000 primary and 10,000 secondary features · median and interquartile range",
+        f"{headline_size(data):,} primary and {headline_size(data):,} secondary features · median and interquartile range",
         ha="center",
         fontsize=9,
         color="#475569",
@@ -255,6 +279,7 @@ def publish(data: dict[str, Any], output: Path) -> None:
                 {
                     "source_revision": data["metadata"]["source_revision"],
                     "rules": list(SHARED_RULES),
+                    "size": headline_size(data),
                 }
             )
             + "\n"

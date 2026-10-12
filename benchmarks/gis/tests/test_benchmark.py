@@ -6,7 +6,7 @@ import pytest
 
 from benchmarks.gis.catalog import ENGINES, SHARED_RULES, SUPPORT
 from benchmarks.gis.common import eligibility, normalize, sample_rounds
-from benchmarks.gis.plot import publish, summary
+from benchmarks.gis.plot import headline_size, publish, publishable, summary
 
 
 def result(seconds: float = 0.01, ids: tuple[int, ...] = ()) -> dict:
@@ -105,3 +105,50 @@ def test_report_keeps_missing_tools_visible(tmp_path: Path) -> None:
     assert summary([{"status": "timeout"}]) is None
     with pytest.raises(ValueError):
         summary([result(seconds=-1)])
+
+
+def test_headline_requires_one_common_successful_size(tmp_path: Path) -> None:
+    """A slow tool cannot be compared at a different size from its competitors."""
+    data = {
+        "metadata": {
+            "source_revision": "test",
+            "execution": {"native_linux_ci": True},
+        },
+        "engines": {name: {} for name in ("rust", *ENGINES)},
+        "rules": [
+            {
+                "rule": rule,
+                "probes": [],
+                "workloads": [
+                    {
+                        "size": size,
+                        "samples": {name: [result()] for name in ("rust", *ENGINES)},
+                        "comparisons": {
+                            name: {"eligible": size == 1000, "reason": "paired"}
+                            for name in ENGINES
+                        },
+                    }
+                    for size in (1000, 10000)
+                ],
+            }
+            for rule in SHARED_RULES
+        ],
+    }
+    assert headline_size(data) == 1000
+    assert publishable(data)
+    publish(data, tmp_path)
+    assert '"size": 1000' in (tmp_path / "publishable.json").read_text()
+    assert (
+        "1,000 primary and 1,000 secondary" in (tmp_path / "comparison.svg").read_text()
+    )
+    for record in data["rules"]:
+        for work in record["workloads"]:
+            for comparison in work["comparisons"].values():
+                comparison["eligible"] = work["size"] == 10000
+    assert headline_size(data) == 10000
+    # Passing the two panels at different sizes cannot satisfy publication.
+    first = data["rules"][0]
+    for work in first["workloads"]:
+        for comparison in work["comparisons"].values():
+            comparison["eligible"] = work["size"] == 1000
+    assert not publishable(data)

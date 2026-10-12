@@ -1,11 +1,16 @@
 name: GIS benchmarks
 on:
   workflow_dispatch:
+    inputs:
+      suite:
+        description: Benchmark scope
+        type: choice
+        options: [headline, full]
+        default: headline
   push:
     branches: [gis-benchmarks]
     paths:
       - .github/workflows/gis-benchmarks.yml
-      - .dockerignore
       - benchmarks/gis/**
       - '!benchmarks/gis/results/**'
       - benchmarks/qgis/*.py
@@ -35,33 +40,51 @@ jobs:
         run: |
           docker run --rm --entrypoint bash topology-gis-benchmark:ci -c \
             'uv run --project benchmarks/gis --frozen --no-sync pytest benchmarks/gis/tests -q && uv run --project benchmarks/gis --frozen --no-sync ruff check benchmarks/gis && uv run --project benchmarks/gis --frozen --no-sync pyright --project benchmarks/gis'
-      - name: Native engine smoke checks
-        env:
-          GIS_SOURCE_REVISION: ${{ github.sha }}
-        run: |
-          mkdir -p builds/gis-ci/smoke builds/gis-ci/results builds/gis-ci/logs
-          docker run --rm --cpuset-cpus=0 \
-            -e GIS_SOURCE_REVISION -e GIS_NATIVE_CI=1 \
-            -v "$PWD/builds/gis-ci:/results" topology-gis-benchmark:ci \
-            python -m benchmarks.gis.run --smoke --output /results/smoke --work /results/work-smoke
       - name: Measure all engines on the same runner
         env:
           GIS_SOURCE_REVISION: ${{ github.sha }}
           GIS_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           RUNNER_NAME: ${{ runner.name }}
+          GIS_SUITE: ${{ inputs.suite || 'headline' }}
         run: |
+          set -o pipefail
+          mkdir -p builds/gis-ci/results builds/gis-ci/logs
+          gis_arguments=()
+          if [[ "$GIS_SUITE" == headline ]]; then
+            gis_arguments=(--rules point/must-be-inside polygon/must-contain-point --sizes 1000)
+          fi
           gis_image="$(docker image inspect topology-gis-benchmark:ci --format '{{.Id}}')"
           docker run --rm --cpuset-cpus=0 \
             -e GIS_SOURCE_REVISION -e GIS_RUN_URL -e RUNNER_NAME -e GIS_NATIVE_CI=1 \
             -e GIS_CONTAINER_IMAGE="$gis_image" \
             -v "$PWD/builds/gis-ci:/results" topology-gis-benchmark:ci \
-            python -m benchmarks.gis.run --output /results/results --work /results/work
+            python -m benchmarks.gis.run "${gis_arguments[@]}" \
+              --output /results/results --work /results/work \
+            | tee builds/gis-ci/logs/benchmark.log
           test -f builds/gis-ci/results/publishable.json
-      - name: Upload results and diagnostic logs
+      - name: Upload measurement reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gis-results-${{ github.sha }}
+          path: builds/gis-ci/results
+          retention-days: 30
+          if-no-files-found: warn
+      - name: Make generated diagnostics readable
+        if: always()
+        run: |
+          if [[ -d builds/gis-ci ]]; then
+            sudo chown -R "$(id -u):$(id -g)" builds/gis-ci
+            sudo chmod -R u+rwX builds/gis-ci
+          fi
+      - name: Upload diagnostic logs and input fixtures
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: gis-benchmarks-${{ github.sha }}
-          path: builds/gis-ci
+          path: |
+            builds/gis-ci/logs
+            builds/gis-ci/**/*.log
+            builds/gis-ci/**/*.geojson
           retention-days: 30
           if-no-files-found: warn

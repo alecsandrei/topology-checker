@@ -18,7 +18,7 @@ from benchmarks.qgis.run import EngineFailure, atomic_json
 from .adapters import HERE, create_session
 from .catalog import ENGINES, RELATED, SHARED_RULES, SUPPORT
 from .common import Session, capture, eligibility, normalize, sample_rounds
-from .plot import publish
+from .plot import publish, summary
 
 ERRORS = (EngineFailure, OSError, ValueError, RuntimeError, psycopg.Error)
 
@@ -384,6 +384,19 @@ def main() -> None:
                 }
             )
             atomic_json(args.output / "results.json", data)
+            work = record["workloads"][-1]
+            for engine, comparison in work["comparisons"].items():
+                stats = summary(work["samples"].get(engine, []))
+                duration = (
+                    f"{stats['median_s'] * 1000:.3f} ms" if stats else "no timings"
+                )
+                statuses = sorted(
+                    {s["status"] for s in work["samples"].get(engine, [])}
+                )
+                print(
+                    f"{engine}: {comparison['reason']}; {duration}; statuses={statuses}",
+                    flush=True,
+                )
     data["metadata"]["finished_at"] = datetime.now(UTC).isoformat()
     atomic_json(args.output / "results.json", data)
     publish(data, args.output)

@@ -26,6 +26,13 @@ class QgisAdapter(QgisSession):
             error["layer"] = 0
         return response
 
+    def close(self) -> None:
+        """Retain logs and settings, removing this run's disposable GUI profile."""
+        super().close()
+        profiles = self.directory / "profiles"
+        if profiles.is_dir():
+            shutil.rmtree(profiles)
+
 
 def create_session(
     engine: str,
