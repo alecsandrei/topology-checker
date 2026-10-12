@@ -1066,3 +1066,20 @@ fn nearby_bent_original_intervals_support_both_boundary_coverage_directions() {
     );
     assert_eq!(t.validate().unwrap().violation_count(), 1);
 }
+#[test]
+fn tfl_original_crossing_survives_tolerance() {
+    let t = topology(
+        Rule::LineMustNotSelfIntersect,
+        fixture("tfl_self_crossing"),
+        false,
+        0.001,
+    );
+    let report = t.validate().unwrap();
+    assert_eq!(
+        report
+            .violations()
+            .filter(|v| v.kind == ViolationKind::SelfCrossing)
+            .count(),
+        1
+    );
+}

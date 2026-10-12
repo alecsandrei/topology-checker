@@ -323,6 +323,37 @@ def test_chicago_near_boundary_interval_is_contact() -> None:
         )
 
 
+@pytest.mark.parametrize("tol", [0.0, 0.001])
+def test_tfl_crossing_survives_clustering(tol: float) -> None:
+    """Original nonadjacent passages cross more than tolerance from open endpoints."""
+    line = case_geometry("tfl_self_crossing", "A")
+    assert isinstance(line, LineString) and not line.is_simple
+    crossing = LineString(list(line.coords)[:2]).intersection(
+        LineString(list(line.coords)[2:4])
+    )
+    assert crossing.geom_type == "Point"
+    assert crossing.distance(shapely.Point(line.coords[0])) > 0.001
+    for reverse in [False, True]:
+        x = shapely.reverse(line) if reverse else line
+        topology = case_topology(
+            Rule.MUST_NOT_SELF_INTERSECT, [x, LineString([(0, 0), (1, 0)])], None, tol
+        )
+        crossings = [
+            v
+            for v in topology.validate().violations
+            if v.error_type.value == "self-crossing"
+        ]
+        assert len(crossings) == (2 if tol == 0 else 1)
+        assert any(v.geometry.distance(crossing) < 1e-8 for v in crossings)
+        assert any(
+            p.distance(crossing) < 1e-8
+            for v in crossings
+            for p in shapely.get_parts(v.geometry)
+        )
+        assert crossings[0].origin is not None and crossings[0].origin.fid == -91
+        assert_equivalent(topology)
+
+
 def test_near_duplicate_roads_and_projected_endpoint_cuts() -> None:
     """Nanometre road differences and projected endpoint cuts retain full runs."""
     a, b = [case_geometry("tiger_near_duplicate", key) for key in ["ROAD_A", "ROAD_B"]]
