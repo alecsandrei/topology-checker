@@ -52,8 +52,10 @@ def _query(rule: str) -> str:
             "WITH merged AS (SELECT ST_UnaryUnion(ST_Collect(geom)) geom FROM a),"
             "polygons AS (SELECT (ST_Dump(geom)).geom FROM merged) "
             "SELECT 'gap'::text kind,NULL::bigint id,NULL::bigint destination,"
-            "0::int layer,ST_MakePolygon(ST_InteriorRingN(geom,n)) geom "
-            "FROM polygons CROSS JOIN LATERAL generate_series(1,ST_NumInteriorRings(geom)) n"
+            "0::int layer,d.geom "
+            "FROM polygons CROSS JOIN LATERAL generate_series(1,ST_NumInteriorRings(geom)) n "
+            "CROSS JOIN merged m CROSS JOIN LATERAL ST_Dump(ST_Difference("
+            "ST_MakePolygon(ST_InteriorRingN(polygons.geom,n)),m.geom)) d"
         )
     if rule == "line/must-be-inside":
         return (
@@ -192,10 +194,16 @@ class PostgisSession:
             assert duration is not None
             seconds = duration[0]
             cursor.execute(
-                "SELECT kind,id,destination,layer FROM violations ORDER BY id,destination"
+                "SELECT kind,id,destination,layer,ST_AsGeoJSON(geom,17)::json FROM violations ORDER BY id,destination"
             )
             errors = [
-                dict(zip(("kind", "id", "destination", "layer"), row, strict=True))
+                dict(
+                    zip(
+                        ("kind", "id", "destination", "layer", "geometry"),
+                        row,
+                        strict=True,
+                    )
+                )
                 for row in cursor.fetchall()
             ]
         return {

@@ -67,7 +67,8 @@ fn main() -> anyhow::Result<()> {
                     "kind": e.kind.name(),
                     "id": e.origin.as_ref().map(|f| f.fid),
                     "destination": e.destination.as_ref().map(|f| f.fid),
-                    "layer": e.origin.as_ref().map(|f| f.layer.index())
+                    "layer": e.origin.as_ref().map(|f| f.layer.index()),
+                    "geometry": geojson::Geometry::new(geojson::Value::from(&e.geometry))
                 })
             })
             .collect();

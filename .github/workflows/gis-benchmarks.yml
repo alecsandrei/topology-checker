@@ -44,7 +44,7 @@ jobs:
           mkdir -p builds/gis-ci/results builds/gis-ci/logs
           gis_arguments=()
           if [[ "$GIS_SUITE" == headline ]]; then
-            gis_arguments=(--rules point/must-be-inside polygon/must-contain-point --sizes 1000)
+            gis_arguments=(--rules point/must-be-inside polygon/must-contain-point point/must-not-overlap line/must-not-have-dangles polygon/must-not-overlap polygon/must-not-have-gaps --sizes 1000)
           fi
           gis_image="$(docker image inspect topology-gis-benchmark:ci --format '{{.Id}}')"
           docker run --rm --cpuset-cpus=0 \
@@ -62,7 +62,7 @@ jobs:
           name: gis-results-${{ github.sha }}
           path: builds/gis-ci/results
           retention-days: 30
-          if-no-files-found: warn
+          if-no-files-found: error
       - name: Make generated diagnostics readable
         if: always()
         run: |
@@ -80,4 +80,4 @@ jobs:
             builds/gis-ci/**/*.log
             builds/gis-ci/**/*.geojson
           retention-days: 30
-          if-no-files-found: warn
+          if-no-files-found: error

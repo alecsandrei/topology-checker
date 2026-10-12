@@ -15,6 +15,7 @@ find "$gis_addons" -name autorun.inf \
 gis_addon="$gis_addons/GisBenchmark"
 mkdir -p "$gis_addon"
 cp /workspace/benchmarks/gis/gvsig_bridge.py "$gis_addon/autorun.py"
+cp /workspace/benchmarks/gis/gvsig_native.py "$gis_addon/gvsig_native.py"
 cat > "$gis_addon/autorun.inf" <<'EOF'
 [Script]
 enable = true

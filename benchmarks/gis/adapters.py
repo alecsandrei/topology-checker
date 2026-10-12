@@ -9,7 +9,7 @@ from typing import Any
 from benchmarks.qgis.fixtures import ROOT
 from benchmarks.qgis.run import QgisSession, RustSession
 
-from .catalog import GVSIG
+from .catalog import GVSIG, NATIVE_RULES
 from .common import WorkerSession
 from .postgis import PostgisSession
 
@@ -55,6 +55,18 @@ def create_session(
             fixture,
             directory,
             startup_timeout,
+        )
+    if engine == "qgis" and rule in NATIVE_RULES:
+        return WorkerSession(
+            ["/usr/bin/python3", str(HERE / "qgis_worker.py")],
+            directory,
+            startup_timeout,
+            {
+                "GIS_WORKER_DIRECTORY": str(directory.resolve()),
+                "GIS_WORKER_FIXTURE": json.dumps(
+                    {name: str(ROOT / data["path"]) for name, data in fixture.items()}
+                ),
+            },
         )
     if engine == "qgis":
         session = QgisAdapter(
@@ -104,16 +116,4 @@ def create_session(
             startup_timeout,
             environment,
         )
-    if engine == "fme":
-        command = os.environ.get("GIS_FME_WORKER_COMMAND")
-        if not command:
-            raise FileNotFoundError("No licensed FME IPC worker configured")
-        parts = json.loads(command)
-        if (
-            not isinstance(parts, list)
-            or not parts
-            or not all(isinstance(p, str) for p in parts)
-        ):
-            raise ValueError("GIS_FME_WORKER_COMMAND must be a JSON argv array")
-        return WorkerSession(parts, directory, startup_timeout, environment)
     raise ValueError(f"unknown engine: {engine}")

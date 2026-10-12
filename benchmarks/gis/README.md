@@ -1,15 +1,14 @@
 # GIS validation benchmarks
 
 This suite compares topology-checker, QGIS 4.2, GRASS GIS, PostGIS SQL workflows
-and gvSIG in one Linux container. The root README figure uses two shared
-containment checks at the largest common size every tool completes correctly,
-with at least 1,000 primary and 1,000 secondary features. Full-suite mode includes
-every supported rule, failures and differences in semantics.
+and gvSIG on six checks: points inside polygons, polygons containing a point,
+duplicate points, line dangles, polygon overlaps and polygon gaps. Every tool
+uses identical inputs at one common feature count. Full-suite mode retains the
+broader rule catalog and reports unsupported checks and semantic differences.
 
-QGIS is the official 4.2.3 Ubuntu image pinned by digest. gvSIG is the official
-2.7.0 build 5016 archive pinned by SHA-256, running with OpenJDK. The image records
-the resolved Linux package versions. FME is optional and currently requires an
-existing licensed worker; the suite never registers accounts or acquires licenses.
+The official QGIS 4.2 Ubuntu image is pinned by digest. gvSIG 2.7.0 build 5016 is
+pinned by archive SHA-256 and runs with OpenJDK. The report records exact versions
+and resolved package versions.
 
 ## Run
 
@@ -17,81 +16,107 @@ existing licensed worker; the suite never registers accounts or acquires license
 docker build --platform linux/amd64 -f benchmarks/gis/Dockerfile -t topology-gis-benchmark .
 mkdir -p builds/gis-run
 docker run --rm --platform linux/amd64 --cpuset-cpus=0 \
+  -e GIS_SOURCE_REVISION="$(git rev-parse HEAD)" \
   -v "$PWD/builds/gis-run:/results" topology-gis-benchmark \
-  python -m benchmarks.gis.run --output /results/results --work /tmp/gis-work
+  python -m benchmarks.gis.run \
+    --rules point/must-be-inside polygon/must-contain-point \
+      point/must-not-overlap line/must-not-have-dangles \
+      polygon/must-not-overlap polygon/must-not-have-gaps \
+    --sizes 1000 --warmups 2 --repetitions 10 \
+    --output /results/results --work /tmp/gis-work
 ```
 
-Use `--smoke` for short integration checks. Select workloads with `--rules`,
-`--sizes` and `--engines`. Defaults are all 38 Rust rules, the supported external
-counterparts, 1,000/10,000/100,000 features, two warmups and ten measured samples.
+Use `--smoke` for the same six checks with small inputs and one repetition.
+Select workloads with `--rules`, `--sizes` and `--engines`. Defaults retain all
+38 Rust rules, supported external counterparts and 1,000/10,000/100,000 features.
+Keep work files on the container's Linux filesystem when using macOS to avoid
+case-sensitive gvSIG asset collisions.
 
-Keep the work directory inside the container's Linux filesystem. This avoids
-case-sensitive gvSIG assets colliding on macOS bind mounts; reports are saved
-to the mounted results directory.
+The manual `GIS benchmarks` workflow offers `headline` and `full` modes.
+Headline mode measures all six checks at 1,000 features per input layer, with
+two warmups and ten repetitions. The same container runs sequential engines in
+rotating order on one logical CPU. Local emulated runs test correctness and
+reproduction; publication requires a native x86_64 Linux CI run.
 
-The `GIS benchmarks` GitHub Actions workflow runs the same image on a native
-x86_64 Linux runner. Its `headline` mode measures both shared checks at 1,000
-features with all correctness probes, two warmups and ten repetitions. Select
-`full` to measure every rule at all three sizes. Benchmark runs are dispatched
-manually after this branch is merged; normal CI remains limited to checks.
-Local emulated runs are useful for testing but cannot produce
-the publication marker. All engines run sequentially with rotating order on one
-logical CPU. The new Linux measurements must not be mixed with the historical
-macOS measurements in `../qgis/results`.
+## Semantics and native mappings
 
-## What is timed
+Duplicate points produce every unordered feature pair, including three pairs
+for three identical points. Dangles report affected original feature IDs: an
+endpoint connected to a line interior is connected, and closed lines have no
+free endpoints. Overlaps produce every unordered polygon pair with positive
+intersection area, including equal and contained polygons. Boundary-only touches
+are permitted. Gaps are bounded uncovered faces of polygon coverage; the exterior
+is excluded, and covered islands remain holes in the gap geometry.
 
-Source geometry loading and fresh copies are outside the timer. Required spatial
-indexes, topology construction, rule evaluation and materialized violation
-geometries are inside. Response extraction and serialization are outside.
+| Check | QGIS | GRASS | PostGIS | gvSIG |
+| :--- | :--- | :--- | :--- | :--- |
+| Points inside polygons | Stock containment rule | `v.select within`, reversed | Indexed `ST_ContainsProperly`, reversed | Stock containment rule |
+| Polygons contain a point | Stock containment rule | `v.select contains`, reversed | Indexed `ST_ContainsProperly`, reversed | Stock containment rule |
+| Duplicate points | `QgsSpatialIndex`, geometry equality | `v.to.db` coordinates, indexed SQLite pair query, native error points | Indexed `ST_Equals` pairs | Native STRtree, JTS equality |
+| Line dangles | Indexed endpoint incidence | Native noding and node-degree inspection | Indexed endpoint-incidence SQL | Native STRtree, JTS endpoint incidence |
+| Polygon overlaps | Indexed positive-area intersection | Native spatial candidates and attributed `v.overlay` on original polygons | Indexed positive-area `ST_Intersection` | Native STRtree, positive-area JTS intersection |
+| Polygon gaps | Native union and bounded void difference | Bounded uncovered faces in native vector topology | Native union and bounded void difference | Native JTS union and bounded void difference |
 
-PostGIS records a server-side duration for GiST indexes, statistics and SQL
-result materialization. GRASS includes native module launch and native output
-writing. QGIS invokes the stock C++ Topology Checker with canvas painting
-disabled. gvSIG invokes a fresh stock TopologyPlan with native memory stores and
-UI disabled. Its private profile disables unrelated addon autoruns to avoid
-background startup work during validation. Native indexing follows each store
-provider's policy. Unavailable gvSIG factories are reported explicitly.
+Each record names the operation actually used. GRASS retains separate original
+polygon maps for overlays so equal or contained source features keep their IDs.
+Its duplicate query reads coordinates extracted by GRASS and writes native error
+vectors. Noding constructs topology without repairing or removing violations.
+gvSIG uses its bundled JTS geometry plugin for the four additional workflows.
+The stock topology plans remain in use for containment and other mapped rules.
 
-GRASS duplicate removal and dangle cleaning are repair workflows, so their
-timings are retained without validation speedup ratios. The shared figure uses
-single-point and single-polygon features, including polygon holes. Each engine
-must pass clean, invalid and boundary probes, preserve affected feature IDs, and
-complete every repetition before its timing is eligible for a comparison.
+See the [QGIS geometry API](https://api.qgis.org/api/classQgsGeometry.html),
+[GRASS coordinate extraction](https://grass.osgeo.org/grass84/manuals/v.to.db.html)
+and [GRASS attributed overlay](https://grass.osgeo.org/grass84/manuals/v.overlay.html).
+
+## Timing and correctness
+
+Fresh geometry copies and source loading happen before the timer. Fresh spatial
+indexes, topology construction, validation and native error geometry creation
+are timed. Result extraction, serialization and common geometry comparison occur
+after timing. GRASS includes module launch and native output writes. PostGIS
+measures server-side GiST creation, `ANALYZE` and materialized SQL violations.
+QGIS containment runs the stock C++ plugin with painting disabled. gvSIG disables
+unrelated profile autoruns and UI work.
+
+Pair checks compare both original IDs. Dangles compare affected feature IDs.
+Gaps compare canonical bounded geometry, including islands. Rust emits union
+rings; the comparison reconstructs bounded faces from gap rings and nested
+exterior island rings outside timing. Collinear vertices and ring orientation
+are normalized. Common geometry comparison never supplies validation results
+for another tool.
+
+Clean, violating, boundary and hole containment probes remain separate from the
+six headline checks. Additional probes cover duplicate triples, T junctions,
+closed lines, equal and contained polygons, boundary touches, bounded holes and
+islands. All measured repetitions must match Rust and all probes must pass.
 
 ## Results and publication
 
-The output contains `results.json`, `samples.csv`, `README.md`, `comparison.png`
-and `comparison.svg`. The workflow uploads partial measurements, fixture files
-and engine logs even on failure. `publishable.json` is produced only when every
-OSS engine passes both shared comparisons at the same feature count on native
-Linux CI. A larger workload timing out cannot be paired with another tool's
-smaller workload. Reports are uploaded separately from diagnostic files so an
-application profile cannot prevent saving the measurements.
+The output includes `results.json`, `samples.csv`, `README.md`, `comparison.png`
+and `comparison.svg`. A figure is generated only when all thirty combinations
+complete at one common size of at least 1,000 features. It has six groups of
+median-time bars, a logarithmic millisecond axis and a five-tool legend.
+Statistics, versions, failures and provenance remain in the detailed report.
 
-Retrieve a successful CI artifact, copy its results into this directory's
-`results` folder, and update the root README image only when that marker exists.
-The figure and report are generated exclusively from saved measurements. Failed,
-unsupported or semantically different checks remain visible in the report.
+`publishable.json` additionally requires native Linux CI, one CPU in the recorded
+affinity, two warmups, ten repetitions, engine versions, package versions,
+container identity, source revision, source hashes and binary hash. The workflow
+must upload both measurement reports and diagnostics successfully. Copy all
+artifacts from a single successful native run into `results`; do not combine runs
+or reuse historical QGIS timings. Partial results retain failures in JSON, CSV
+and Markdown and withhold the graph and publication marker.
 
-## Adapter contract and optional FME
+## Adapter contract and harness checks
 
-Python adapters expose `metadata`, `sample(rule, timeout)` and `close()`.
-Embedded workers use atomic `request.json`/`response.json` files with separate
-`preparing`, `validating` and `extracting` phases. A successful response contains
-`seconds`, `raw_count` and an `errors` array with primary feature IDs. Timed
-operations must materialize the corresponding error geometries before returning.
-
-An existing licensed FME integration can supply `GIS_FME_WORKER_COMMAND` as a
-JSON argv array, with this same contract and SpatialFilter containment workflows.
-It receives `GIS_WORKER_DIRECTORY`, `GIS_WORKER_FIXTURE` and `GIS_WORKER_RULE`.
-Without that configuration FME is recorded as unavailable and does not block
-the OSS publication gate.
-
-## Harness checks
+Adapters expose `metadata`, `sample(rule, timeout)` and `close()`. Embedded
+workers exchange atomic JSON requests and responses with separate preparation,
+validation and extraction deadlines. Responses contain `seconds`, `raw_count`
+and materialized `errors`, with both source IDs for pairs and geometry for gaps.
 
 ```sh
 uv run --project benchmarks/gis --group dev pytest benchmarks/gis/tests
 uv run --project benchmarks/gis --group dev ruff check benchmarks/gis
 uv run --project benchmarks/gis --group dev pyright --project benchmarks/gis
 ```
+
+Set `GIS_INTEGRATION=1` inside the container to run all native fixture checks.

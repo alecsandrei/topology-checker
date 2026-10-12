@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 
 from benchmarks.qgis.plot import quantile
 
-from .catalog import ENGINES, LABELS, SHARED_RULES
+from .catalog import CHECK_LABELS, ENGINES, HEADLINE_RULES, LABELS
 
 COLORS = {
     "rust": "#2563eb",
@@ -22,7 +22,6 @@ COLORS = {
     "grass": "#15803d",
     "postgis": "#7c3aed",
     "gvsig": "#0891b2",
-    "fme": "#be185d",
 }
 
 
@@ -41,13 +40,35 @@ def summary(samples: list[dict[str, Any]]) -> dict[str, Any] | None:
     }
 
 
+def complete_workload(work: dict[str, Any], repetitions: int, warmups: int) -> bool:
+    """Require full valid samples, warmups and identical recorded result hashes."""
+    engines = ("rust", *ENGINES)
+    samples = work.get("samples", {})
+    if not all(len(samples.get(name, [])) == repetitions for name in engines):
+        return False
+    preparation = work.get("warmups", [])
+    if not all(
+        sum(s.get("engine") == name for s in preparation) == warmups for name in engines
+    ):
+        return False
+    values = [s for name in engines for s in samples[name]] + preparation
+    if any(
+        s.get("status") != "ok"
+        or not math.isfinite(s.get("seconds", 0))
+        or s.get("seconds", 0) <= 0
+        for s in values
+    ):
+        return False
+    hashes = {s.get("result_sha256") for s in values}
+    return len(hashes) == 1 and None not in hashes
+
+
 def headline_size(data: dict[str, Any]) -> int:
-    """Choose the largest common size with complete comparisons for every tool."""
+    """Choose a size only when all thirty combinations have complete measurements."""
     paired_sizes = []
-    measured_sizes = []
-    for rule in SHARED_RULES:
+    repetitions = data["metadata"].get("repetitions", 10)
+    for rule in HEADLINE_RULES:
         work = [w for r in data["rules"] if r["rule"] == rule for w in r["workloads"]]
-        measured_sizes.append({w["size"] for w in work if w["size"] >= 1000})
         paired_sizes.append(
             {
                 w["size"]
@@ -57,15 +78,16 @@ def headline_size(data: dict[str, Any]) -> int:
                     w["comparisons"].get(name, {}).get("eligible", False)
                     for name in ENGINES
                 )
+                and complete_workload(
+                    w, repetitions, data["metadata"].get("warmups", 2)
+                )
             }
         )
-    paired = set.intersection(*paired_sizes)
-    measured = set.intersection(*measured_sizes)
-    return max(paired or measured, default=10000)
+    return max(set.intersection(*paired_sizes), default=0)
 
 
 def headline_workload(data: dict[str, Any], rule: str) -> dict[str, Any] | None:
-    """Use one common feature count across both panels and all tools."""
+    """Use one common feature count across all six checks and all tools."""
     size = headline_size(data)
     return next(
         (
@@ -80,23 +102,36 @@ def headline_workload(data: dict[str, Any], rule: str) -> dict[str, Any] | None:
 
 
 def publishable(data: dict[str, Any]) -> bool:
-    """Require both shared comparisons for every OSS engine on native Linux CI."""
-    if not data["metadata"].get("execution", {}).get("native_linux_ci"):
-        return False
-    for rule in SHARED_RULES:
-        work = headline_workload(data, rule)
-        if work is None or not all(
-            work["comparisons"].get(name, {}).get("eligible", False) for name in ENGINES
-        ):
-            return False
-    return True
+    """Require all six checks and full provenance from native, single-CPU Linux CI."""
+    metadata = data["metadata"]
+    execution = metadata.get("execution", {})
+    return bool(
+        headline_size(data)
+        and execution.get("native_linux_ci")
+        and len(execution.get("cpu_affinity") or []) == 1
+        and metadata.get("source_revision")
+        and metadata.get("source_tree_sha256")
+        and metadata.get("tooling_sha256")
+        and metadata.get("container_image")
+        and metadata.get("rust_binary_sha256")
+        and metadata.get("packages")
+        and metadata.get("repetitions") == 10
+        and metadata.get("warmups") == 2
+        and all(
+            data["engines"].get(name, {}).get("version")
+            or (name == "rust" and data["engines"].get(name, {}).get("package_version"))
+            for name in ("rust", *ENGINES)
+        )
+    )
 
 
 def draw(data: dict[str, Any], output: Path) -> None:
-    """Keep all tools visible while plotting only correctness-eligible samples."""
+    """Draw one minimal grouped bar chart only after every comparison passes."""
+    for filename in ("comparison.png", "comparison.svg"):
+        (output / filename).unlink(missing_ok=True)
+    if not headline_size(data):
+        return
     engines = ["rust", *ENGINES]
-    if data["engines"].get("fme", {}).get("status") == "ready":
-        engines.append("fme")
     plt.rcParams.update(
         {
             "font.family": "DejaVu Sans",
@@ -105,71 +140,31 @@ def draw(data: dict[str, Any], output: Path) -> None:
             "svg.hashsalt": "topology-gis",
         }
     )
-    figure, axes = plt.subplots(1, 2, figsize=(11, 4), sharey=True)
-    titles = ("Points strictly inside polygons", "Polygons contain a point")
-    for axis, rule, title in zip(axes, SHARED_RULES, titles, strict=True):
-        work = headline_workload(data, rule)
-        for row, engine in enumerate(engines):
-            comparison = {} if work is None else work["comparisons"].get(engine, {})
-            eligible = engine == "rust" or comparison.get("eligible", False)
-            samples = [] if work is None else work["samples"].get(engine, [])
-            stats = summary(samples) if eligible else None
-            if stats:
-                median, low, high = (
-                    stats[key] * 1000 for key in ("median_s", "q1_s", "q3_s")
-                )
-                axis.errorbar(
-                    median,
-                    row,
-                    xerr=[[median - low], [high - median]],
-                    fmt="o",
-                    capsize=4,
-                    color=COLORS[engine],
-                    markersize=7,
-                )
-                axis.annotate(
-                    f"{median:.2f} ms",
-                    (median, row),
-                    xytext=(8, 7),
-                    textcoords="offset points",
-                    fontsize=9,
-                )
-            else:
-                reason = comparison.get("reason", "not measured")
-                axis.text(
-                    0.03,
-                    row,
-                    reason,
-                    transform=axis.get_yaxis_transform(),
-                    va="center",
-                    color="#64748b",
-                    fontsize=8,
-                )
-        axis.set_title(title, fontsize=11, pad=13)
-        axis.set_xscale("log")
-        axis.set_xlabel("Validation time (ms)")
-        axis.grid(axis="x", alpha=0.2)
-        axis.set_axisbelow(True)
-        for side in ("top", "right", "left"):
-            axis.spines[side].set_visible(False)
-        axis.tick_params(axis="y", length=0)
-        axis.margins(x=0.45)
-    labels = []
-    for engine in engines:
-        version = str(data["engines"].get(engine, {}).get("version", "")).split(" ")[0]
-        labels.append(LABELS[engine] + (f" {version}" if version else ""))
-    axes[0].set_yticks(range(len(engines)), labels)
-    axes[0].invert_yaxis()
-    figure.suptitle("Same data, same Linux runner, one logical CPU", fontsize=12)
-    figure.text(
-        0.5,
-        0.025,
-        f"{headline_size(data):,} primary and {headline_size(data):,} secondary features · median and interquartile range",
-        ha="center",
-        fontsize=9,
-        color="#475569",
-    )
-    figure.tight_layout(rect=(0, 0.075, 1, 0.94))
+    figure, axis = plt.subplots(figsize=(11, 4))
+    width = 0.15
+    for offset, engine in enumerate(engines):
+        values = []
+        for rule in HEADLINE_RULES:
+            work = headline_workload(data, rule)
+            assert work is not None
+            stats = summary(work["samples"][engine])
+            assert stats is not None
+            values.append(stats["median_s"] * 1000)
+        axis.bar(
+            [x + (offset - 2) * width for x in range(6)],
+            values,
+            width=width,
+            color=COLORS[engine],
+            label=LABELS[engine],
+        )
+    axis.set_xticks(range(6), CHECK_LABELS)
+    axis.set_yscale("log")
+    axis.set_ylabel("Median validation time (ms)")
+    axis.legend(ncols=5, loc="upper center", bbox_to_anchor=(0.5, 1.18), frameon=False)
+    axis.grid(False)
+    for side in ("top", "right"):
+        axis.spines[side].set_visible(False)
+    figure.tight_layout()
     svg = output / "comparison.svg"
     figure.savefig(svg, metadata={"Date": None})
     svg.write_text(
@@ -188,7 +183,9 @@ def publish(data: dict[str, Any], output: Path) -> None:
         "",
         "[Raw measurements](results.json) · [Samples CSV](samples.csv) · [SVG figure](comparison.svg)",
         "",
-        "![Shared checks](comparison.png)",
+        "![Six checks](comparison.png)"
+        if headline_size(data)
+        else "Figure withheld: all thirty comparisons must pass at one common size.",
         "",
         "Times include fresh index or topology construction and materialized violations. "
         "Application startup, input loading, fresh copies and response extraction are excluded. "
@@ -252,10 +249,15 @@ def publish(data: dict[str, Any], output: Path) -> None:
                 lines.append(
                     f"| `{record['rule']}` | {probe['name']} | {LABELS[engine]} | {status} |"
                 )
-    lines.extend(["", "## Engine availability", ""])
+    lines.extend(["", "## Native operations", ""])
+    for record in data["rules"]:
+        for engine, operation in record.get("operations", {}).items():
+            lines.append(f"- `{record['rule']}`, {LABELS[engine]}: {operation}")
+    lines.extend(["", "## Engine availability and versions", ""])
     for engine, metadata in data["engines"].items():
         lines.append(
             f"- {LABELS[engine]}: {metadata.get('status', 'ready')}. "
+            f"Version: {metadata.get('version', metadata.get('package_version', 'unavailable'))}. "
             f"{metadata.get('reason', '')}".rstrip()
         )
     lines.extend(
@@ -282,7 +284,7 @@ def publish(data: dict[str, Any], output: Path) -> None:
             json.dumps(
                 {
                     "source_revision": data["metadata"]["source_revision"],
-                    "rules": list(SHARED_RULES),
+                    "rules": list(HEADLINE_RULES),
                     "size": headline_size(data),
                 }
             )

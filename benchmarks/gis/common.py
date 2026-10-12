@@ -11,6 +11,11 @@ from pathlib import Path
 from typing import Any, Protocol
 
 import psycopg
+from shapely import from_wkt, to_wkb
+from shapely import normalize as canonical
+from shapely.errors import GEOSException
+from shapely.geometry import MultiPolygon, Polygon, shape
+from shapely.ops import unary_union
 
 from benchmarks.qgis.run import EngineFailure, atomic_json, close_process, wait_file
 
@@ -30,12 +35,18 @@ class Session(Protocol):
 
 
 def normalize(rule: str, result: dict[str, Any]) -> dict[str, Any]:
-    """Retain visible primary provenance, ignoring separately reported exteriors."""
+    """Compare pairs, affected IDs and topologically canonical bounded voids."""
     errors = [e for e in result["errors"] if e["kind"] != "outer-boundary"]
     ids = sorted(
         {e["id"] for e in errors if e.get("id") is not None and e.get("layer", 0) == 0}
     )
     count = len(errors)
+    identity: dict[str, Any] = {}
+    if rule in {"point/must-not-overlap", "polygon/must-not-overlap"}:
+        pairs = sorted({tuple(sorted((e["id"], e["destination"]))) for e in errors})
+        identity["pairs"] = [list(pair) for pair in pairs]
+        count = len(pairs)
+        ids = sorted({pair[0] for pair in pairs})
     if rule in {
         "line/must-not-have-dangles",
         "line/must-not-have-pseudo-nodes",
@@ -44,7 +55,35 @@ def normalize(rule: str, result: dict[str, Any]) -> dict[str, Any]:
         count = len(ids)
     if rule == "polygon/must-not-have-gaps":
         ids = []
-    return {"count": count, "primary_ids": ids}
+
+        def surface(error: dict[str, Any]) -> Any:
+            value = error["geometry"]
+            geometry = from_wkt(value) if isinstance(value, str) else shape(value)
+            return (
+                Polygon(geometry.coords)
+                if geometry.geom_type == "LineString"
+                else geometry
+            )
+
+        gaps = unary_union([surface(e) for e in errors])
+        # Rust reports union rings. Interior exterior rings are covered islands.
+        islands = [
+            surface(e)
+            for e in result["errors"]
+            if e["kind"] == "outer-boundary" and gaps.covers(surface(e))
+        ]
+        if islands:
+            gaps = gaps.difference(unary_union(islands))
+        geometry = canonical(gaps.simplify(0))
+        count = (
+            0
+            if geometry.is_empty
+            else (len(geometry.geoms) if isinstance(geometry, MultiPolygon) else 1)
+        )
+        identity["gap_geometry_sha256"] = hashlib.sha256(
+            to_wkb(geometry, byte_order=1)
+        ).hexdigest()
+    return {"count": count, "primary_ids": ids, **identity}
 
 
 def fingerprint(rule: str, response: dict[str, Any]) -> dict[str, Any]:
@@ -55,6 +94,9 @@ def fingerprint(rule: str, response: dict[str, Any]) -> dict[str, Any]:
         "seconds": response["seconds"],
         "raw_count": response["raw_count"],
         "normalized_count": normalized["count"],
+        "result_sha256": hashlib.sha256(
+            json.dumps(normalized, sort_keys=True).encode()
+        ).hexdigest(),
         "primary_ids_sha256": hashlib.sha256(
             json.dumps(normalized["primary_ids"]).encode()
         ).hexdigest(),
@@ -87,12 +129,15 @@ def capture(session: Session, rule: str, timeout: float) -> dict[str, Any]:
                 raise ValueError("invalid validation duration")
             if response["raw_count"] != len(response["errors"]):
                 raise ValueError("result count does not match materialized violations")
+            normalize(rule, response)
         return response
     except (
         EngineFailure,
         BrokenPipeError,
         OSError,
         ValueError,
+        TypeError,
+        GEOSException,
         KeyError,
         RuntimeError,
         psycopg.Error,
@@ -191,6 +236,20 @@ class WorkerSession:
     def sample(self, rule: str, timeout: float) -> dict[str, Any]:
         """Validate once, leaving response extraction outside the clock."""
         return self.request({"action": "sample", "rule": rule}, timeout)
+
+    def reload(self, fixture: dict[str, Any], timeout: float) -> None:
+        """Load another fixture in a resident gvSIG process, outside validation."""
+        from benchmarks.qgis.fixtures import ROOT
+
+        self.request(
+            {
+                "action": "load",
+                "fixture": {
+                    name: str(ROOT / data["path"]) for name, data in fixture.items()
+                },
+            },
+            timeout,
+        )
 
     def close(self) -> None:
         """Stop the worker and its child processes without touching user processes."""

@@ -92,22 +92,38 @@ def worker():
         topology_manager = TopologyLocator.getTopologyManager()
         projection = CRSFactory.getCRS("EPSG:3857")
         files = json.loads(os.environ["GIS_WORKER_FIXTURE"])
-        sources = {}
-        for name, path in files.items():
-            with open(path) as stream:
-                features = json.load(stream)["features"]
-            sources[name] = []
-            for feature in features:
-                geometry = geometry_manager.createFrom(wkt(feature["geometry"]))
-                geometry.setProjection(projection)
-                sources[name].append((int(feature["properties"]["bench_id"]), geometry))
+
+        def load_inputs(files):
+            sources = {}
+            for name, path in files.items():
+                with open(path) as stream:
+                    features = json.load(stream)["features"]
+                sources[name] = []
+                for feature in features:
+                    geometry = geometry_manager.createFrom(wkt(feature["geometry"]))
+                    geometry.setProjection(projection)
+                    sources[name].append(
+                        (int(feature["properties"]["bench_id"]), geometry)
+                    )
+            return sources
+
+        sources = load_inputs(files)
         available = [
             str(factory.getId()) for factory in topology_manager.getRuleFactories()
         ]
         mappings = json.loads(os.environ["GIS_WORKER_MAPPINGS"])
         rule = os.environ["GIS_WORKER_RULE"]
         factory_id = mappings[rule]
-        if factory_id not in available:
+        native = factory_id.startswith("native ")
+        if native:
+            uselib.use_plugin("org.gvsig.geometry.app.jts")
+            import sys
+
+            sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+            import gvsig_native
+
+            native_sources = gvsig_native.load_sources(files, wkt)
+        if not native and factory_id not in available:
             reply(
                 {
                     "status": "failed",
@@ -123,7 +139,10 @@ def worker():
                 "factory": factory_id,
                 "available_rules": available,
                 "java": System.getProperty("java.version"),
-                "workflow": "stock TopologyPlan with native memory stores, UI disabled",
+                "jts": str(gvsig_native.JTSVersion.CURRENT_VERSION) if native else None,
+                "workflow": "native JTS geometry operations"
+                if native
+                else "stock TopologyPlan with native memory stores, UI disabled",
                 "profile": "unrelated addon autoruns disabled",
             }
         )
@@ -137,8 +156,43 @@ def worker():
                 with open(request) as stream:
                     command = json.load(stream)
                 os.unlink(request)
+                if command.get("action") == "load":
+                    files = command["fixture"]
+                    sources = load_inputs(files)
+                    if native:
+                        native_sources = gvsig_native.load_sources(files, wkt)
+                    reply({"status": "ready"})
+                    continue
                 if command["rule"] != rule:
                     raise ValueError("Session rule cannot change")
+                if native:
+                    geometries = [
+                        (fid, geometry.copy()) for fid, geometry in native_sources
+                    ]
+                    phase("validating")
+                    started = System.nanoTime()
+                    materialized = gvsig_native.validate(rule, geometries)
+                    seconds = (System.nanoTime() - started) / 1000000000.0
+                    phase("extracting")
+                    errors = [
+                        {
+                            "kind": "violation",
+                            "id": fid,
+                            "destination": destination,
+                            "layer": 0,
+                            "geometry": str(geometry.toText()),
+                        }
+                        for fid, destination, geometry in materialized
+                    ]
+                    reply(
+                        {
+                            "status": "ok",
+                            "seconds": seconds,
+                            "raw_count": len(errors),
+                            "errors": errors,
+                        }
+                    )
+                    continue
                 plan = topology_manager.createTopologyPlan()
                 plan.setUseUI(False)
                 plan.setAcceptExceptions(False)

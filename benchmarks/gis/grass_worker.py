@@ -2,11 +2,15 @@
 
 import json
 import os
+import shutil
 import time
 import traceback
 from pathlib import Path
 
 import grass.script as gs
+from grass.exceptions import CalledModuleError
+
+import grass_native
 
 DIRECTORY = Path(os.environ["GIS_WORKER_DIRECTORY"])
 SOURCE_FILES = json.loads(os.environ["GIS_WORKER_FIXTURE"])
@@ -71,6 +75,10 @@ def main() -> None:
                 min_area=0,
                 quiet=True,
             )
+        polygon_names = []
+        if os.environ["GIS_WORKER_RULE"] == "polygon/must-not-overlap":
+            features = json.loads(Path(SOURCE_FILES["input"]).read_text())["features"]
+            polygon_names = grass_native.polygon_templates(features)
         reply(
             {
                 "status": "ready",
@@ -78,7 +86,7 @@ def main() -> None:
                 "workflow": "GRASS vector modules",
             }
         )
-    except (RuntimeError, OSError, ValueError):
+    except (CalledModuleError, RuntimeError, OSError, ValueError):
         reply({"status": "failed", "error": traceback.format_exc()})
         return
     while True:
@@ -94,8 +102,11 @@ def main() -> None:
                 "g.remove",
                 flags="f",
                 type="vector",
-                name="input,other,errors,clean",
+                name="input,other,errors,clean,noded,faces",
                 quiet=True,
+            )
+            gs.run_command(
+                "g.remove", flags="f", type="vector", pattern="overlap_*", quiet=True
             )
             env = gs.gisenv()
             for name in SOURCE_FILES:
@@ -113,6 +124,13 @@ def main() -> None:
                 )
                 for support in ("topo", "sidx", "cidx", "fidx"):
                     (vector / support).unlink(missing_ok=True)
+            for template in ["source_index", *polygon_names] if polygon_names else []:
+                target = template.replace("source_", "")
+                root = vector.parent
+                shutil.rmtree(root / target, ignore_errors=True)
+                shutil.copytree(root / template, root / target)
+                for support in ("topo", "sidx", "cidx", "fidx"):
+                    (root / target / support).unlink(missing_ok=True)
             phase("validating")
             started = time.perf_counter()
             for name in SOURCE_FILES:
@@ -130,19 +148,23 @@ def main() -> None:
                     flags="r" if reverse else "",
                     quiet=True,
                 )
+            elif rule == "point/must-not-overlap":
+                materialized = grass_native.duplicates()
+            elif rule == "line/must-not-have-dangles":
+                materialized = grass_native.dangles()
+            elif rule == "polygon/must-not-overlap":
+                materialized = grass_native.overlaps(polygon_names)
+            elif rule == "polygon/must-not-have-gaps":
+                materialized = grass_native.gaps()
             else:
-                gs.run_command(
-                    "v.clean",
-                    input="input",
-                    output="clean",
-                    error="errors",
-                    tool="rmdupl" if rule.startswith("point/") else "rmdangle",
-                    threshold=0 if rule.startswith("point/") else -1,
-                    quiet=True,
-                )
+                raise ValueError("unsupported native GRASS rule")
             seconds = time.perf_counter() - started
             phase("extracting")
-            errors = rows("errors")
+            errors = (
+                rows("errors")
+                if rule in SELECTIONS
+                else grass_native.extract(materialized)
+            )
             reply(
                 {
                     "status": "ok",
@@ -151,7 +173,7 @@ def main() -> None:
                     "errors": errors,
                 }
             )
-        except (RuntimeError, OSError, ValueError, KeyError):
+        except (CalledModuleError, RuntimeError, OSError, ValueError, KeyError):
             reply({"status": "failed", "error": traceback.format_exc()})
 
 
