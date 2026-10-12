@@ -1,0 +1,102 @@
+//! Reusable boundary and ray indexes over original polygon coordinates.
+use super::{
+    cluster::distance,
+    index::{self, Index},
+    line_graph::projection,
+};
+use geo::{
+    BoundingRect, Coord, Kernel, Line, Polygon, Rect,
+    kernels::{Orientation, RobustKernel},
+};
+
+#[derive(Debug)]
+pub(crate) struct Location {
+    pub segments: Vec<Line>,
+    pub tree: Index,
+    bounds: Rect,
+}
+impl Location {
+    pub fn new(polygon: &Polygon) -> Self {
+        let segments = std::iter::once(polygon.exterior())
+            .chain(polygon.interiors())
+            .flat_map(|r| r.lines())
+            .collect::<Vec<_>>();
+        let tree = index::build(
+            segments
+                .iter()
+                .enumerate()
+                .map(|(i, s)| (i, s.bounding_rect())),
+        );
+        Self {
+            segments,
+            tree,
+            bounds: polygon.bounding_rect().expect("clean polygon"),
+        }
+    }
+    /// -1 outside, 0 boundary, 1 interior. Ray decisions use robust orientations.
+    pub fn position(&self, p: Coord) -> i8 {
+        if p.x < self.bounds.min().x
+            || p.x > self.bounds.max().x
+            || p.y < self.bounds.min().y
+            || p.y > self.bounds.max().y
+        {
+            return -1;
+        }
+        let query = index::envelope(Rect::new(
+            p,
+            Coord {
+                x: self.bounds.max().x,
+                y: p.y,
+            },
+        ));
+        let mut inside = false;
+        for item in self.tree.locate_in_envelope_intersecting(&query) {
+            let s = self.segments[item.data];
+            let side = RobustKernel::orient2d(s.start, s.end, p);
+            if side == Orientation::Collinear
+                && p.x >= s.start.x.min(s.end.x)
+                && p.x <= s.start.x.max(s.end.x)
+                && p.y >= s.start.y.min(s.end.y)
+                && p.y <= s.start.y.max(s.end.y)
+            {
+                return 0;
+            }
+            if (s.start.y > p.y) != (s.end.y > p.y)
+                && (side == Orientation::CounterClockwise) == (s.end.y > s.start.y)
+            {
+                inside = !inside;
+            }
+        }
+        if inside { 1 } else { -1 }
+    }
+    pub fn near(&self, p: Coord, tolerance: f64) -> bool {
+        self.tree
+            .locate_in_envelope_intersecting(&index::at(p, tolerance))
+            .any(|item| {
+                let s = self.segments[item.data];
+                if tolerance == 0. {
+                    RobustKernel::orient2d(s.start, s.end, p) == Orientation::Collinear
+                        && s.bounding_rect().contains_coord(p)
+                } else {
+                    distance(p, projection(s, p).1) <= tolerance
+                }
+            })
+    }
+}
+trait ContainsCoordinate {
+    fn contains_coord(&self, p: Coord) -> bool;
+}
+impl ContainsCoordinate for Rect {
+    fn contains_coord(&self, p: Coord) -> bool {
+        p.x >= self.min().x && p.x <= self.max().x && p.y >= self.min().y && p.y <= self.max().y
+    }
+}
+pub(crate) fn locations(parts: &crate::model::Parts) -> &[Location] {
+    parts.locations.get_or_init(|| {
+        parts
+            .polygons
+            .iter()
+            .map(|p| Location::new(&p.geometry))
+            .collect()
+    })
+}

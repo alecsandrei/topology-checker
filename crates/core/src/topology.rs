@@ -1,3 +1,4 @@
+use crate::cache::Cache;
 use crate::engine::line_graph::{InputMode, LineGraph};
 use crate::{
     Error, Layer, LayerId, Rule, RuleId, RuleSpec, Violation, ViolationKind, model::Parts, rules,
@@ -7,9 +8,10 @@ use serde::Serialize;
 use std::{
     collections::BTreeMap,
     fmt,
-    sync::{Arc, Mutex, OnceLock},
+    sync::{Arc, Mutex},
 };
-type GraphSlot = Arc<OnceLock<Result<Arc<LineGraph>, Error>>>;
+type GraphSlot = Arc<Cache<Result<Arc<LineGraph>, Error>>>;
+type GraphCache = Arc<Mutex<BTreeMap<Vec<(LayerId, InputMode)>, GraphSlot>>>;
 
 /// One rule's violations, with deterministic counts and feature provenance.
 #[derive(Debug, Clone, Serialize)]
@@ -46,6 +48,17 @@ impl RuleReport {
 #[serde(tag = "kind", rename_all = "kebab-case")]
 #[non_exhaustive]
 pub enum Warning {
+    /// A cleaned line part collapsed under the configured tolerance.
+    CollapsedLine {
+        /// Topology-scoped layer ID.
+        layer: LayerId,
+        /// Caller-supplied layer name.
+        name: String,
+        /// Original feature ID.
+        fid: i64,
+        /// Original part index.
+        part: u32,
+    },
     /// Degenerate parts or rings were skipped while cleaning a layer.
     DegenerateParts {
         /// Topology-scoped layer ID.
@@ -59,6 +72,12 @@ pub enum Warning {
 impl fmt::Display for Warning {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::CollapsedLine {
+                name, fid, part, ..
+            } => write!(
+                f,
+                "layer {name}, FID {fid}, part {part}: line collapsed under tolerance"
+            ),
             Self::DegenerateParts { name, skipped, .. } => {
                 write!(
                     f,
@@ -115,9 +134,11 @@ pub enum LayerInput {
 #[derive(Debug)]
 pub struct Topology {
     tolerance: f64,
+    cancellation: Option<crate::CancellationToken>,
+    selection: Option<(LayerId, i64, Arc<Parts>)>,
     layers: Vec<Arc<Layer>>,
     specs: Vec<RuleSpec>,
-    graphs: Mutex<BTreeMap<Vec<(LayerId, InputMode)>, GraphSlot>>,
+    graphs: GraphCache,
 }
 impl Topology {
     /// Create an empty topology with tolerance in input coordinate units.
@@ -131,9 +152,11 @@ impl Topology {
         }
         Ok(Self {
             tolerance,
+            cancellation: None,
+            selection: None,
             layers: Vec::new(),
             specs: Vec::new(),
-            graphs: Mutex::new(BTreeMap::new()),
+            graphs: Arc::new(Mutex::new(BTreeMap::new())),
         })
     }
     /// Return the configured planar tolerance.
@@ -158,6 +181,16 @@ impl Topology {
             .map(AsRef::as_ref)
             .ok_or(Error::UnknownLayer(id))
     }
+    /// Share a registered immutable layer and its caches.
+    ///
+    /// # Errors
+    /// Returns an unknown-layer error for an unregistered ID.
+    pub fn shared_layer(&self, id: LayerId) -> Result<Arc<Layer>, Error> {
+        self.layers
+            .get(id.0)
+            .map(Arc::clone)
+            .ok_or(Error::UnknownLayer(id))
+    }
     /// Iterate layers and their IDs in registration order.
     pub fn layers(&self) -> impl Iterator<Item = (LayerId, &Layer)> {
         self.layers
@@ -176,6 +209,28 @@ impl Topology {
         self.specs.clear();
     }
     pub(crate) fn parts(&self, id: LayerId) -> Result<&Parts, Error> {
+        if let Some((layer, _, parts)) = &self.selection
+            && *layer == id
+        {
+            return Ok(parts);
+        }
+        self.full_parts(id)
+    }
+    pub(crate) fn select_feature(&mut self, layer: LayerId, fid: i64) -> Result<(), Error> {
+        let parts = Arc::new(self.full_parts(layer)?.feature(fid));
+        self.selection = Some((layer, fid, parts));
+        Ok(())
+    }
+    pub(crate) fn selected_feature(&self) -> Option<(LayerId, i64)> {
+        self.selection
+            .as_ref()
+            .map(|(layer, fid, _)| (*layer, *fid))
+    }
+    pub(crate) fn feature_matches(&self, layer: LayerId, fid: i64) -> bool {
+        self.selected_feature()
+            .is_none_or(|selected| selected == (layer, fid))
+    }
+    pub(crate) fn full_parts(&self, id: LayerId) -> Result<&Parts, Error> {
         let layer = self.layer(id)?;
         layer.parts().map_err(|e| e.at(id, layer.name()))
     }
@@ -193,7 +248,7 @@ impl Topology {
     ) -> Result<Arc<LineGraph>, Error> {
         layers.sort_unstable();
         layers.dedup();
-        // A poisoned map still contains valid Arc/OnceLock entries: initialization
+        // A poisoned map still contains valid Arc/Cache entries: initialization
         // happens outside this lock, and no partially built graph is stored in it.
         let slot = Arc::clone(
             self.graphs
@@ -202,10 +257,14 @@ impl Topology {
                 .entry(layers.clone())
                 .or_default(),
         );
-        slot.get_or_init(|| LineGraph::build(self, &layers).map(Arc::new))
-            .as_ref()
-            .map(Arc::clone)
-            .map_err(Clone::clone)
+        slot.get_or_init(|| {
+            let mut full = self.snapshot();
+            full.selection = None;
+            LineGraph::build(&full, &layers).map(Arc::new)
+        })
+        .as_ref()
+        .map(Arc::clone)
+        .map_err(Clone::clone)
     }
     /// Register a rule after validating input families, finite coordinates and FIDs.
     /// Unary rules require no secondary layer; binary rules require a distinct one.
@@ -289,7 +348,18 @@ impl Topology {
     pub fn warnings(&self) -> Result<Vec<Warning>, Error> {
         let mut warnings = Vec::new();
         for (id, layer) in self.layers() {
-            let skipped = self.parts(id)?.skipped;
+            let parts = self.parts(id)?;
+            for line in &parts.lines {
+                if crate::engine::line_graph::collapsed(&line.geometry, self.tolerance) {
+                    warnings.push(Warning::CollapsedLine {
+                        layer: id,
+                        name: layer.name().into(),
+                        fid: line.reference.fid,
+                        part: line.reference.part.unwrap_or(0),
+                    });
+                }
+            }
+            let skipped = parts.skipped;
             if skipped > 0 {
                 warnings.push(Warning::DegenerateParts {
                     layer: id,
@@ -299,6 +369,85 @@ impl Topology {
             }
         }
         Ok(warnings)
+    }
+    /// Capture immutable layers, rules and shared caches for independent validation.
+    #[must_use]
+    pub fn snapshot(&self) -> Self {
+        Self {
+            tolerance: self.tolerance,
+            cancellation: self.cancellation.clone(),
+            selection: self.selection.clone(),
+            layers: self.layers.clone(),
+            specs: self.specs.clone(),
+            graphs: Arc::clone(&self.graphs),
+        }
+    }
+    /// Send aggregated violations to a consumer in rule, kind and feature order.
+    /// The consumer receives the original registered rule specification. Returning
+    /// an error stops output immediately; successful exhaustion returns metadata.
+    /// Duplicate point stacks require memory proportional to inputs, not pair count.
+    ///
+    /// # Errors
+    /// Returns deferred input failures or the consumer's original error.
+    pub fn validate_into<E>(
+        &self,
+        mut sink: impl FnMut(RuleSpec, Violation) -> Result<(), E>,
+    ) -> Result<crate::ReportSummary, crate::SinkError<E>> {
+        let warnings = self.warnings()?;
+        let mut summaries = Vec::new();
+        for &spec in &self.specs {
+            let mut counts = BTreeMap::new();
+            let mut total = 0;
+            crate::cancel::check();
+            rules::run_into(self, spec, |v| {
+                crate::cancel::check();
+                let kind = v.kind;
+                sink(spec, v)?;
+                *counts.entry(kind).or_default() += 1;
+                total += 1;
+                Ok(())
+            })?;
+            crate::cancel::check();
+            summaries.push(crate::RuleSummary {
+                spec,
+                layer: self.layer(spec.layer)?.name().into(),
+                other: spec
+                    .other
+                    .map(|id| self.layer(id).map(|l| l.name().into()))
+                    .transpose()?,
+                counts,
+                total,
+            });
+        }
+        Ok(crate::ReportSummary {
+            tolerance: self.tolerance,
+            warnings,
+            rules: summaries,
+        })
+    }
+    /// Validate with cooperative cancellation, retaining the original sink error.
+    ///
+    /// # Errors
+    /// Returns input failures, cancellation, or the consumer's original error.
+    pub fn validate_into_cancellable<E>(
+        &self,
+        token: crate::CancellationToken,
+        sink: impl FnMut(RuleSpec, Violation) -> Result<(), E>,
+    ) -> Result<crate::ReportSummary, crate::SinkError<E>> {
+        let mut snapshot = self.snapshot();
+        snapshot.cancellation = Some(token.clone());
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            crate::cancel::scope(Some(token), || snapshot.validate_into(sink))
+        })) {
+            Ok(result) => result,
+            Err(error) if error.is::<crate::cancel::Cancelled>() => {
+                Err(crate::SinkError::Core(Error::Cancelled))
+            }
+            Err(error) => std::panic::resume_unwind(error),
+        }
+    }
+    pub(crate) fn cancellable<T>(&self, run: impl FnOnce() -> T) -> T {
+        crate::cancel::scope(self.cancellation.clone(), run)
     }
     /// Validate all layers and execute registered rules, reusing cached views.
     /// Topology violations are a successful report, not operational errors.
@@ -312,7 +461,14 @@ impl Topology {
             .specs
             .par_iter()
             .map(|&spec| {
-                let violations = rules::run(self, spec)?;
+                let mut violations = rules::run(self, spec)?;
+                violations.sort_by_key(|v| {
+                    (
+                        v.kind,
+                        v.origin.map(crate::FeatureRef::feature),
+                        v.destination.map(crate::FeatureRef::feature),
+                    )
+                });
                 let mut counts = BTreeMap::new();
                 for v in &violations {
                     *counts.entry(v.kind).or_default() += 1;

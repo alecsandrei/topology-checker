@@ -129,6 +129,10 @@ pub(crate) fn read(path: &Path) -> Result<Vec<RawLayer>> {
     }])
 }
 pub(crate) fn write(path: &Path, layer: &DatasetLayer) -> Result<()> {
+    write_source(path, layer)
+}
+pub(crate) fn write_source(path: &Path, source: &dyn crate::write::RecordSource) -> Result<()> {
+    let layer = source.metadata();
     let mut geom = "geometry".to_string();
     while layer.fields.iter().any(|f| f.name == geom) {
         geom.push('_');
@@ -141,9 +145,82 @@ pub(crate) fn write(path: &Path, layer: &DatasetLayer) -> Result<()> {
         Field::new(&geom, DataType::Binary, true),
         Field::new(&fid, DataType::Int64, true),
     ];
+    for f in &layer.fields {
+        fields.push(Field::new(
+            &f.name,
+            match f.kind {
+                FieldType::Integer => DataType::Int64,
+                FieldType::Real => DataType::Float64,
+                FieldType::Boolean => DataType::Boolean,
+                FieldType::Text => DataType::Utf8,
+            },
+            true,
+        ));
+    }
+    let schema = Arc::new(Schema::new(fields));
+    let json_fields = layer
+        .fields
+        .iter()
+        .filter(|f| f.kind == FieldType::Text)
+        .map(|f| f.name.clone())
+        .collect::<Vec<_>>();
+    let mut types = BTreeSet::new();
+    for row in source.records() {
+        let row = row?;
+        if let Some(g) = &row.geometry {
+            types.insert(match codec::type_name(g) {
+                "POINT" => "Point",
+                "LINESTRING" => "LineString",
+                "POLYGON" => "Polygon",
+                "MULTIPOINT" => "MultiPoint",
+                "MULTILINESTRING" => "MultiLineString",
+                "MULTIPOLYGON" => "MultiPolygon",
+                _ => "GeometryCollection",
+            });
+        }
+    }
+    let crs = layer
+        .srs
+        .as_ref()
+        .map(|s| {
+            s.to_projjson()
+                .and_then(|s| Ok(serde_json::from_str::<Value>(&s)?))
+        })
+        .transpose()?;
+    let geo = json!({"version":"1.1.0","primary_column":geom,"columns":{geom.clone():{"encoding":"WKB","geometry_types":types,"crs":crs,"edges":"planar"}}});
+    let own = json!({"fid":fid,"name":layer.name,"json_fields":json_fields});
+    let props = WriterProperties::builder()
+        .set_key_value_metadata(Some(vec![
+            KeyValue::new("geo".into(), geo.to_string()),
+            KeyValue::new("topology_checker".into(), own.to_string()),
+        ]))
+        .build();
+    let mut writer = ArrowWriter::try_new(File::create(path)?, Arc::clone(&schema), Some(props))?;
+    let mut batch = Vec::with_capacity(1024);
+    let mut offset = 0;
+    for row in source.records() {
+        batch.push(row?);
+        if batch.len() == 1024 {
+            writer.write(&record_batch(layer, &schema, &batch, offset)?)?;
+            offset += batch.len();
+            batch.clear();
+        }
+    }
+    if !batch.is_empty() || offset == 0 {
+        writer.write(&record_batch(layer, &schema, &batch, offset)?)?;
+    }
+    writer.close()?;
+    Ok(())
+}
+
+fn record_batch(
+    layer: &DatasetLayer,
+    schema: &Arc<Schema>,
+    records: &[crate::write::Record],
+    offset: usize,
+) -> Result<RecordBatch> {
     let mut arrays: Vec<ArrayRef> = Vec::new();
-    let wkb = layer
-        .records
+    let wkb = records
         .iter()
         .map(|r| r.geometry.as_ref().map(codec::encode).transpose())
         .collect::<Result<Vec<_>>>()?;
@@ -151,15 +228,13 @@ pub(crate) fn write(path: &Path, layer: &DatasetLayer) -> Result<()> {
         wkb.iter().map(|b| b.as_deref()),
     )));
     arrays.push(Arc::new(Int64Array::from_iter(
-        layer
-            .records
+        records
             .iter()
             .enumerate()
-            .map(|(i, r)| r.id.or(Some(i as i64))),
+            .map(|(i, r)| r.id.or(Some((offset + i) as i64))),
     )));
-    let mut json_fields = Vec::new();
     for f in &layer.fields {
-        let values = layer.records.iter().map(|r| r.properties.get(&f.name));
+        let values = records.iter().map(|r| r.properties.get(&f.name));
         let (ty, array): (DataType, ArrayRef) = match f.kind {
             FieldType::Integer => (
                 DataType::Int64,
@@ -179,52 +254,15 @@ pub(crate) fn write(path: &Path, layer: &DatasetLayer) -> Result<()> {
                     values.map(|v| v.and_then(Value::as_bool)),
                 )),
             ),
-            FieldType::Text => {
-                json_fields.push(f.name.clone());
-                (
-                    DataType::Utf8,
-                    Arc::new(StringArray::from_iter(
-                        values.map(|v| v.filter(|v| !v.is_null()).map(Value::to_string)),
-                    )),
-                )
-            }
+            FieldType::Text => (
+                DataType::Utf8,
+                Arc::new(StringArray::from_iter(
+                    values.map(|v| v.filter(|v| !v.is_null()).map(Value::to_string)),
+                )),
+            ),
         };
-        fields.push(Field::new(&f.name, ty, true));
+        let _ = ty;
         arrays.push(array);
     }
-    let schema = Arc::new(Schema::new(fields));
-    let types = layer
-        .records
-        .iter()
-        .filter_map(|r| r.geometry.as_ref())
-        .map(|g| match codec::type_name(g) {
-            "POINT" => "Point",
-            "LINESTRING" => "LineString",
-            "POLYGON" => "Polygon",
-            "MULTIPOINT" => "MultiPoint",
-            "MULTILINESTRING" => "MultiLineString",
-            "MULTIPOLYGON" => "MultiPolygon",
-            _ => "GeometryCollection",
-        })
-        .collect::<BTreeSet<_>>();
-    let crs = layer
-        .srs
-        .as_ref()
-        .map(|s| {
-            s.to_projjson()
-                .and_then(|s| Ok(serde_json::from_str::<Value>(&s)?))
-        })
-        .transpose()?;
-    let geo = json!({"version":"1.1.0","primary_column":geom,"columns":{geom.clone():{"encoding":"WKB","geometry_types":types,"crs":crs,"edges":"planar"}}});
-    let own = json!({"fid":fid,"name":layer.name,"json_fields":json_fields});
-    let props = WriterProperties::builder()
-        .set_key_value_metadata(Some(vec![
-            KeyValue::new("geo".into(), geo.to_string()),
-            KeyValue::new("topology_checker".into(), own.to_string()),
-        ]))
-        .build();
-    let mut writer = ArrowWriter::try_new(File::create(path)?, Arc::clone(&schema), Some(props))?;
-    writer.write(&RecordBatch::try_new(schema, arrays)?)?;
-    writer.close()?;
-    Ok(())
+    Ok(RecordBatch::try_new(Arc::clone(schema), arrays)?)
 }

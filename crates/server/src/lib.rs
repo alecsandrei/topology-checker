@@ -399,10 +399,12 @@ async fn run(
             ticket.config.clone(),
             Arc::clone(&ticket.prepared),
         );
-        let outcome =
-            tokio::task::spawn_blocking(move || ValidationResult::run(revision, config, &prepared))
-                .await
-                .unwrap_or_else(|e| Err(anyhow::anyhow!("validation task failed: {e}")));
+        let storage = Arc::clone(&ticket.storage);
+        let outcome = tokio::task::spawn_blocking(move || {
+            ValidationResult::run_in(revision, config, &prepared, Some(storage))
+        })
+        .await
+        .unwrap_or_else(|e| Err(anyhow::anyhow!("validation task failed: {e}")));
         ws.lock().unwrap().finish_job(&ticket, outcome);
         drop(permit);
     });
@@ -464,9 +466,14 @@ fn file_download(
     )
         .into_response())
 }
+#[derive(Debug, Default, Deserialize)]
+struct DownloadQuery {
+    download: Option<String>,
+}
 async fn download_report(
     State(state): State<AppState>,
     Path((id, format)): Path<(String, String)>,
+    Query(query): Query<DownloadQuery>,
 ) -> ApiResult<Response> {
     let r = result(&state.workspace(&id)?)?;
     blocking(move || {
@@ -504,6 +511,12 @@ async fn download_report(
                     },
                 )
             }
+        };
+        let preferred = format!("topology-report.{format}");
+        let name = if query.download.as_deref() == Some(&preferred) {
+            preferred
+        } else {
+            name
         };
         file_download(directory, &path, &name, content_type)
     })

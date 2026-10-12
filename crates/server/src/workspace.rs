@@ -22,7 +22,7 @@ use uuid::Uuid;
 #[derive(Debug)]
 pub struct Workspace {
     id: String,
-    storage: TempDir,
+    storage: Arc<TempDir>,
     sources: Vec<DatasetSource>,
     layers: Vec<Arc<SourceLayer>>,
     prepared: Arc<Prepared>,
@@ -53,6 +53,7 @@ pub struct JobTicket {
     pub revision: u64,
     pub config: Config,
     pub prepared: Arc<Prepared>,
+    pub storage: Arc<TempDir>,
 }
 impl Workspace {
     /// Create a temporary local workspace.
@@ -62,7 +63,7 @@ impl Workspace {
     pub fn new() -> Result<Self> {
         Ok(Self {
             id: Uuid::new_v4().to_string(),
-            storage: tempfile::tempdir()?,
+            storage: Arc::new(tempfile::tempdir()?),
             sources: vec![],
             layers: vec![],
             prepared: Arc::default(),
@@ -179,6 +180,7 @@ impl Workspace {
             revision: self.revision,
             config: self.config.clone(),
             prepared: Arc::clone(&self.prepared),
+            storage: Arc::clone(&self.storage),
         };
         self.result = None;
         self.job = Some(Job {
@@ -192,6 +194,10 @@ impl Workspace {
     }
     /// Store a job's outcome. A result for an outdated revision is reported as stale.
     pub fn finish_job(&mut self, ticket: &JobTicket, outcome: Result<ValidationResult>) {
+        // A previous run at the same revision must not overwrite a newer job.
+        if self.job.as_ref().is_none_or(|job| job.id != ticket.id) {
+            return;
+        }
         let stale = self.revision != ticket.revision;
         let (status, message) = match outcome {
             Ok(result) if !stale => {
@@ -709,6 +715,21 @@ mod tests {
         ws.finish_job(&ticket, result);
         assert_eq!(ws.poll().job.unwrap().status, JobStatus::Completed);
         assert!(ws.result().is_some());
+
+        let previous = ws.start_job();
+        let current = ws.start_job();
+        let result = ValidationResult::run(
+            previous.revision,
+            previous.config.clone(),
+            &previous.prepared,
+        );
+        ws.finish_job(&previous, result);
+        assert_eq!(ws.poll().job.unwrap().id, current.id);
+        assert!(ws.job_running());
+        let result =
+            ValidationResult::run(current.revision, current.config.clone(), &current.prepared);
+        ws.finish_job(&current, result);
+        assert_eq!(ws.poll().job.unwrap().status, JobStatus::Completed);
 
         let ticket = ws.start_job();
         let result =

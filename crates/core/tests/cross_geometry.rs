@@ -766,8 +766,12 @@ fn closed_overlap_pieces_join_across_the_traversal_seam_before_length_filtering(
 
 #[test]
 fn feature_point_counts_use_combined_parts_and_ignore_skipped_parts() {
-    let polygons =
-        Geometry::MultiPolygon(MultiPolygon(vec![polygon(0., 0., 5.), polygon(5., 0., 5.)]));
+    // Adjacent polygon members may share an edge in a collection. A MultiPolygon
+    // with that relationship is now rejected as invalid input.
+    let polygons = Geometry::GeometryCollection(GeometryCollection(vec![
+        polygon(0., 0., 5.).into(),
+        polygon(5., 0., 5.).into(),
+    ]));
     assert!(
         run(
             Rule::PolygonMustContainOnePoint,

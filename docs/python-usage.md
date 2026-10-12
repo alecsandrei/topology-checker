@@ -157,3 +157,57 @@ assert len(segments) == 2
 
 Both utilities return tuples of Shapely lines. They accept the same input
 adapters and operate on planar snapshots.
+
+## Input validity and tolerance
+
+Polygon registration rejects self-intersections, closing spikes, crossing or
+nested holes, and overlapping, nested, or edge-sharing parts of a MultiPolygon.
+Empty members and degenerate rings are cleaned first. Errors identify the layer,
+original FID, part, ring, and reason. Registration is atomic. Repair data explicitly
+before registration if needed; the validator preserves original coordinates.
+
+A line part whose original vertices all lie within the tolerance of each other is
+collapsed. It contributes no edges to line graphs built with that tolerance and
+receives one warning identifying its layer, FID, and original part. Warnings
+appear in `warnings()` and reports.
+Closed parts have no endpoints. A polygon-boundary crossing within tolerance of
+an open part endpoint is exempt from `MUST_NOT_CROSS_BOUNDARIES`; closed parts have
+no exemption. Boundary intervals pass `MUST_BE_INSIDE`, fail
+`MUST_BE_PROPERLY_INSIDE`, and are reported as lines by intersection rules.
+
+Polygon overlaps and gaps pass the sliver test when their positive area and
+perimeter satisfy `2 * area / perimeter >= tolerance`. Perimeter includes hole
+boundaries. Zero tolerance retains positive-area decisions. CRS compatibility
+ignores axis order, so EPSG:4326 and OGC:CRS84 can share a topology. Projection,
+datum, and unit differences still require reprojection.
+
+## Stream validation
+
+```python
+with topology.iter_validate(batch_size=1024) as stream:
+    for violation in stream:
+        print(violation.error_type, violation.origin)
+    summary = stream.summary
+    print(summary.error_count, summary.warnings)
+```
+
+The stream captures immutable layer and rule snapshots. It yields aggregated
+violations in rule, category, and feature order, preserving every duplicate pair.
+Use the context manager or `close()` when stopping early. Closing cancels native
+work and releases queued geometry. `summary` is available after successful
+exhaustion and stays `None` after cancellation or failure. `validate()` and its
+`Report` remain eager and compatible. Large duplicate stacks still produce a
+quadratic number of pairs, so stream them when the complete report is too large
+for memory.
+
+Polygon area and boundary decisions retain exact node identities until output.
+The inclusive area-to-perimeter threshold is certified before geometry emission,
+with exact rational calculations for cancellation and ambiguous thresholds.
+Original vertices stay fixed. Intersection nodes share one output coordinate;
+a local search preserves their topology within at most 16 floating-point steps
+and 100,000 candidate assignments per affected neighborhood.
+
+An unsatisfied output constraint raises `topology_checker.PrecisionError`, a
+`RuntimeError` subclass. Its message identifies the operation, rule, and available
+layer and FID context. Eager validation returns no partial report. A failed stream
+raises the same exception and leaves `summary` as `None`.

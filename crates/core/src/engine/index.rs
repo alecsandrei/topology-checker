@@ -25,10 +25,14 @@ pub(crate) fn build(items: impl IntoIterator<Item = (usize, Rect)>) -> Index {
             .collect(),
     )
 }
-pub(crate) fn pairs(a: &Index, b: &Index, tolerance: f64, same: bool) -> Vec<(usize, usize)> {
+pub(crate) fn pairs<'a>(
+    a: &'a Index,
+    b: &'a Index,
+    tolerance: f64,
+    same: bool,
+) -> impl Iterator<Item = (usize, usize)> + 'a {
     use rstar::RTreeObject;
-    let mut pairs = Vec::new();
-    for item in a {
+    a.iter().flat_map(move |item| {
         let bounds = item.envelope();
         let rect = Rect::new(
             Coord {
@@ -40,12 +44,8 @@ pub(crate) fn pairs(a: &Index, b: &Index, tolerance: f64, same: bool) -> Vec<(us
                 y: bounds.upper()[1],
             },
         );
-        for other in b.locate_in_envelope_intersecting(&expanded(rect, tolerance)) {
-            if !same || item.data < other.data {
-                pairs.push((item.data, other.data));
-            }
-        }
-    }
-    pairs.sort_unstable();
-    pairs
+        b.locate_in_envelope_intersecting(&expanded(rect, tolerance))
+            .filter(move |other| !same || item.data < other.data)
+            .map(move |other| (item.data, other.data))
+    })
 }

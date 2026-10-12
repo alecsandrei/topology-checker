@@ -84,3 +84,23 @@ pub struct Violation {
     /// Secondary feature provenance for pair violations, when applicable.
     pub destination: Option<FeatureRef>,
 }
+
+impl Violation {
+    /// Create a violation with geometry and topology-scoped source references.
+    #[must_use]
+    pub fn new(
+        rule: Rule,
+        kind: ViolationKind,
+        geometry: Geometry,
+        origin: Option<FeatureRef>,
+        destination: Option<FeatureRef>,
+    ) -> Self {
+        Self {
+            rule,
+            kind,
+            geometry,
+            origin,
+            destination,
+        }
+    }
+}

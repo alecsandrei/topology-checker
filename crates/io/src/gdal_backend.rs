@@ -36,9 +36,21 @@ pub(crate) fn formats() -> Vec<Format> {
         .collect()
 }
 pub(crate) fn write(path: &Path, driver: &str, layers: &[DatasetLayer]) -> Result<()> {
+    let sources = layers
+        .iter()
+        .map(|l| l as &dyn crate::write::RecordSource)
+        .collect::<Vec<_>>();
+    write_sources(path, driver, &sources)
+}
+pub(crate) fn write_sources(
+    path: &Path,
+    driver: &str,
+    layers: &[&dyn crate::write::RecordSource],
+) -> Result<()> {
     crate::gdal_runtime::initialize()?;
     let mut ds = DriverManager::get_driver_by_name(driver)?.create_vector_only(path)?;
-    for l in layers {
+    for source in layers {
+        let l = source.metadata();
         let srs = l.srs.as_ref().map(|s| s.to_gdal()).transpose()?;
         let mut options = Vec::new();
         if driver == "CSV" {
@@ -52,17 +64,21 @@ pub(crate) fn write(path: &Path, driver: &str, layers: &[DatasetLayer]) -> Resul
         {
             options.push("TARGET_ARCGIS_VERSION=ARCGIS_PRO_3_2_OR_LATER");
         }
-        let types = l
-            .records
-            .iter()
-            .filter_map(|r| r.geometry.as_ref())
-            .map(|g| g.to_gdal().map(|g| g.geometry_type()))
-            .collect::<Result<Vec<_>, _>>()?;
-        let inferred = types
-            .first()
-            .copied()
-            .filter(|t| types.iter().all(|other| other == t))
-            .unwrap_or(OGRwkbGeometryType::wkbUnknown);
+        let mut inferred = None;
+        for row in source.records() {
+            let row = row?;
+            if let Some(g) = &row.geometry {
+                let ty = g.to_gdal()?.geometry_type();
+                inferred = Some(inferred.map_or(ty, |old| {
+                    if old == ty {
+                        ty
+                    } else {
+                        OGRwkbGeometryType::wkbUnknown
+                    }
+                }));
+            }
+        }
+        let inferred = inferred.unwrap_or(OGRwkbGeometryType::wkbUnknown);
         let ty = match l.geometry_type.as_deref() {
             Some("POINT") => OGRwkbGeometryType::wkbPoint,
             Some("LINESTRING") => OGRwkbGeometryType::wkbLineString,
@@ -87,16 +103,6 @@ pub(crate) fn write(path: &Path, driver: &str, layers: &[DatasetLayer]) -> Resul
                         f.name.as_str(),
                         match f.kind {
                             FieldType::Boolean => OGRFieldType::OFTInteger,
-                            FieldType::Integer
-                                if l.records.iter().all(|r| {
-                                    r.properties.get(&f.name).is_none_or(|v| {
-                                        v.is_null()
-                                            || v.as_i64().is_some_and(|n| i32::try_from(n).is_ok())
-                                    })
-                                }) =>
-                            {
-                                OGRFieldType::OFTInteger
-                            }
                             FieldType::Integer => OGRFieldType::OFTInteger64,
                             FieldType::Real => OGRFieldType::OFTReal,
                             FieldType::Text => OGRFieldType::OFTString,
@@ -105,7 +111,8 @@ pub(crate) fn write(path: &Path, driver: &str, layers: &[DatasetLayer]) -> Resul
                 })
                 .collect::<Vec<_>>(),
         )?;
-        for r in &l.records {
+        for r in source.records() {
+            let r = r?;
             let mut f = Feature::new(layer.defn())?;
             if let Some(g) = &r.geometry {
                 f.set_geometry(g.to_gdal()?)?;

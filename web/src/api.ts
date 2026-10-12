@@ -16,17 +16,14 @@ export function jsonBody(value: unknown): RequestInit {
   };
 }
 export async function download(path: string, filename: string): Promise<void> {
-  const response = await fetch(`/api${path}`);
-  if (!response.ok) {
-    const body = await response
-      .json()
-      .catch(() => ({ error: response.statusText }));
-    throw new Error(body.error ?? response.statusText);
-  }
-  const url = URL.createObjectURL(await response.blob());
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  // The server supplies Content-Disposition. Let the browser stream directly to
+  // its download manager instead of allocating the entire response as a Blob.
+  const link = document.createElement("a");
+  const url = new URL(`/api${path}`, window.location.origin);
+  url.searchParams.set("download", filename);
+  link.href = url.toString();
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
 }

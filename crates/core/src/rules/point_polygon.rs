@@ -1,11 +1,10 @@
 //! Relations between point features and polygon areas.
-use super::{boundary_distance, strict, violation};
+use super::violation;
 use crate::{
     Error, LayerId, RuleSpec, Topology, Violation, ViolationKind,
     aggregate::{Merge, aggregate},
     engine::{cross, index},
 };
-use geo::Contains;
 use rayon::prelude::*;
 
 /// How each point part relates to the polygon layer.
@@ -36,12 +35,13 @@ pub(super) fn points(
 ) -> Result<Vec<Violation>, Error> {
     let a = t.parts(spec.layer)?;
     let b = t.parts(other)?;
+    let locations = crate::engine::location::locations(b);
     let violations = a
         .points
         .par_iter()
         .flat_map_iter(|p| {
             let mut candidates = b
-                .polygon_index
+                .polygon_index()
                 .locate_in_envelope_intersecting(&index::at(p.geometry.0, t.tolerance()))
                 .map(|i| i.data)
                 .collect::<Vec<_>>();
@@ -49,12 +49,15 @@ pub(super) fn points(
             let hits = candidates
                 .into_iter()
                 .filter(|&i| {
-                    let polygon = &b.polygons[i].geometry;
+                    let polygon = &locations[i];
                     match test {
-                        PointTest::NotInside => strict(polygon, &p.geometry, t.tolerance()),
+                        PointTest::NotInside => {
+                            polygon.position(p.geometry.0) == 1
+                                && !polygon.near(p.geometry.0, t.tolerance())
+                        }
                         PointTest::Covered | PointTest::NotIntersecting => {
-                            polygon.contains(&p.geometry)
-                                || boundary_distance(polygon, &p.geometry) <= t.tolerance()
+                            polygon.position(p.geometry.0) >= 0
+                                || polygon.near(p.geometry.0, t.tolerance())
                         }
                     }
                 })
@@ -101,11 +104,14 @@ pub(super) fn contained_points(
 ) -> Result<Vec<Violation>, Error> {
     let a = t.parts(spec.layer)?;
     let b = t.parts(other)?;
-    let violations = index::pairs(&a.polygon_index, &b.point_index, t.tolerance(), false)
-        .par_iter()
-        .filter_map(|&(i, j)| {
+    let locations = crate::engine::location::locations(a);
+    let violations = index::pairs(a.polygon_index(), b.point_index(), t.tolerance(), false)
+        .par_bridge()
+        .filter_map(|(i, j)| {
             let (p, q) = (&a.polygons[i], &b.points[j]);
-            strict(&p.geometry, &q.geometry, t.tolerance()).then(|| {
+            (locations[i].position(q.geometry.0) == 1
+                && !locations[i].near(q.geometry.0, t.tolerance()))
+            .then(|| {
                 violation(
                     spec,
                     ViolationKind::Contained,
@@ -128,20 +134,17 @@ pub(super) fn point_counts(
 ) -> Result<Vec<Violation>, Error> {
     let av = cross::views(t.parts(spec.layer)?);
     let bv = cross::views(t.parts(other)?);
-    let mut assignments = vec![Vec::new(); bv.features.len()];
+    let mut assignments = vec![0usize; bv.features.len()];
     let mut counts = vec![0; av.features.len()];
     for (i, j) in index::pairs(&av.feature_index, &bv.feature_index, 0., false) {
         let (polygon, point) = (&av.features[i], &bv.features[j]);
         if !point.points.is_empty()
-            && point.points.iter().all(|p| {
-                polygon
-                    .area
-                    .0
-                    .iter()
-                    .any(|area| strict(area, p, t.tolerance()))
-            })
+            && point
+                .points
+                .iter()
+                .all(|p| polygon.position(p.0) == 1 && !polygon.near(p.0, t.tolerance()))
         {
-            assignments[j].push(i);
+            assignments[j] += 1;
             counts[i] += 1;
         }
     }
@@ -155,7 +158,7 @@ pub(super) fn point_counts(
             violations.push(violation(
                 spec,
                 kind,
-                p.geometry.clone(),
+                super::feature_geometry(t, spec, spec.layer, p)?,
                 Some(p.reference.at(spec.layer)),
                 None,
             ));
@@ -163,11 +166,11 @@ pub(super) fn point_counts(
     }
     if matches!(count, PointCount::ExactlyOne) {
         for (j, p) in bv.features.iter().enumerate() {
-            if assignments[j].len() != 1 {
+            if assignments[j] != 1 {
                 violations.push(violation(
                     spec,
                     ViolationKind::PointCount,
-                    p.geometry.clone(),
+                    super::feature_geometry(t, spec, other, p)?,
                     None,
                     Some(p.reference.at(other)),
                 ));

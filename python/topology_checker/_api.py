@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import math
+import re
 import threading
 from collections.abc import Generator, Iterable
 from contextlib import contextmanager
@@ -18,7 +18,6 @@ from . import _native
 from ._enums import ErrorType, GeometryKind, Rule, resolve
 from ._input import Prepared, prepare
 from ._models import (
-    FeatureRef,
     Layer,
     LayerId,
     Report,
@@ -27,7 +26,7 @@ from ._models import (
     Violation,
     new_layer_id,
 )
-from ._wire import NativeReference, NativeReport
+from ._stream import ValidationStream, decode, warning_messages
 
 
 def _tolerance(value: object) -> float:
@@ -37,6 +36,23 @@ def _tolerance(value: object) -> float:
     if not math.isfinite(value) or value < 0:
         raise ValueError("tolerance must be finite and nonnegative")
     return value
+
+
+def _original_parts(message: str, inputs: list[tuple[str, Prepared]]) -> str:
+    """Retain original empty-leaf positions in invalid polygon diagnostics."""
+    match = re.search(r"layer (.*), FID (-?\d+), part (\d+), ring", message)
+    if match is None:
+        return message
+    name, fid, part = match.group(1), int(match.group(2)), int(match.group(3))
+    for label, prepared in inputs:
+        positions = prepared.parts.get(fid, ())
+        if label == name and part < len(positions):
+            return (
+                message[: match.start(3)]
+                + str(positions[part])
+                + message[match.end(3) :]
+            )
+    return message
 
 
 class Topology:
@@ -130,7 +146,12 @@ class Topology:
             label = f"layer_{len(self._layers)}" if name is None else name
             prepared = prepare(data, label, fids, crs, kind)
             self._check_crs([prepared])
-            index = self._native.add_layer(label, list(prepared.features))
+            try:
+                index = self._native.add_layer(label, list(prepared.features))
+            except ValueError as error:
+                raise ValueError(
+                    _original_parts(str(error), [(label, prepared)])
+                ) from error
             snapshot = self._snapshot(prepared, label, index)
             self._layers.append(snapshot)
             return snapshot.id
@@ -139,7 +160,9 @@ class Topology:
         """Check registered and pending CRS metadata before native mutation."""
         known = [layer.crs for layer in self._layers if layer.crs is not None]
         known.extend(item.crs for item in pending if item.crs is not None)
-        if known and any(crs != known[0] for crs in known[1:]):
+        if known and any(
+            not crs.equals(known[0], ignore_axis_order=True) for crs in known[1:]
+        ):
             raise ValueError("incompatible known CRSs; reproject inputs first")
 
     def _snapshot(self, prepared: Prepared, name: str, index: int) -> Layer:
@@ -201,7 +224,20 @@ class Topology:
             self._check_crs(prepared_inputs)
             variant = resolve(rule, tuple(kinds))
             spec = RuleSpec(rule, ids[0], None if other is None else ids[1], variant)
-            self._native.register_rule(variant.value, inputs)
+            try:
+                self._native.register_rule(variant.value, inputs)
+            except ValueError as error:
+                raise ValueError(
+                    _original_parts(
+                        str(error),
+                        [
+                            (layer.name, item)
+                            for layer, item in zip(
+                                pending, prepared_inputs, strict=True
+                            )
+                        ],
+                    )
+                ) from error
             self._layers.extend(pending)
             self._specs.append(spec)
             return spec
@@ -212,10 +248,10 @@ class Topology:
             return None, ("mixed known and unknown CRS metadata; export CRS is unset",)
         return known[0] if known else None, ()
 
-    def _warnings(self, native: Iterable[str]) -> tuple[str, ...]:
+    def _warnings(self, native: Iterable[_native.NativeWarning]) -> tuple[str, ...]:
         return (
             tuple(w for layer in self._layers for w in layer.warnings)
-            + tuple(native)
+            + warning_messages(list(native), tuple(self._layers))
             + self._crs()[1]
         )
 
@@ -224,61 +260,59 @@ class Topology:
         with self._lock:
             return self._warnings(self._native.warnings())
 
-    def _reference(self, value: NativeReference | None) -> FeatureRef | None:
-        if value is None:
-            return None
-        layer = self._layers[value["layer"]]
-        return layer.reference(value["fid"], value["part"])
+    def iter_validate(self, batch_size: int = 1024) -> ValidationStream:
+        """Stream a snapshot in bounded binary batches, closing it on early exit.
 
-    def validate(self) -> Report:
-        """Run Rust validation with the GIL released and return a typed snapshot.
+        Args:
+            batch_size: Positive maximum number of buffered violations.
 
         Returns:
-            A report whose violations are data, including when rules fail.
-
-        Raises:
-            RuntimeError: An unexpected native failure prevents validation.
+            A closeable iterator, with final summary after exhaustion.
         """
+        if isinstance(batch_size, bool) or not isinstance(
+            cast(object, batch_size), int
+        ):
+            raise TypeError("batch_size must be an integer")
+        if batch_size <= 0:
+            raise ValueError("batch_size must be positive")
         with self._lock:
-            result = cast(NativeReport, json.loads(self._native.validate()))
-            rules: list[RuleReport] = []
-            for spec, item in zip(self._specs, result["rules"], strict=True):
-                primary = self._layers[item["layer"]]
-                other = None if item["other"] is None else self._layers[item["other"]]
-                errors = tuple(
-                    Violation(
-                        spec.rule,
-                        ErrorType(error["error_type"]),
-                        shapely.from_wkb(bytes(error["wkb"])),
-                        self._reference(error["origin"]),
-                        self._reference(error["destination"]),
-                        spec.resolved_rule,
-                    )
-                    for error in item["errors"]
+            return ValidationStream(
+                self._native.iter_validate(batch_size),
+                tuple(self._layers),
+                tuple(self._specs),
+                self._warnings(()),
+                self._crs()[0],
+            )
+
+    def validate(self) -> Report:
+        """Run native validation and return an eager immutable report."""
+        with self._lock:
+            result = self._native.validate()
+            errors: list[list[Violation]] = [[] for _ in self._specs]
+            layers, specs = tuple(self._layers), tuple(self._specs)
+            for error in result.errors:
+                errors[error.rule_index].append(decode(error, layers, specs))
+            rules = tuple(
+                RuleReport(
+                    spec.rule,
+                    spec.layer,
+                    spec.other,
+                    self._layers[item.layer].name,
+                    None if item.other is None else self._layers[item.other].name,
+                    MappingProxyType(
+                        {ErrorType(key): count for key, count in item.counts.items()}
+                    ),
+                    tuple(errors[i]),
+                    spec,
                 )
-                counts = MappingProxyType(
-                    {
-                        category: item["counts"][category.value]
-                        for category in ErrorType
-                        if category.value in item["counts"]
-                    }
+                for i, (spec, item) in enumerate(
+                    zip(self._specs, result.summary.rules, strict=True)
                 )
-                rules.append(
-                    RuleReport(
-                        spec.rule,
-                        primary.id,
-                        None if other is None else other.id,
-                        primary.name,
-                        None if other is None else other.name,
-                        counts,
-                        errors,
-                        spec,
-                    )
-                )
+            )
             return Report(
-                result["tolerance"],
-                self._warnings(result["warnings"]),
-                tuple(rules),
+                result.summary.tolerance,
+                self._warnings(result.summary.warnings),
+                rules,
                 self._crs()[0],
             )
 

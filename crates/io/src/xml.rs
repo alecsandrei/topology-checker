@@ -13,28 +13,26 @@ use std::{
     io::{BufReader, BufWriter, Read, Write},
     path::Path,
 };
-fn wgs84(layer: &DatasetLayer) -> Result<Vec<Record>> {
-    let source = layer
+fn wgs84(
+    source: &dyn crate::write::RecordSource,
+) -> Result<Box<dyn Iterator<Item = Result<Record>> + '_>> {
+    let layer = source.metadata();
+    let from = layer
         .srs
         .as_ref()
         .context("assign a CRS before KML or GPX export")?;
-    let transform = crs::Transform::new(source, &crs::parse("EPSG:4326")?)?;
-    layer
-        .records
-        .iter()
-        .map(|r| {
-            Ok(Record {
-                id: r.id,
-                properties: r.properties.clone(),
-                geometry: r
-                    .geometry
-                    .as_ref()
-                    .map(|g| crs::transform(g, &transform))
-                    .transpose()?,
-            })
-        })
-        .collect()
+    let transform = crs::Transform::new(from, &crs::parse("EPSG:4326")?)?;
+    Ok(Box::new(source.records().map(move |r| {
+        let mut r = r?;
+        r.geometry = r
+            .geometry
+            .as_ref()
+            .map(|g| crs::transform(g, &transform))
+            .transpose()?;
+        Ok(r)
+    })))
 }
+
 fn payload(r: &Record) -> String {
     json!({"id":r.id,"properties":r.properties,"type":r.geometry.as_ref().map(codec::type_name)})
         .to_string()
@@ -227,45 +225,18 @@ pub(crate) fn read_kml(path: &Path) -> Result<Vec<RawLayer>> {
     }])
 }
 pub(crate) fn write_kml(path: &Path, layer: &DatasetLayer) -> Result<()> {
-    use kml::types::{Element, KmlDocument, KmlVersion, Placemark};
-    let mut elements = Vec::new();
-    for r in wgs84(layer)? {
-        let data = Element {
-            name: "ExtendedData".into(),
-            children: vec![Element {
-                name: "Data".into(),
-                attrs: HashMap::from([("name".into(), "topology_checker".into())]),
-                children: vec![Element {
-                    name: "value".into(),
-                    content: Some(payload(&r)),
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }],
-            ..Default::default()
-        };
-        elements.push(kml::Kml::Placemark(Placemark {
-            name: r
-                .properties
-                .get("name")
-                .and_then(Value::as_str)
-                .map(str::to_string),
-            attrs: r
-                .id
-                .map(|id| HashMap::from([("id".into(), id.to_string())]))
-                .unwrap_or_default(),
-            geometry: r
-                .geometry
-                .map(|g| kml::types::Geometry::from(codec::normalize(&g))),
-            children: vec![data],
-            ..Default::default()
-        }));
-    }
-    let document = kml::Kml::KmlDocument(KmlDocument {
-        version: KmlVersion::V22,
-        elements,
-        ..Default::default()
-    });
+    write_kml_source(path, layer)
+}
+pub(crate) fn write_kml_source(path: &Path, source: &dyn crate::write::RecordSource) -> Result<()> {
+    let write = |out: &mut dyn Write| -> Result<()> {
+        out.write_all(b"<?xml version=\"1.0\" encoding=\"UTF-8\"?><kml xmlns=\"http://www.opengis.net/kml/2.2\">")?;
+        for r in wgs84(source)? {
+            kml::KmlWriter::from_writer(&mut *out).write(&placemark(r?)?)?;
+        }
+        out.write_all(b"</kml>")?;
+        out.flush()?;
+        Ok(())
+    };
     if crate::registry::extension(path) == "kmz" {
         let mut zip = zip::ZipWriter::new(File::create(path)?);
         zip.start_file(
@@ -273,12 +244,45 @@ pub(crate) fn write_kml(path: &Path, layer: &DatasetLayer) -> Result<()> {
             zip::write::SimpleFileOptions::default()
                 .compression_method(zip::CompressionMethod::Deflated),
         )?;
-        kml::KmlWriter::from_writer(&mut zip).write(&document)?;
+        write(&mut zip)?;
         zip.finish()?;
     } else {
-        kml::KmlWriter::from_writer(BufWriter::new(File::create(path)?)).write(&document)?;
+        write(&mut BufWriter::new(File::create(path)?))?;
     }
     Ok(())
+}
+fn placemark(r: Record) -> Result<kml::Kml> {
+    use kml::types::{Element, Placemark};
+    let data = Element {
+        name: "ExtendedData".into(),
+        children: vec![Element {
+            name: "Data".into(),
+            attrs: HashMap::from([("name".into(), "topology_checker".into())]),
+            children: vec![Element {
+                name: "value".into(),
+                content: Some(payload(&r)),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    Ok(kml::Kml::Placemark(Placemark {
+        name: r
+            .properties
+            .get("name")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        attrs: r
+            .id
+            .map(|id| HashMap::from([("id".into(), id.to_string())]))
+            .unwrap_or_default(),
+        geometry: r
+            .geometry
+            .map(|g| kml::types::Geometry::from(codec::normalize(&g))),
+        children: vec![data],
+        ..Default::default()
+    }))
 }
 pub(crate) fn read_gpx(path: &Path) -> Result<Vec<RawLayer>> {
     let data = gpx::read(BufReader::new(File::open(path)?))?;
@@ -356,12 +360,19 @@ pub(crate) fn read_gpx(path: &Path) -> Result<Vec<RawLayer>> {
     }])
 }
 pub(crate) fn write_gpx(path: &Path, layer: &DatasetLayer) -> Result<()> {
-    let mut data = gpx::Gpx {
-        version: gpx::GpxVersion::Gpx11,
-        creator: Some("topology-checker".into()),
-        ..Default::default()
-    };
-    for r in wgs84(layer)? {
+    write_gpx_source(path, layer)
+}
+pub(crate) fn write_gpx_source(path: &Path, source: &dyn crate::write::RecordSource) -> Result<()> {
+    let mut out = BufWriter::new(File::create(path)?);
+    out.write_all(b"<?xml version=\"1.0\" encoding=\"UTF-8\"?><gpx version=\"1.1\" creator=\"topology-checker\" xmlns=\"http://www.topografix.com/GPX/1/1\">")?;
+    for r in wgs84(source)? {
+        let r = r?;
+        let mut data = gpx::Gpx {
+            version: gpx::GpxVersion::Gpx11,
+            creator: Some("topology-checker".into()),
+            ..Default::default()
+        };
+
         let description = Some(payload(&r));
         let name = r
             .properties
@@ -402,9 +413,15 @@ pub(crate) fn write_gpx(path: &Path, layer: &DatasetLayer) -> Result<()> {
                 "GPX export supports points, lines and multilines; polygon and collection geometry is unsupported"
             ),
         }
+        let mut bytes = Vec::new();
+        gpx::write(&data, &mut bytes)?;
+        let text = std::str::from_utf8(&bytes)?;
+        let root = text.find("<gpx").context("GPX root")?;
+        let begin = root + text[root..].find('>').context("GPX root end")? + 1;
+        let end = text.rfind("</gpx>").context("GPX closing root")?;
+        out.write_all(&bytes[begin..end])?;
     }
-    let mut out = BufWriter::new(File::create(path)?);
-    gpx::write(&data, &mut out)?;
+    out.write_all(b"</gpx>")?;
     out.flush()?;
     Ok(())
 }

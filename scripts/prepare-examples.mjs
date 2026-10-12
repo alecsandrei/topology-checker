@@ -226,7 +226,7 @@ const catalog = [
     "177 countries, including 148 Polygons and 29 MultiPolygons.",
     [metadata[countriesName]],
     [["polygon/must-not-overlap", multipart]],
-    "Multipart countries represent islands and separated territories. Their suitability depends on the selected rule.",
+    "Multipart countries represent islands and separated territories. The original source includes an invalid polygon; validation identifies its feature and ring for repair.",
   ),
   make(
     "lakes-reservoirs",
@@ -241,7 +241,7 @@ const catalog = [
     "177 country collections with original country geometry and cities matched by country code.",
     [atlas],
     [[multipart]],
-    "Collections preserve country and city members. Multipart findings are reported against the parent feature.",
+    "Collections preserve country and city members, including an invalid polygon from the original source. Validation identifies its feature and ring for repair.",
   ),
 ];
 const output = JSON.stringify(catalog, null, 2) + "\n";

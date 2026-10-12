@@ -1,27 +1,31 @@
+use crate::cache::Cache;
 use crate::{
     Error, FeatureRef, LayerId, Topology,
     engine::{
         cluster::{Cluster, distance},
         index,
+        storage::Shared,
     },
 };
 use geo::{
-    BoundingRect, Coord, Line,
+    BoundingRect, Coord, Line, LineString,
     line_intersection::{LineIntersection, line_intersection},
 };
 use num_rational::BigRational;
 use num_traits::ToPrimitive;
-use rayon::prelude::*;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 #[derive(Debug)]
 pub(crate) struct GraphPart {
     pub reference: FeatureRef,
     pub nodes: Vec<usize>,
+    pub coords: Vec<Coord>,
+    pub is_closed: bool,
+    original: Shared<LineString>,
 }
 impl GraphPart {
     pub fn closed(&self) -> bool {
-        self.nodes.len() > 1 && self.nodes.first() == self.nodes.last()
+        self.is_closed
     }
     pub fn endpoint(&self, node: usize) -> bool {
         !self.closed() && (self.nodes.first() == Some(&node) || self.nodes.last() == Some(&node))
@@ -30,12 +34,12 @@ impl GraphPart {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct EdgeUse {
     pub part: usize,
-    pub forward: bool,
+    pub source: usize,
 }
 #[derive(Debug)]
 pub(crate) struct Edge {
     pub nodes: [usize; 2],
-    pub uses: Vec<EdgeUse>,
+    pub uses: std::ops::Range<usize>,
 }
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Incident {
@@ -47,12 +51,49 @@ pub(crate) struct LineGraph {
     pub coords: Vec<Coord>,
     pub parts: Vec<GraphPart>,
     pub edges: Vec<Edge>,
-    pub incident: Vec<Vec<Incident>>,
+    pub incident: Incidences,
+    pub uses: Vec<EdgeUse>,
+    sources: Vec<Segment>,
+    by_feature: Cache<BTreeMap<(LayerId, i64), FeatureGraph>>,
+}
+#[derive(Debug, Default)]
+pub(crate) struct FeatureGraph {
+    pub parts: Vec<usize>,
+    pub edges: Vec<usize>,
+    pub nodes: Vec<usize>,
+}
+/// Compact contiguous incidences; construction allocation is released on caching.
+#[derive(Debug)]
+pub(crate) struct Incidences {
+    offsets: Vec<usize>,
+    values: Vec<Incident>,
+}
+impl Incidences {
+    pub fn iter(&self) -> impl Iterator<Item = &[Incident]> {
+        self.offsets.windows(2).map(|o| &self.values[o[0]..o[1]])
+    }
+}
+impl std::ops::Index<usize> for Incidences {
+    type Output = [Incident];
+    fn index(&self, i: usize) -> &Self::Output {
+        &self.values[self.offsets[i]..self.offsets[i + 1]]
+    }
+}
+impl Edge {
+    pub fn uses<'a>(&self, graph: &'a LineGraph) -> &'a [EdgeUse] {
+        &graph.uses[self.uses.clone()]
+    }
 }
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Segment {
-    pub line: Line,
     pub part: usize,
+    pub start: usize,
+}
+impl Segment {
+    fn line(self, parts: &[GraphPart]) -> Line {
+        let coords = &parts[self.part].original.0;
+        Line::new(coords[self.start], coords[self.start + 1])
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -76,9 +117,15 @@ pub(crate) fn projection(line: Line, point: Coord) -> (f64, Coord) {
         .clamp(0., 1.);
     (
         parameter,
-        Coord {
-            x: line.start.x + parameter * dx,
-            y: line.start.y + parameter * dy,
+        if parameter == 0. {
+            line.start
+        } else if parameter == 1. {
+            line.end
+        } else {
+            Coord {
+                x: line.start.x + parameter * dx,
+                y: line.start.y + parameter * dy,
+            }
         },
     )
 }
@@ -116,104 +163,253 @@ pub(crate) fn proper_intersection(a: Line, b: Line) -> Option<Coord> {
         y: (ay + t * ry).to_f64()?,
     })
 }
+pub(crate) fn collapsed(line: &LineString, tolerance: f64) -> bool {
+    if tolerance == 0. {
+        return false;
+    }
+    let Some(bounds) = line.bounding_rect() else {
+        return true;
+    };
+    if bounds.width() > tolerance || bounds.height() > tolerance {
+        return false;
+    }
+    line.0
+        .iter()
+        .enumerate()
+        .all(|(i, &p)| line.0[i + 1..].iter().all(|&q| distance(p, q) <= tolerance))
+}
+fn add_cut(cuts: &mut HashMap<usize, Vec<Coord>>, source: usize, line: Line, point: Coord) {
+    if point != line.start && point != line.end {
+        cuts.entry(source).or_default().push(point);
+    }
+}
+fn coordinate_order(a: &Coord, b: &Coord) -> std::cmp::Ordering {
+    a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y))
+}
+// Zero tolerance has no grouping after contact discovery. Keep a sorted index
+// into the existing coordinate array instead of retaining the coordinate hash
+// while edge storage is allocated. Node identities keep their original order.
+#[derive(Debug)]
+struct IndexedNodes {
+    coords: Vec<Coord>,
+    order: Vec<usize>,
+}
+impl IndexedNodes {
+    fn compare(a: Coord, b: Coord) -> std::cmp::Ordering {
+        a.x.partial_cmp(&b.x)
+            .expect("finite coordinate")
+            .then_with(|| a.y.partial_cmp(&b.y).expect("finite coordinate"))
+    }
+    fn new(coords: Vec<Coord>) -> Self {
+        let mut order = (0..coords.len()).collect::<Vec<_>>();
+        order.sort_unstable_by(|&a, &b| Self::compare(coords[a], coords[b]));
+        Self { coords, order }
+    }
+    fn node(&self, p: Coord) -> usize {
+        self.order[self
+            .order
+            .binary_search_by(|&id| Self::compare(self.coords[id], p))
+            .expect("all contacts discovered before edge construction")]
+    }
+}
 impl LineGraph {
+    pub fn source(&self, index: usize) -> Line {
+        self.sources[index].line(&self.parts)
+    }
+    pub fn feature(&self, key: (LayerId, i64)) -> Option<&FeatureGraph> {
+        self.by_feature
+            .get_or_init(|| {
+                let mut features: BTreeMap<_, FeatureGraph> = BTreeMap::new();
+                for (id, edge) in self.edges.iter().enumerate() {
+                    for usage in edge.uses(self) {
+                        let entry = features
+                            .entry(self.parts[usage.part].reference.feature())
+                            .or_default();
+                        if entry.edges.last() != Some(&id) {
+                            entry.edges.push(id);
+                        }
+                    }
+                }
+                for (i, part) in self.parts.iter().enumerate() {
+                    features
+                        .entry(part.reference.feature())
+                        .or_default()
+                        .parts
+                        .push(i);
+                    features
+                        .entry(part.reference.feature())
+                        .or_default()
+                        .nodes
+                        .extend(&part.nodes);
+                }
+                for feature in features.values_mut() {
+                    feature.nodes.sort_unstable();
+                    feature.nodes.dedup();
+                }
+                features
+            })
+            .get(&key)
+    }
     pub fn build(t: &Topology, layers: &[(LayerId, InputMode)]) -> Result<Self, Error> {
+        let retain_coords = layers
+            .iter()
+            .any(|(_, mode)| *mode == InputMode::PolygonBoundary);
         let mut parts = Vec::new();
         let mut segments = Vec::new();
         let mut endpoints = Vec::new();
+        let mut coordinates = Vec::new();
         for &(layer, mode) in layers {
             let input = t.parts(layer)?;
-            let lines = match mode {
-                InputMode::Linework => &input.lines,
-                InputMode::PolygonBoundary => &crate::engine::cross::views(input).boundaries,
-            };
-            for p in lines {
+            let lines: Box<dyn Iterator<Item = (crate::model::PartRef, &Shared<LineString>)> + '_> =
+                match mode {
+                    InputMode::Linework => {
+                        Box::new(input.lines.iter().map(|p| (p.reference, &p.geometry)))
+                    }
+                    InputMode::PolygonBoundary => Box::new(
+                        crate::engine::cross::boundaries(input)
+                            .iter()
+                            .map(|p| (p.reference, &p.geometry)),
+                    ),
+                };
+            for (reference, geometry) in lines {
+                if mode == InputMode::Linework && collapsed(geometry, t.tolerance()) {
+                    continue;
+                }
+                coordinates.extend_from_slice(&geometry.0);
+                let closed = geometry.0.first() == geometry.0.last();
                 let id = parts.len();
                 parts.push(GraphPart {
                     // Graphs belong to one topology, so parts carry final layer IDs.
-                    reference: p.reference.at(layer),
-                    nodes: Vec::new(),
+                    reference: reference.at(layer),
+                    nodes: Vec::with_capacity(geometry.0.len()),
+                    coords: if retain_coords {
+                        Vec::with_capacity(geometry.0.len())
+                    } else {
+                        Vec::new()
+                    },
+                    is_closed: closed,
+                    original: geometry.clone(),
                 });
-                endpoints.push([p.geometry.0[0], p.geometry.0[p.geometry.0.len() - 1]]);
-                segments.extend(p.geometry.lines().map(|line| Segment { line, part: id }));
+                if !closed {
+                    endpoints.extend([geometry.0[0], geometry.0[geometry.0.len() - 1]]);
+                }
+                segments.extend((0..geometry.0.len() - 1).map(|start| Segment { start, part: id }));
             }
         }
         let tree = index::build(
             segments
                 .iter()
                 .enumerate()
-                .map(|(i, s)| (i, s.line.bounding_rect())),
+                .map(|(i, s)| (i, s.line(&parts).bounding_rect())),
         );
-        let pairs = index::pairs(&tree, &tree, 0., true);
-        let intersections = pairs
-            .par_iter()
-            .filter_map(|&(i, j)| {
-                line_intersection(segments[i].line, segments[j].line).map(|mut g| {
-                    if let LineIntersection::SinglePoint {
-                        intersection,
-                        is_proper: true,
-                    } = &mut g
-                        && let Some(point) = proper_intersection(segments[i].line, segments[j].line)
-                    {
-                        *intersection = point;
-                    }
-                    (i, j, g)
-                })
-            })
-            .collect::<Vec<_>>();
-        let mut split = segments
-            .iter()
-            .map(|s| vec![s.line.start, s.line.end])
-            .collect::<Vec<_>>();
-        for (i, j, g) in intersections {
-            match g {
-                LineIntersection::SinglePoint { intersection, .. } => {
-                    split[i].push(intersection);
-                    split[j].push(intersection);
+        // Most source segments have no interior contact. Store only actual cuts,
+        // avoiding one empty Vec allocation header per original segment.
+        let mut split = HashMap::new();
+        for (i, s) in segments.iter().enumerate() {
+            crate::cancel::check();
+            let line = s.line(&parts);
+            for item in tree.locate_in_envelope_intersecting(&index::envelope(line.bounding_rect()))
+            {
+                let j = item.data;
+                if j <= i {
+                    continue;
                 }
-                LineIntersection::Collinear { intersection } => {
-                    split[i].extend([intersection.start, intersection.end]);
-                    split[j].extend([intersection.start, intersection.end]);
-                }
-            }
-        }
-        // Endpoint cracking has no effect on the immutable input geometries.
-        if t.tolerance() > 0. {
-            for ends in &endpoints {
-                for &point in ends {
-                    let mut candidates = tree
-                        .locate_in_envelope_intersecting(&index::at(point, t.tolerance()))
-                        .map(|i| i.data)
-                        .collect::<Vec<_>>();
-                    candidates.sort_unstable();
-                    for i in candidates {
-                        let (_, projected) = projection(segments[i].line, point);
-                        if distance(point, projected) <= t.tolerance() {
-                            split[i].push(projected);
+                let other = segments[j].line(&parts);
+                if let Some(g) = line_intersection(line, other) {
+                    match g {
+                        LineIntersection::SinglePoint {
+                            intersection,
+                            is_proper,
+                        } => {
+                            let point = if is_proper {
+                                proper_intersection(line, other).unwrap_or(intersection)
+                            } else {
+                                intersection
+                            };
+                            add_cut(&mut split, i, line, point);
+                            add_cut(&mut split, j, other, point);
+                        }
+                        LineIntersection::Collinear { intersection } => {
+                            for p in [intersection.start, intersection.end] {
+                                add_cut(&mut split, i, line, p);
+                                add_cut(&mut split, j, other, p);
+                            }
                         }
                     }
                 }
             }
         }
-        let mut cluster = Cluster::new(t.tolerance());
-        for ends in &endpoints {
-            for &point in ends {
-                cluster.insert(point);
+        let mut cracked = Vec::new();
+        // Endpoint cracking has no effect on the immutable input geometries.
+        if t.tolerance() > 0. {
+            for &point in &endpoints {
+                let mut candidates = tree
+                    .locate_in_envelope_intersecting(&index::at(point, t.tolerance()))
+                    .map(|i| i.data)
+                    .collect::<Vec<_>>();
+                candidates.sort_unstable();
+                for i in candidates {
+                    let line = segments[i].line(&parts);
+                    let (_, projected) = projection(line, point);
+                    if distance(point, projected) <= t.tolerance() {
+                        add_cut(&mut split, i, line, projected);
+                        cracked.push(projected);
+                    }
+                }
             }
         }
-        let mut edges: Vec<Edge> = Vec::new();
-        let mut keys = HashMap::new();
-        for (s, mut cuts) in segments.into_iter().zip(split) {
-            cuts.sort_by(|a, b| parameter(s.line, *a).total_cmp(&parameter(s.line, *b)));
-            let mut nodes = cuts
-                .into_iter()
-                .map(|p| cluster.insert(p))
-                .collect::<Vec<_>>();
-            nodes.dedup();
-            let path = &mut parts[s.part].nodes;
-            for &node in &nodes {
-                if path.last() != Some(&node) {
-                    path.push(node);
+        drop(tree);
+        let mut cluster = Cluster::new(t.tolerance());
+        endpoints.sort_by(coordinate_order);
+        endpoints.dedup();
+        for point in endpoints {
+            cluster.insert(point);
+        }
+        cracked.sort_by(coordinate_order);
+        cracked.dedup();
+        for point in cracked {
+            cluster.insert(point);
+        }
+        // All contact coordinates are discovered against source segments first.
+        // Canonical insertion makes clustering independent of FIDs and path direction.
+        let mut contacts = coordinates;
+        contacts.extend(split.values().flatten().copied());
+        contacts.sort_by(coordinate_order);
+        contacts.dedup();
+        for point in contacts {
+            cluster.insert(point);
+        }
+        let mut cluster = Some(cluster);
+        let indexed = (t.tolerance() == 0.)
+            .then(|| IndexedNodes::new(cluster.take().expect("cluster").finish()));
+        let mut raw_edges: Vec<([usize; 2], EdgeUse)> = Vec::with_capacity(segments.len());
+        for (source, s) in segments.iter().enumerate() {
+            crate::cancel::check();
+            let line = s.line(&parts);
+            let mut cuts = split.remove(&source).unwrap_or_default();
+            cuts.extend([line.start, line.end]);
+            cuts.sort_by(|a, b| parameter(line, *a).total_cmp(&parameter(line, *b)));
+            cuts.dedup();
+            let mut nodes = Vec::new();
+            let mut coords = Vec::new();
+            for point in cuts {
+                let node = if let Some(indexed) = &indexed {
+                    indexed.node(point)
+                } else {
+                    cluster.as_mut().expect("tolerance cluster").insert(point)
+                };
+                if nodes.last() != Some(&node) {
+                    nodes.push(node);
+                    coords.push(point);
+                }
+            }
+            let part = &mut parts[s.part];
+            for (&node, &point) in nodes.iter().zip(&coords) {
+                if part.nodes.last() != Some(&node) {
+                    part.nodes.push(node);
+                    if retain_coords {
+                        part.coords.push(point);
+                    }
                 }
             }
             for pair in nodes.windows(2) {
@@ -221,38 +417,80 @@ impl LineGraph {
                 if a == b {
                     continue;
                 }
-                let key = (a.min(b), a.max(b));
-                let id = *keys.entry(key).or_insert_with(|| {
-                    let id = edges.len();
-                    edges.push(Edge {
-                        nodes: [key.0, key.1],
-                        uses: Vec::new(),
-                    });
-                    id
-                });
-                edges[id].uses.push(EdgeUse {
-                    part: s.part,
-                    forward: a == key.0,
-                });
+                raw_edges.push((
+                    [a.min(b), a.max(b)],
+                    EdgeUse {
+                        part: s.part,
+                        source,
+                    },
+                ));
             }
         }
-        let mut incident = vec![Vec::new(); cluster.coords.len()];
+        let coords = if let Some(indexed) = indexed {
+            indexed.coords
+        } else {
+            cluster.expect("tolerance cluster").finish()
+        };
+        raw_edges.sort_unstable_by_key(|e| (e.0, e.1.part, e.1.source));
+        let mut uses = Vec::with_capacity(raw_edges.len());
+        let mut groups = 0;
+        for i in 0..raw_edges.len() {
+            crate::cancel::check();
+            let (nodes, usage) = raw_edges[i];
+            let start = uses.len();
+            uses.push(usage);
+            // Compact group ranges in the original entries. The final collect
+            // can reuse this allocation because source and target have the same
+            // size and alignment; no second full edge array is needed.
+            if groups == 0 || raw_edges[groups - 1].0 != nodes {
+                raw_edges[groups] = (
+                    nodes,
+                    EdgeUse {
+                        part: start,
+                        source: start + 1,
+                    },
+                );
+                groups += 1;
+            } else {
+                raw_edges[groups - 1].1.source = start + 1;
+            }
+        }
+        raw_edges.truncate(groups);
+        let edges = raw_edges
+            .into_iter()
+            .map(|(nodes, range)| Edge {
+                nodes,
+                uses: range.part..range.source,
+            })
+            .collect::<Vec<_>>();
+        let mut offsets = vec![0; coords.len() + 1];
+        for edge in &edges {
+            for node in edge.nodes {
+                offsets[node + 1] += edge.uses.len();
+            }
+        }
+        for i in 1..offsets.len() {
+            offsets[i] += offsets[i - 1];
+        }
+        let mut cursor = offsets[..coords.len()].to_vec();
+        let mut values = vec![Incident { edge: 0, part: 0 }; uses.len() * 2];
         for (id, edge) in edges.iter().enumerate() {
-            for usage in &edge.uses {
-                for node in if usage.forward {
-                    edge.nodes
-                } else {
-                    [edge.nodes[1], edge.nodes[0]]
-                } {
-                    incident[node].push(Incident {
+            for usage in &uses[edge.uses.clone()] {
+                for node in edge.nodes {
+                    values[cursor[node]] = Incident {
                         edge: id,
                         part: usage.part,
-                    });
+                    };
+                    cursor[node] += 1;
                 }
             }
         }
+        let incident = Incidences { offsets, values };
         Ok(Self {
-            coords: cluster.coords,
+            by_feature: Cache::new(),
+            coords,
+            sources: segments,
+            uses,
             parts,
             edges,
             incident,

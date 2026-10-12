@@ -1,13 +1,14 @@
+use crate::cache::Cache;
 use crate::{
     Error,
     engine::{
-        cluster::bits,
         index::{self, Index},
+        storage::Shared,
     },
 };
 use geo::{BoundingRect, CoordsIter, Geometry, LineString, Point, Polygon, Rect};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashSet, sync::OnceLock};
+use std::{collections::HashSet, sync::Arc};
 
 /// A registration index scoped to the topology that returned it.
 /// IDs from another topology must not be reused, even if their indices match.
@@ -35,6 +36,12 @@ pub struct FeatureRef {
     pub part: Option<u32>,
 }
 impl FeatureRef {
+    /// Create provenance using an identity from the relevant topology.
+    #[must_use]
+    pub fn new(layer: LayerId, fid: i64, part: Option<u32>) -> Self {
+        Self { layer, fid, part }
+    }
+
     pub(crate) fn feature(self) -> (LayerId, i64) {
         (self.layer, self.fid)
     }
@@ -66,10 +73,16 @@ impl PartRef {
 }
 
 /// A cached layer validation failure, independent of the layer's registration ID.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Invalid {
     DuplicateFid(i64),
     NonFinite(i64),
+    Polygon {
+        fid: i64,
+        part: u32,
+        ring: Option<usize>,
+        reason: &'static str,
+    },
 }
 impl Invalid {
     pub(crate) fn at(self, layer: LayerId, name: &str) -> Error {
@@ -77,6 +90,19 @@ impl Invalid {
         match self {
             Self::DuplicateFid(fid) => Error::DuplicateFid { layer, name, fid },
             Self::NonFinite(fid) => Error::NonFinite { layer, name, fid },
+            Self::Polygon {
+                fid,
+                part,
+                ring,
+                reason,
+            } => Error::InvalidPolygon {
+                layer,
+                name,
+                fid,
+                part,
+                ring,
+                reason: reason.into(),
+            },
         }
     }
 }
@@ -139,8 +165,9 @@ impl GeometryKind {
 pub struct Layer {
     name: String,
     fids: Vec<i64>,
-    geometries: Vec<Geometry>,
-    parts: OnceLock<Result<Parts, Invalid>>,
+    geometries: Arc<Vec<Geometry>>,
+    ranks: Cache<std::collections::BTreeMap<i64, usize>>,
+    parts: Cache<Result<Parts, Invalid>>,
 }
 impl Layer {
     /// Own geometries in input order, assigning signed FIDs starting at zero.
@@ -167,8 +194,9 @@ impl Layer {
         Self {
             name: name.into(),
             fids,
-            geometries,
-            parts: OnceLock::new(),
+            geometries: Arc::new(geometries),
+            ranks: Cache::new(),
+            parts: Cache::new(),
         }
     }
     /// Return the caller-supplied layer name, which need not be unique.
@@ -178,7 +206,17 @@ impl Layer {
     }
     /// Iterate original, uncleaned features in input order.
     pub fn features(&self) -> impl ExactSizeIterator<Item = (i64, &Geometry)> {
-        self.fids.iter().copied().zip(&self.geometries)
+        self.fids.iter().copied().zip(self.geometries.iter())
+    }
+    pub(crate) fn ranks(&self) -> &std::collections::BTreeMap<i64, usize> {
+        self.ranks.get_or_init(|| {
+            self.fids
+                .iter()
+                .copied()
+                .enumerate()
+                .map(|(i, fid)| (fid, i))
+                .collect()
+        })
     }
     /// Return the original feature at a zero-based input position.
     #[must_use]
@@ -219,16 +257,26 @@ impl Layer {
         }
         Ok(())
     }
+    /// Validate cleaned geometry without registering a rule.
+    ///
+    /// # Errors
+    /// Returns a deferred input error with the caller's layer identity.
+    pub fn check(&self, id: LayerId) -> Result<(), Error> {
+        self.parts().map(|_| ()).map_err(|e| e.at(id, self.name()))
+    }
     pub(crate) fn parts(&self) -> Result<&Parts, Invalid> {
         self.parts
             .get_or_init(|| self.make_parts())
             .as_ref()
-            .map_err(|e| *e)
+            .map_err(Clone::clone)
     }
     fn make_parts(&self) -> Result<Parts, Invalid> {
-        let mut out = Parts::default();
+        let mut out = Parts {
+            source: Some(Arc::clone(&self.geometries)),
+            ..Parts::default()
+        };
         let mut seen = HashSet::new();
-        for (fid, g) in self.features() {
+        for (feature, (fid, g)) in self.features().enumerate() {
             if !seen.insert(fid) {
                 return Err(Invalid::DuplicateFid(fid));
             }
@@ -237,45 +285,55 @@ impl Layer {
             {
                 return Err(Invalid::NonFinite(fid));
             }
-            out.add(g, PartRef { fid, part: Some(0) }, &mut 0);
+            let first = out.polygons.len();
+            out.add(
+                g,
+                PartRef { fid, part: Some(0) },
+                &mut 0,
+                Some(feature),
+                &mut Vec::new(),
+            );
+            for p in &out.polygons[first..] {
+                if let Some((ring, reason)) = crate::engine::validity::polygon(&p.geometry) {
+                    return Err(Invalid::Polygon {
+                        fid,
+                        part: p.reference.part.unwrap_or(0),
+                        ring: Some(p.rings[ring]),
+                        reason,
+                    });
+                }
+            }
+            if let Some(invalid) = out.invalid.take() {
+                return Err(invalid);
+            }
         }
-        out.point_index = index::build(
-            out.points
-                .iter()
-                .enumerate()
-                .map(|(i, p)| (i, Rect::new(p.geometry.0, p.geometry.0))),
-        );
-        out.line_index = index::build(
-            out.lines
-                .iter()
-                .enumerate()
-                .filter_map(|(i, p)| p.geometry.bounding_rect().map(|r| (i, r))),
-        );
-        out.polygon_index = index::build(
-            out.polygons
-                .iter()
-                .enumerate()
-                .filter_map(|(i, p)| p.geometry.bounding_rect().map(|r| (i, r))),
-        );
         Ok(out)
     }
 }
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct Part<G> {
     pub reference: PartRef,
     pub geometry: G,
+    pub rings: Vec<usize>,
 }
 #[derive(Debug, Default)]
 pub(crate) struct Parts {
     pub points: Vec<Part<Point>>,
-    pub lines: Vec<Part<LineString>>,
-    pub polygons: Vec<Part<Polygon>>,
-    pub point_index: Index,
-    pub line_index: Index,
-    pub polygon_index: Index,
-    pub union: OnceLock<crate::engine::polygons::Union>,
-    pub cross: OnceLock<crate::engine::cross::Views>,
+    pub lines: Vec<Part<Shared<LineString>>>,
+    pub polygons: Vec<Part<Shared<Polygon>>>,
+    point_index: Cache<Index>,
+    line_index: Cache<Index>,
+    polygon_index: Cache<Index>,
+    pub locations: Cache<Vec<crate::engine::location::Location>>,
+    pub union: Cache<crate::engine::polygons::Union>,
+    pub boundaries: Cache<Vec<Part<Shared<LineString>>>>,
+    pub endpoints: Cache<crate::engine::cross::Endpoints>,
+    pub segments: Cache<crate::engine::cross::Segments>,
+    pub cross: Cache<crate::engine::cross::Views>,
     pub skipped: usize,
+    invalid: Option<Invalid>,
+    source: Option<Arc<Vec<Geometry>>>,
+    ranges: Cache<std::collections::BTreeMap<i64, [std::ops::Range<usize>; 3]>>,
 }
 fn clean_line(line: &LineString) -> LineString {
     let mut coords = line.0.clone();
@@ -283,16 +341,90 @@ fn clean_line(line: &LineString) -> LineString {
     LineString(coords)
 }
 fn ring_valid(ring: &LineString) -> bool {
-    ring.0.len() >= 4
-        && ring
-            .0
-            .iter()
-            .map(|c| (bits(c.x), bits(c.y)))
-            .collect::<HashSet<_>>()
-            .len()
-            >= 3
+    if ring.0.len() < 4 {
+        return false;
+    }
+    let first = ring.0[0];
+    let Some(second) = ring.0.iter().find(|&&c| c != first) else {
+        return false;
+    };
+    ring.0.iter().any(|c| *c != first && c != second)
 }
+
 impl Parts {
+    fn feature_ranges(&self) -> &std::collections::BTreeMap<i64, [std::ops::Range<usize>; 3]> {
+        self.ranges.get_or_init(|| {
+            let mut map = std::collections::BTreeMap::new();
+            fn add<G>(
+                map: &mut std::collections::BTreeMap<i64, [std::ops::Range<usize>; 3]>,
+                parts: &[Part<G>],
+                family: usize,
+            ) {
+                for (i, p) in parts.iter().enumerate() {
+                    let ranges = map
+                        .entry(p.reference.fid)
+                        .or_insert_with(|| [0..0, 0..0, 0..0]);
+                    let range = &mut ranges[family];
+                    if range.start == range.end {
+                        range.start = i;
+                    }
+                    range.end = i + 1;
+                }
+            }
+            add(&mut map, &self.points, 0);
+            add(&mut map, &self.lines, 1);
+            add(&mut map, &self.polygons, 2);
+            map
+        })
+    }
+    pub fn point_feature(&self, fid: i64) -> &[Part<Point>] {
+        self.feature_ranges()
+            .get(&fid)
+            .map_or(&[], |r| &self.points[r[0].clone()])
+    }
+    pub fn feature(&self, fid: i64) -> Self {
+        let ranges = self.feature_ranges();
+        let empty = [0..0, 0..0, 0..0];
+        let r = ranges.get(&fid).unwrap_or(&empty);
+        Self {
+            source: self.source.clone(),
+            points: self.points[r[0].clone()].to_vec(),
+            lines: self.lines[r[1].clone()].to_vec(),
+            polygons: self.polygons[r[2].clone()].to_vec(),
+            ..Self::default()
+        }
+    }
+    pub fn point_index(&self) -> &Index {
+        self.point_index.get_or_init(|| {
+            index::build(
+                self.points
+                    .iter()
+                    .enumerate()
+                    .map(|(i, p)| (i, Rect::new(p.geometry.0, p.geometry.0))),
+            )
+        })
+    }
+    pub fn line_index(&self) -> &Index {
+        self.line_index.get_or_init(|| {
+            index::build(
+                self.lines
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, p)| p.geometry.bounding_rect().map(|r| (i, r))),
+            )
+        })
+    }
+    pub fn polygon_index(&self) -> &Index {
+        self.polygon_index.get_or_init(|| {
+            index::build(
+                self.polygons
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, p)| p.geometry.bounding_rect().map(|r| (i, r))),
+            )
+        })
+    }
+
     fn next_reference(mut reference: PartRef, part: &mut u32) -> PartRef {
         reference.part = Some(*part);
         *part += 1;
@@ -303,48 +435,106 @@ impl Parts {
         self.points.push(Part {
             reference: Self::next_reference(reference, part),
             geometry: *p,
+            rings: Vec::new(),
         });
     }
 
-    fn add_line(&mut self, l: &LineString, reference: PartRef, part: &mut u32) {
+    fn add_line(
+        &mut self,
+        l: &LineString,
+        reference: PartRef,
+        part: &mut u32,
+        feature: Option<usize>,
+        path: &[usize],
+    ) {
         let reference = Self::next_reference(reference, part);
-        let geometry = clean_line(l);
+        let geometry = match feature {
+            Some(feature) if !l.0.windows(2).any(|p| p[0] == p[1]) => Shared::Source {
+                geometries: Arc::clone(self.source.as_ref().expect("layer storage")),
+                feature,
+                path: path.to_vec(),
+            },
+            _ => Shared::Cleaned(clean_line(l)),
+        };
         if geometry.0.len() < 2 {
             self.skipped += 1;
         } else {
             self.lines.push(Part {
                 reference,
                 geometry,
+                rings: Vec::new(),
             });
         }
     }
 
-    fn add_polygon(&mut self, p: &Polygon, reference: PartRef, part: &mut u32) {
+    fn add_polygon(
+        &mut self,
+        p: &Polygon,
+        reference: PartRef,
+        part: &mut u32,
+        feature: Option<usize>,
+        path: &[usize],
+    ) {
         let reference = Self::next_reference(reference, part);
+        if let Some(feature) = feature {
+            let rings = std::iter::once(p.exterior())
+                .chain(p.interiors())
+                .collect::<Vec<_>>();
+            if rings
+                .iter()
+                .all(|r| ring_valid(r) && !r.0.windows(2).any(|p| p[0] == p[1]))
+            {
+                self.polygons.push(Part {
+                    reference,
+                    geometry: Shared::Source {
+                        geometries: Arc::clone(self.source.as_ref().expect("layer storage")),
+                        feature,
+                        path: path.to_vec(),
+                    },
+                    rings: (0..rings.len()).collect(),
+                });
+                return;
+            }
+        }
         let exterior = clean_line(p.exterior());
         if !ring_valid(&exterior) {
             self.skipped += 1;
             return;
         }
+        let mut rings = vec![0];
         let holes = p
             .interiors()
             .iter()
-            .map(clean_line)
-            .filter(|r| {
-                let valid = ring_valid(r);
+            .enumerate()
+            .map(|(i, r)| (i + 1, clean_line(r)))
+            .filter_map(|(i, r)| {
+                let valid = ring_valid(&r);
                 if !valid {
                     self.skipped += 1;
                 }
-                valid
+                if valid {
+                    rings.push(i);
+                    Some(r)
+                } else {
+                    None
+                }
             })
             .collect();
         self.polygons.push(Part {
             reference,
-            geometry: Polygon::new(exterior, holes),
+            geometry: Shared::Cleaned(Polygon::new(exterior, holes)),
+            rings,
         });
     }
 
-    fn add(&mut self, g: &Geometry, reference: PartRef, part: &mut u32) {
+    fn add(
+        &mut self,
+        g: &Geometry,
+        reference: PartRef,
+        part: &mut u32,
+        feature: Option<usize>,
+        path: &mut Vec<usize>,
+    ) {
         match g {
             Geometry::MultiPoint(m) => {
                 for p in m {
@@ -352,26 +542,65 @@ impl Parts {
                 }
             }
             Geometry::MultiLineString(m) => {
-                for p in m {
-                    self.add_line(p, reference, part);
+                for (i, p) in m.into_iter().enumerate() {
+                    path.push(i);
+                    self.add_line(p, reference, part, feature, path);
+                    path.pop();
                 }
             }
             Geometry::MultiPolygon(m) => {
-                for p in m {
-                    self.add_polygon(p, reference, part);
+                let first = self.polygons.len();
+                for (i, p) in m.into_iter().enumerate() {
+                    path.push(i);
+                    self.add_polygon(p, reference, part, feature, path);
+                    path.pop();
+                }
+                let polygons = &self.polygons[first..];
+                let tree = index::build(
+                    polygons
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(i, p)| p.geometry.bounding_rect().map(|r| (i, r))),
+                );
+                for (i, p) in polygons.iter().enumerate() {
+                    for item in tree.locate_in_envelope_intersecting(&index::envelope(
+                        p.geometry.bounding_rect().expect("clean polygon"),
+                    )) {
+                        if item.data > i
+                            && crate::engine::validity::multipart(
+                                &p.geometry,
+                                &polygons[item.data].geometry,
+                            )
+                        {
+                            self.invalid = Some(Invalid::Polygon {
+                                fid: reference.fid,
+                                part: p.reference.part.unwrap_or(0),
+                                ring: None,
+                                reason: "invalid multipart: nested shells, overlapping parts or shared edges",
+                            });
+                        }
+                    }
                 }
             }
             Geometry::GeometryCollection(m) => {
-                for p in m {
-                    self.add(p, reference, part);
+                for (i, p) in m.into_iter().enumerate() {
+                    path.push(i);
+                    self.add(p, reference, part, feature, path);
+                    path.pop();
                 }
             }
-            Geometry::Line(l) => self.add_line(&LineString(vec![l.start, l.end]), reference, part),
-            Geometry::Rect(r) => self.add_polygon(&r.to_polygon(), reference, part),
-            Geometry::Triangle(t) => self.add_polygon(&t.to_polygon(), reference, part),
+            Geometry::Line(l) => self.add_line(
+                &LineString(vec![l.start, l.end]),
+                reference,
+                part,
+                None,
+                path,
+            ),
+            Geometry::Rect(r) => self.add_polygon(&r.to_polygon(), reference, part, None, path),
+            Geometry::Triangle(t) => self.add_polygon(&t.to_polygon(), reference, part, None, path),
             Geometry::Point(p) => self.add_point(p, reference, part),
-            Geometry::LineString(l) => self.add_line(l, reference, part),
-            Geometry::Polygon(p) => self.add_polygon(p, reference, part),
+            Geometry::LineString(l) => self.add_line(l, reference, part, feature, path),
+            Geometry::Polygon(p) => self.add_polygon(p, reference, part, feature, path),
         }
     }
 }
@@ -404,7 +633,7 @@ mod tests {
         let parts = layer.parts().unwrap();
         assert_eq!(parts.skipped, 3);
         assert_eq!(
-            parts.lines[0].geometry,
+            *parts.lines[0].geometry,
             line_string![(x:0.,y:0.),(x:1.,y:0.)]
         );
         assert_eq!(parts.polygons[0].geometry.exterior(), polygon.exterior());

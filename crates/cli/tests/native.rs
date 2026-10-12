@@ -178,3 +178,41 @@ fn reports_use_the_shared_columns_and_shapefile_short_names() {
         assert!(layer.attributes[0].contains_key(name), "{name}");
     }
 }
+
+#[test]
+fn precision_failure_never_publishes_an_export_or_successful_summary() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("precision.geojson");
+    let output = dir.path().join("errors.geojson");
+    let x = 1f64.next_up();
+    let data = json!({"type":"FeatureCollection","features":[
+        {"type":"Feature","id":-17,"properties":{},"geometry":{"type":"Polygon","coordinates":[[[1.,0.],[x,0.],[x,1.],[1.,1.],[1.,0.]]]}},
+        {"type":"Feature","id":82,"properties":{},"geometry":{"type":"Polygon","coordinates":[[[1.,-1.],[x,-1.],[1.,1.],[1.,-1.]]]}}
+    ]});
+    std::fs::write(&input, data.to_string()).unwrap();
+    let result = cargo_bin_cmd!("topology-checker")
+        .args(["--json", "polygon", "must-not-have-gaps"])
+        .arg(&input)
+        .arg("-o")
+        .arg(&output)
+        .assert()
+        .failure()
+        .get_output()
+        .clone();
+    assert!(String::from_utf8_lossy(&result.stderr).contains("precision failure"));
+    assert!(result.stdout.is_empty());
+    assert!(!output.exists());
+    std::fs::write(&output, "keep existing output").unwrap();
+    cargo_bin_cmd!("topology-checker")
+        .args(["polygon", "must-not-have-gaps"])
+        .arg(&input)
+        .arg("-o")
+        .arg(&output)
+        .arg("--overwrite")
+        .assert()
+        .failure();
+    assert_eq!(
+        std::fs::read_to_string(output).unwrap(),
+        "keep existing output"
+    );
+}

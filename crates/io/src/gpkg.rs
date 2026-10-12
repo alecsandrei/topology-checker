@@ -263,6 +263,13 @@ fn sql_value(value: Option<&Json>) -> Result<Value> {
     })
 }
 pub(crate) fn write(path: &Path, layers: &[DatasetLayer]) -> Result<()> {
+    let sources = layers
+        .iter()
+        .map(|l| l as &dyn crate::write::RecordSource)
+        .collect::<Vec<_>>();
+    write_sources(path, &sources)
+}
+pub(crate) fn write_sources(path: &Path, layers: &[&dyn crate::write::RecordSource]) -> Result<()> {
     let db = Sqlite::open(path, false)?;
     db.exec("PRAGMA application_id = 1196444487", &[])?;
     db.exec("PRAGMA user_version = 10400", &[])?;
@@ -288,7 +295,8 @@ pub(crate) fn write(path: &Path, layers: &[DatasetLayer]) -> Result<()> {
     let mut srids = BTreeSet::from([-1, 0, 4326]);
     let mut next_custom = 100_000_i32;
     let mut custom = Vec::<(crs::Crs, i32)>::new();
-    for layer in layers {
+    for source in layers {
+        let layer = source.metadata();
         let srs_id = match &layer.srs {
             None => 0,
             Some(s) => {
@@ -344,7 +352,8 @@ pub(crate) fn write(path: &Path, layers: &[DatasetLayer]) -> Result<()> {
             &[],
         )?;
         let mut bounds = None::<[f64; 4]>;
-        for record in &layer.records {
+        for record in source.records() {
+            let record = record?;
             if let Some(g) = &record.geometry
                 && !codec::empty(g)
                 && let Some(b) = g.bounding_rect()
@@ -375,7 +384,8 @@ pub(crate) fn write(path: &Path, layers: &[DatasetLayer]) -> Result<()> {
             ident(&layer.name)?,
             vec!["?"; 2 + layer.fields.len()].join(",")
         );
-        for (ordinal, r) in layer.records.iter().enumerate() {
+        for (ordinal, r) in source.records().enumerate() {
+            let r = r?;
             let mut params = vec![
                 integer(r.id.unwrap_or(i64::try_from(ordinal)?)),
                 match &r.geometry {

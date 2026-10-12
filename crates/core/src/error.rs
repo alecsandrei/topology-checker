@@ -4,6 +4,21 @@ use crate::{GeometryKind, LayerId, Rule};
 #[derive(Debug, Clone, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
+    /// Cooperative validation cancellation.
+    #[error("validation cancelled")]
+    Cancelled,
+    /// Exact topology cannot be represented by the bounded output rounding search.
+    #[error("{operation}, rule {rule:?}{context}: precision failure: {reason}")]
+    Precision {
+        /// Geometry operation being emitted.
+        operation: String,
+        /// Rule requesting the geometry.
+        rule: Option<Rule>,
+        /// Available layer names and original feature IDs.
+        context: String,
+        /// Failed constraint or search limit.
+        reason: String,
+    },
     /// A negative or non-finite planar tolerance.
     #[error("tolerance must be finite and nonnegative, found {0}")]
     Tolerance(f64),
@@ -33,6 +48,22 @@ pub enum Error {
         name: String,
         /// Signed input feature ID.
         fid: i64,
+    },
+    /// A cleaned polygon or multipart relationship is invalid.
+    #[error("layer {name}, FID {fid}, part {part}, ring {ring:?}: invalid polygon: {reason}")]
+    InvalidPolygon {
+        /// Topology-scoped layer ID.
+        layer: LayerId,
+        /// Caller-supplied layer name.
+        name: String,
+        /// Original feature ID.
+        fid: i64,
+        /// Original part index.
+        part: u32,
+        /// Original ring index, or none for a multipart relationship.
+        ring: Option<usize>,
+        /// Reason for rejection.
+        reason: String,
     },
     /// Two features within one layer share an ID.
     #[error("layer {name}: duplicate FID {fid}")]
@@ -66,4 +97,18 @@ pub enum Error {
         /// Zero-based position in the input lines.
         index: usize,
     },
+}
+
+impl Error {
+    pub(crate) fn precision_context(self, operation: &str, rule: Rule, context: String) -> Self {
+        match self {
+            Self::Precision { reason, .. } => Self::Precision {
+                operation: operation.into(),
+                rule: Some(rule),
+                context,
+                reason,
+            },
+            other => other,
+        }
+    }
 }

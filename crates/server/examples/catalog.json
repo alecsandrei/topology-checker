@@ -156,7 +156,7 @@
         ]
       }
     ],
-    "note": "Multipart countries represent islands and separated territories. Their suitability depends on the selected rule."
+    "note": "Multipart countries represent islands and separated territories. The original source includes an invalid polygon; validation identifies its feature and ring for repair."
   },
   {
     "id": "lakes-reservoirs",
@@ -233,6 +233,6 @@
         ]
       }
     ],
-    "note": "Collections preserve country and city members. Multipart findings are reported against the parent feature."
+    "note": "Collections preserve country and city members, including an invalid polygon from the original source. Validation identifies its feature and ring for repair."
   }
 ]

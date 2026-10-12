@@ -263,18 +263,19 @@ fn finish(
     output: &mut impl Write,
     diagnostics: &mut impl Write,
 ) -> Result<u8> {
-    let result = topology.validate()?;
+    let result = topology_checker_io::report_store::DiskReport::validate(topology, None)?;
     let mut warnings = result
+        .summary
         .warnings
         .iter()
         .map(ToString::to_string)
         .chain(input_warnings)
         .collect::<Vec<_>>();
-    if srs.is_some_and(|s| s.is_geographic()) && result.tolerance > 0. {
+    if srs.is_some_and(|s| s.is_geographic()) && result.summary.tolerance > 0. {
         warnings.push("tolerance is in angular units; calculations are planar".into());
     }
     if let Some(path) = args.get_one::<PathBuf>("output") {
-        write::report(
+        write::stored_report(
             path,
             matches.get_one::<String>("driver").map(String::as_str),
             matches.get_flag("overwrite"),
@@ -530,7 +531,11 @@ mod tests {
             ),
             2
         );
-        let report = Topology::new(0.).unwrap().validate().unwrap();
+        let report = topology_checker_io::report_store::DiskReport::validate(
+            &Topology::new(0.).unwrap(),
+            None,
+        )
+        .unwrap();
         let warnings = ["test warning".to_string()];
         for json in [false, true] {
             report::print(&report, &warnings, json, &mut Vec::new(), &mut diagnostics).unwrap();

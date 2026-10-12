@@ -70,7 +70,10 @@ def _items(data: Any) -> tuple[list[Any], Any]:
         metadata = getattr(data, "crs", None)
         items, embedded = _items(data.__geo_interface__)
         if metadata is not None and embedded is not None:
-            if resolve_crs(metadata) != resolve_crs(embedded):
+            metadata_crs, embedded_crs = resolve_crs(metadata), resolve_crs(embedded)
+            if metadata_crs is None or not metadata_crs.equals(
+                embedded_crs, ignore_axis_order=True
+            ):
                 raise ValueError("conflicting input CRS metadata")
         return items, metadata if metadata is not None else embedded
     if isinstance(data, Mapping):
@@ -228,7 +231,7 @@ def prepare(
     items, inferred = _items(data)
     explicit_crs, inferred_crs = resolve_crs(crs), resolve_crs(inferred)
     if explicit_crs is not None and inferred_crs is not None:
-        if explicit_crs != inferred_crs:
+        if not explicit_crs.equals(inferred_crs, ignore_axis_order=True):
             raise ValueError("explicit CRS conflicts with input CRS metadata")
     ids = _fids(fids, len(items))
     features: list[tuple[int, bytes]] = []

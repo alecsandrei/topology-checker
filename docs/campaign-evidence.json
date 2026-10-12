@@ -1,0 +1,196 @@
+{
+  "lines_baseline": {
+    "mode": "lines",
+    "size": 50000,
+    "queries": 2000,
+    "repair": false,
+    "prepare_s": 0.8042540410533547,
+    "validate_s": 1.679514667019248,
+    "total_s": 2.483775125001557,
+    "violations": 100000,
+    "peak_rss_bytes": 1057406976
+  },
+  "lines_release": {
+    "mode": "lines",
+    "size": 50000,
+    "queries": 2000,
+    "repair": false,
+    "tolerance": 0.0,
+    "prepare_s": 1.5806743749417365,
+    "validate_s": 2.047759791952558,
+    "total_s": 3.6284446669742465,
+    "violations": 100000,
+    "peak_rss_bytes": 519995392
+  },
+  "points_baseline": {
+    "mode": "points",
+    "size": 200000,
+    "queries": 2000,
+    "repair": false,
+    "tolerance": 0.0,
+    "prepare_s": 0.1130594169953838,
+    "validate_s": 28.08669420797378,
+    "total_s": 55.212769832927734,
+    "violations": 2000,
+    "peak_rss_bytes": 1162477568
+  },
+  "points_release": {
+    "mode": "points",
+    "size": 200000,
+    "queries": 2000,
+    "repair": false,
+    "tolerance": 0.0,
+    "prepare_s": 0.37337112496607006,
+    "validate_s": 0.09733766701538116,
+    "total_s": 0.5098359589464962,
+    "violations": 2000,
+    "peak_rss_bytes": 194822144
+  },
+  "duplicates_2500": {
+    "mode": "duplicates",
+    "size": 2500,
+    "queries": 2000,
+    "repair": false,
+    "tolerance": 0.0,
+    "prepare_s": 0.019860749947838485,
+    "validate_s": 7.801738874986768,
+    "total_s": 7.8216055840021,
+    "violations": 3123750,
+    "peak_rss_bytes": 58884096
+  },
+  "duplicates_5000": {
+    "mode": "duplicates",
+    "size": 5000,
+    "queries": 2000,
+    "repair": false,
+    "tolerance": 0.0,
+    "prepare_s": 0.03768387495074421,
+    "validate_s": 32.55176462500822,
+    "total_s": 32.58948833402246,
+    "violations": 12497500,
+    "peak_rss_bytes": 62537728
+  },
+  "gaps_valid": {
+    "mode": "gaps",
+    "size": 100000,
+    "queries": 2000,
+    "repair": false,
+    "tolerance": 1.0,
+    "prepare_s": 7.252576542086899,
+    "validate_s": 19.174866167013533,
+    "total_s": 56.70225433399901,
+    "violations": 410,
+    "peak_rss_bytes": 2357411840,
+    "eager_streaming_and_repeated_equivalence": true
+  },
+  "gaps_repaired": {
+    "mode": "gaps",
+    "size": 100000,
+    "queries": 2000,
+    "repair": true,
+    "tolerance": 1.0,
+    "prepare_s": 9.123413125053048,
+    "validate_s": 12.23421954200603,
+    "total_s": 33.05647329206113,
+    "violations": 29,
+    "peak_rss_bytes": 2360885248,
+    "eager_streaming_and_repeated_equivalence": true
+  },
+  "environment": {
+    "date": "2026-10-12",
+    "os": "macOS 26.7.1 arm64",
+    "python": "3.13.13",
+    "rustc": "1.95.0",
+    "numpy": "2.5.4",
+    "shapely": "2.2.0",
+    "geos": "3.14.1",
+    "build": "offline release",
+    "rss_unit": "bytes"
+  },
+  "verification": {
+    "rust_workspace_passed": 189,
+    "web_large_explicit_passed": 1,
+    "python_passed": 427,
+    "frontend_unit_passed": 19,
+    "browser_passed": 10,
+    "bug_018_isolated_process_s": 0.40158979198895395,
+    "bug_018_timeout_s": 10,
+    "clippy": "passed",
+    "ruff": "passed",
+    "pyright": "passed",
+    "wheel": "macOS arm64 ABI3, regular installation without GeoPandas; eager, streaming, exact-area and precision-error smoke passed",
+    "source_distribution": "metadata and required-source checks; wheel build from extracted source and regular-install smoke passed",
+    "additional_regressions": [
+      "signed-zero winding",
+      "sub-ULP interval midpoint classification at zero and positive tolerance",
+      "cancellation while another worker initializes a cache",
+      "exact-area triangle 1434079929761945 / 36893488147419103232 across rotations, reversals and binary scaling",
+      "collapsed intersection nodes, reversed rounded orientation and hole ownership",
+      "movable exactly representable intersections; fixed original vertices",
+      "bounded 100000-assignment search and cooperative cancellation",
+      "aggregation before rounding; contribution-aware original part provenance",
+      "precision errors through eager validation, streams, caches, disk reports, CLI exports and web jobs",
+      "adjacent polygon collections retain original decision geometry and emit valid exact feature unions with typed precision failures",
+      "zero-tolerance line node identities survive sorted lookup and compact edge-group storage"
+    ]
+  },
+  "gaps_valid_zero": {
+    "mode": "gaps",
+    "size": 100000,
+    "queries": 2000,
+    "repair": false,
+    "tolerance": 0.0,
+    "prepare_s": 7.563038959051482,
+    "validate_s": 17.90178787498735,
+    "total_s": 52.669449000037275,
+    "violations": 426,
+    "peak_rss_bytes": 2250604544,
+    "eager_streaming_and_repeated_equivalence": true
+  },
+  "gaps_repaired_zero": {
+    "mode": "gaps",
+    "size": 100000,
+    "queries": 2000,
+    "repair": true,
+    "tolerance": 0.0,
+    "prepare_s": 9.224587208009325,
+    "validate_s": 12.30949670902919,
+    "total_s": 33.675263292039745,
+    "violations": 159,
+    "peak_rss_bytes": 2153316352,
+    "eager_streaming_and_repeated_equivalence": true
+  },
+  "exact_gap_reference": {
+    "algorithm": "independent Python Fraction intersections, original-source interval side classification, and empty-side boundary graph",
+    "repaired": {
+      "shells": 20,
+      "holes_zero": 139,
+      "holes_tolerance_1": 9,
+      "audit": "polygon-precision-audit.json"
+    },
+    "valid": {
+      "shells": 383,
+      "holes_zero": 43,
+      "holes_tolerance_1": 27,
+      "audit": "polygon-precision-valid-audit.json"
+    },
+    "geos_repaired_diagnostics": {
+      "rings": 106,
+      "positive_floating_area": 105,
+      "positive_exact_binary_coordinate_area": 106,
+      "zero_floating_area_ring": "Both infinitesimal sides of every edge are covered by original source polygon 1337 (layer FID 433, part path [1]); one edge is also covered by source polygon 668 (FID 293). This ring does not bound an exact empty region."
+    }
+  },
+  "lines_release_repeat": {
+    "mode": "lines",
+    "size": 50000,
+    "queries": 2000,
+    "repair": false,
+    "tolerance": 0.0,
+    "prepare_s": 1.5957057919586077,
+    "validate_s": 1.9827191670192406,
+    "total_s": 3.5784325000131503,
+    "violations": 100000,
+    "peak_rss_bytes": 518160384
+  }
+}

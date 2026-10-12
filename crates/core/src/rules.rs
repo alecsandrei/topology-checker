@@ -12,7 +12,7 @@ mod polygon;
 use crate::{Error, FeatureRef, Rule, RuleSpec, Topology, Violation, ViolationKind};
 use boundary::Boundary;
 use coverage::Target;
-use geo::{Contains, Coord, Distance, Euclidean, Geometry, LineString, Point, Polygon};
+use geo::{Coord, Geometry, LineString};
 use line::LineCheck;
 use line_polygon::LinePolygon;
 use point_polygon::{PointCount, PointTest};
@@ -114,17 +114,6 @@ fn violation(
         destination,
     }
 }
-fn boundary_distance(p: &Polygon, point: &Point) -> f64 {
-    std::iter::once(p.exterior())
-        .chain(p.interiors())
-        .map(|r| Euclidean.distance(r, point))
-        .fold(f64::INFINITY, f64::min)
-}
-/// Whether a point is inside a polygon and farther than `tolerance` from its boundary.
-fn strict(p: &Polygon, point: &Point, tolerance: f64) -> bool {
-    p.contains(point) && boundary_distance(p, point) > tolerance
-}
-
 /// Extract connected selected pieces before applying the length threshold.
 /// A closed path's first and last runs form one piece across the traversal seam.
 fn selected_pieces(coords: &[Coord], selected: &[bool]) -> Vec<LineString> {
@@ -153,4 +142,105 @@ fn selected_pieces(coords: &[Coord], selected: &[bool]) -> Vec<LineString> {
         last.0.extend(first.0.into_iter().skip(1));
     }
     pieces
+}
+
+/// Emit deterministic aggregated violations, with a bounded duplicate-pair path.
+pub(crate) fn run_into<E>(
+    t: &Topology,
+    spec: RuleSpec,
+    mut sink: impl FnMut(Violation) -> Result<(), E>,
+) -> Result<(), crate::SinkError<E>> {
+    if matches!(
+        spec.rule,
+        Rule::PointMustNotOverlap | Rule::PointMustNotOverlapWith
+    ) {
+        point::overlap_into(t, spec, sink)
+    } else if matches!(
+        spec.rule,
+        Rule::PolygonMustNotHaveGaps
+            | Rule::GeometryMustNotBeMultipart
+            | Rule::PolygonMustContainPoint
+            | Rule::PolygonMustContainOnePoint
+            | Rule::LineMustNotHaveDangles
+            | Rule::LineMustNotHavePseudoNodes
+    ) {
+        emit(run(t, spec)?, &mut sink)
+    } else {
+        // Geometry scratch belongs to one original feature and its candidate
+        // targets. No complete feature-pair report is retained.
+        let mut snapshot = t.snapshot();
+        let mut fids = t
+            .layer(spec.layer)?
+            .features()
+            .map(|(fid, _)| fid)
+            .collect::<Vec<_>>();
+        fids.sort_unstable();
+        let kinds: &[ViolationKind] = match spec.rule {
+            Rule::LineMustNotSelfIntersect => {
+                &[ViolationKind::SelfOverlap, ViolationKind::SelfCrossing]
+            }
+            Rule::LineMustNotIntersect | Rule::LineMustNotIntersectWith => {
+                &[ViolationKind::Overlap, ViolationKind::Crossing]
+            }
+            Rule::LineMustNotIntersectOrTouchInterior
+            | Rule::LineMustNotIntersectOrTouchInteriorWith => &[
+                ViolationKind::Overlap,
+                ViolationKind::Crossing,
+                ViolationKind::TouchInterior,
+            ],
+            _ => &[],
+        };
+        for kind in if kinds.is_empty() {
+            vec![None]
+        } else {
+            kinds.iter().copied().map(Some).collect()
+        } {
+            for &fid in &fids {
+                crate::cancel::check();
+                snapshot.select_feature(spec.layer, fid)?;
+                let mut violations = run(&snapshot, spec)?;
+                if let Some(kind) = kind {
+                    violations.retain(|v| v.kind == kind);
+                }
+                emit(violations, &mut sink)?;
+            }
+        }
+        Ok(())
+    }
+}
+fn emit<E>(
+    mut violations: Vec<Violation>,
+    sink: &mut impl FnMut(Violation) -> Result<(), E>,
+) -> Result<(), crate::SinkError<E>> {
+    violations.sort_by_key(|v| {
+        (
+            v.kind,
+            v.origin.map(FeatureRef::feature),
+            v.destination.map(FeatureRef::feature),
+        )
+    });
+    for v in violations {
+        crate::cancel::check();
+        sink(v).map_err(crate::SinkError::Consumer)?;
+    }
+    Ok(())
+}
+
+fn feature_geometry(
+    t: &Topology,
+    spec: RuleSpec,
+    layer: crate::LayerId,
+    feature: &crate::engine::cross::Feature,
+) -> Result<Geometry, Error> {
+    t.cancellable(|| feature.output()).map_err(|e| {
+        e.precision_context(
+            "polygon feature emission",
+            spec.rule,
+            format!(
+                ", layer {}, FID {}",
+                t.layer(layer).expect("registered layer").name(),
+                feature.reference.fid
+            ),
+        )
+    })
 }

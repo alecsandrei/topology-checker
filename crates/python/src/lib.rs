@@ -4,19 +4,29 @@ use pyo3::{
     exceptions::{PyRuntimeError, PyValueError},
     prelude::*,
 };
-use serde_json::{Value, json};
+use serde_json::json;
+mod stream;
 use std::{
     collections::HashSet,
     panic::{AssertUnwindSafe, catch_unwind},
     sync::Mutex,
 };
 use topology_checker_core::{
-    FeatureRef, Layer, LayerId, LayerInput, Rule, Topology,
+    Layer, LayerId, LayerInput, Rule, Topology,
     geo::{CoordsIter, Geometry, LineString},
 };
 
 type RegistrationInput = (Option<usize>, String, Vec<(i64, Vec<u8>)>);
 
+pyo3::create_exception!(topology_checker._native, PrecisionError, PyRuntimeError);
+fn core_error(error: topology_checker_core::Error) -> PyErr {
+    match error {
+        topology_checker_core::Error::Precision { .. } => {
+            PrecisionError::new_err(error.to_string())
+        }
+        other => value_error(other),
+    }
+}
 fn value_error(error: impl std::fmt::Display) -> PyErr {
     PyValueError::new_err(error.to_string())
 }
@@ -39,12 +49,6 @@ fn encode(geometry: &Geometry) -> PyResult<Vec<u8>> {
     geometry
         .to_wkb(CoordDimensions::xy())
         .map_err(runtime_error)
-}
-fn reference(reference: Option<FeatureRef>) -> Value {
-    reference.map_or(
-        Value::Null,
-        |r| json!({"layer": r.layer.index(), "fid": r.fid, "part": r.part}),
-    )
 }
 
 #[pyclass(frozen, module = "topology_checker._native")]
@@ -109,7 +113,17 @@ impl NativeTopology {
                     Ok((fid, geometry))
                 })
                 .collect::<PyResult<Vec<_>>>()?;
-            Ok(core.add_layer(Layer::from_features(name, features)).index())
+            let layer = Layer::from_features(name, features);
+            // A private snapshot validates without consuming the real registration ID.
+            let mut pending = Topology::new(core.tolerance()).map_err(value_error)?;
+            let id = pending.add_layer(layer);
+            pending
+                .layer(id)
+                .map_err(value_error)?
+                .check(id)
+                .map_err(value_error)?;
+            let layer = pending.shared_layer(id).map_err(value_error)?;
+            Ok(core.add_layer(layer).index())
         })
     }
 
@@ -169,29 +183,30 @@ impl NativeTopology {
         })
     }
 
-    fn warnings(&self, py: Python<'_>) -> PyResult<Vec<String>> {
+    fn warnings(&self, py: Python<'_>) -> PyResult<Vec<stream::NativeWarning>> {
         self.access(py, |core| {
             core.warnings()
-                .map(|warnings| warnings.iter().map(ToString::to_string).collect())
+                .map(|warnings| {
+                    warnings
+                        .into_iter()
+                        .map(stream::NativeWarning::from)
+                        .collect()
+                })
                 .map_err(value_error)
         })
     }
 
-    fn validate(&self, py: Python<'_>) -> PyResult<String> {
+    fn validate(&self, py: Python<'_>) -> PyResult<stream::NativeReport> {
+        self.access(py, |core| stream::NativeReport::validate(core))
+    }
+    #[pyo3(signature = (batch_size=1024))]
+    fn iter_validate(
+        &self,
+        py: Python<'_>,
+        batch_size: usize,
+    ) -> PyResult<stream::NativeValidationStream> {
         self.access(py, |core| {
-            let report = core.validate().map_err(value_error)?;
-            let rules = report.rules.iter().map(|r| {
-                let errors = r.violations.iter().map(|e| Ok(json!({
-                    "rule": e.rule.name(), "error_type": e.kind.name(),
-                    "wkb": encode(&e.geometry)?, "origin": reference(e.origin),
-                    "destination": reference(e.destination)
-                }))).collect::<PyResult<Vec<_>>>()?;
-                Ok(json!({"rule": r.spec.rule.name(), "layer": r.spec.layer.index(),
-                    "other": r.spec.other.map(LayerId::index), "counts": r.counts, "errors": errors}))
-            }).collect::<PyResult<Vec<_>>>()?;
-            let warnings = report.warnings.iter().map(ToString::to_string).collect::<Vec<_>>();
-            serde_json::to_string(&json!({"tolerance": report.tolerance, "warnings": warnings,
-                "rules": rules})).map_err(runtime_error)
+            stream::NativeValidationStream::new(core.snapshot(), batch_size)
         })
     }
 }
@@ -249,7 +264,13 @@ fn lines(
 
 #[pymodule]
 fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    module.add("PrecisionError", module.py().get_type::<PrecisionError>())?;
     module.add_class::<NativeTopology>()?;
+    module.add_class::<stream::NativeValidationStream>()?;
+    module.add_class::<stream::NativeReport>()?;
+    module.add_class::<stream::NativeSummary>()?;
+    module.add_class::<stream::NativeRuleSummary>()?;
+    module.add_class::<stream::NativeViolation>()?;
     module.add_function(wrap_pyfunction!(registry, module)?)?;
     module.add_function(wrap_pyfunction!(lines, module)?)?;
     Ok(())

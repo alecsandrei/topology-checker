@@ -89,6 +89,19 @@ impl DatasetLayer {
         }
     }
 }
+/// Repeatable record access for writers that need metadata passes.
+pub(crate) trait RecordSource {
+    fn metadata(&self) -> &DatasetLayer;
+    fn records(&self) -> Box<dyn Iterator<Item = Result<Record>> + '_>;
+}
+impl RecordSource for DatasetLayer {
+    fn metadata(&self) -> &DatasetLayer {
+        self
+    }
+    fn records(&self) -> Box<dyn Iterator<Item = Result<Record>> + '_> {
+        Box::new(self.records.iter().cloned().map(Ok))
+    }
+}
 /// Write complete records and geometries without flattening collections.
 /// Native formats always take precedence, even in GDAL builds.
 /// # Errors
@@ -475,4 +488,250 @@ fn grouped(
         written.push(p);
     }
     Ok(written)
+}
+
+struct StoredLayer<'a> {
+    metadata: DatasetLayer,
+    report: &'a crate::report_store::DiskReport,
+    family: Option<&'static str>,
+    shapefile: bool,
+}
+fn stored_properties(
+    report: &crate::report_store::DiskReport,
+    index: usize,
+    rule: usize,
+    v: &Violation,
+) -> Map<String, Value> {
+    let r = &report.summary.rules[rule];
+    let name = |id| {
+        if id == r.spec.layer {
+            Some(r.layer.as_str())
+        } else if Some(id) == r.spec.other {
+            r.other.as_deref()
+        } else {
+            None
+        }
+    };
+    let mut p = Map::new();
+    p.insert("violation_id".into(), json!(index));
+    p.insert("rule".into(), json!(v.rule.name()));
+    p.insert("error_type".into(), json!(v.kind.name()));
+    for (role, reference) in [("origin", v.origin), ("destination", v.destination)] {
+        p.insert(
+            format!("{role}_layer"),
+            json!(reference.and_then(|r| name(r.layer))),
+        );
+        p.insert(format!("{role}_fid"), json!(reference.map(|r| r.fid)));
+        p.insert(
+            format!("{role}_part"),
+            json!(reference.and_then(|r| r.part)),
+        );
+    }
+    p
+}
+impl RecordSource for StoredLayer<'_> {
+    fn metadata(&self) -> &DatasetLayer {
+        &self.metadata
+    }
+    fn records(&self) -> Box<dyn Iterator<Item = Result<Record>> + '_> {
+        let rows = self
+            .report
+            .rows()
+            .enumerate()
+            .flat_map(move |(index, row)| {
+                let (rule, v) = match row {
+                    Ok(row) => row,
+                    Err(error) => return vec![Err(error)],
+                };
+                let mut properties = stored_properties(self.report, index, rule, &v);
+                if self.shapefile {
+                    for (long, short) in SHAPEFILE_NAMES {
+                        if let Some(value) = properties.remove(long) {
+                            properties.insert(short.into(), value);
+                        }
+                    }
+                }
+                if let Some(family) = self.family {
+                    let mut groups = BTreeMap::new();
+                    group(&v.geometry, properties, &mut groups);
+                    groups
+                        .remove(family)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(Ok)
+                        .collect()
+                } else {
+                    vec![Ok(Record {
+                        id: None,
+                        geometry: Some(v.geometry),
+                        properties,
+                    })]
+                }
+            })
+            .enumerate()
+            .map(|(i, row)| {
+                let mut row = row?;
+                row.id = Some(i64::try_from(i)? + 1);
+                Ok(row)
+            });
+        Box::new(rows)
+    }
+}
+/// Export disk-backed report rows without materializing the violation collection.
+/// Output schemas, family splitting, violation IDs and signed FIDs match `report`.
+///
+/// # Errors
+/// Returns unsupported geometry, existing output, disk-read or writer errors.
+pub fn stored_report(
+    path: &Path,
+    explicit: Option<&str>,
+    overwrite: bool,
+    srs: Option<&Crs>,
+    report: &crate::report_store::DiskReport,
+    layout: ReportLayout,
+) -> Result<Vec<PathBuf>> {
+    let format = registry::writable(path, explicit)?;
+    let mut families = BTreeMap::new();
+    if layout == ReportLayout::ByFamily {
+        for row in report.rows() {
+            let (_, v) = row?;
+            let mut groups = BTreeMap::new();
+            group(&v.geometry, Map::new(), &mut groups);
+            for (family, _) in groups {
+                families.insert(family, ());
+            }
+        }
+        if families.is_empty() {
+            return Ok(vec![]);
+        }
+    }
+    let names = if layout == ReportLayout::Complete {
+        vec![None]
+    } else {
+        families.keys().copied().map(Some).collect()
+    };
+    let sources = names
+        .into_iter()
+        .map(|family| {
+            let mut metadata = DatasetLayer::new(
+                family.map_or("violations".into(), |f| format!("errors_{f}")),
+                srs.cloned(),
+                vec![],
+            );
+            metadata.fields = report_fields();
+            metadata.geometry_type = family.map(|f| {
+                match f {
+                    "point" => "MULTIPOINT",
+                    "line" => "MULTILINESTRING",
+                    _ => "MULTIPOLYGON",
+                }
+                .into()
+            });
+            let shapefile = format.name == "ESRI Shapefile";
+            if shapefile {
+                shorten_for_shapefile(&mut metadata);
+            }
+            StoredLayer {
+                metadata,
+                report,
+                family,
+                shapefile,
+            }
+        })
+        .collect::<Vec<_>>();
+    let outputs = if format.layers || sources.len() == 1 {
+        vec![(path.to_path_buf(), sources.iter().collect::<Vec<_>>())]
+    } else {
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .context("invalid output filename")?;
+        let ext = path
+            .extension()
+            .and_then(|s| s.to_str())
+            .context("output extension required")?;
+        sources
+            .iter()
+            .map(|s| {
+                (
+                    path.with_file_name(format!(
+                        "{stem}_{}.{ext}",
+                        s.family.expect("family output")
+                    )),
+                    vec![s],
+                )
+            })
+            .collect()
+    };
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let staging = tempfile::Builder::new()
+        .prefix(".topology-output-")
+        .tempdir_in(parent)?;
+    for (destination, layers) in &outputs {
+        ensure!(
+            !destination.exists() || overwrite,
+            "output {} already exists; use --overwrite",
+            destination.display()
+        );
+        let temporary = staging.path().join(
+            destination
+                .file_name()
+                .context("output filename required")?,
+        );
+        let sources = layers
+            .iter()
+            .map(|l| *l as &dyn RecordSource)
+            .collect::<Vec<_>>();
+        match format.name.as_str() {
+            "GPKG" => crate::gpkg::write_sources(&temporary, &sources)?,
+            "GeoJSON" => crate::native::write_geojson_source(&temporary, sources[0])?,
+            "ESRI Shapefile" => crate::native::write_shape_source(&temporary, sources[0])?,
+            "FlatGeobuf" => crate::native::write_fgb_source(&temporary, sources[0])?,
+            "GeoParquet" => crate::parquet::write_source(&temporary, sources[0])?,
+            "KML" => crate::xml::write_kml_source(&temporary, sources[0])?,
+            "GPX" => crate::xml::write_gpx_source(&temporary, sources[0])?,
+            _ => {
+                #[cfg(feature = "gdal-system")]
+                crate::gdal_backend::write_sources(&temporary, &format.name, &sources)?;
+                #[cfg(not(feature = "gdal-system"))]
+                anyhow::bail!("output requires optional GDAL backend");
+            }
+        }
+    }
+    let files = std::fs::read_dir(staging.path())?
+        .map(|e| e.map(|e| e.path()))
+        .collect::<std::io::Result<Vec<_>>>()?
+        .into_iter()
+        .filter(|p| {
+            !matches!(
+                p.extension().and_then(|e| e.to_str()),
+                Some("gpkg-wal" | "gpkg-shm")
+            )
+        })
+        .collect::<Vec<_>>();
+    for file in &files {
+        let destination = parent.join(file.file_name().context("staged filename")?);
+        ensure!(
+            !destination.exists() || overwrite,
+            "output {} already exists; use --overwrite",
+            destination.display()
+        );
+    }
+    for file in files {
+        let destination = parent.join(file.file_name().context("staged filename")?);
+        if destination.is_dir() {
+            let backup = staging.path().join("previous-dataset");
+            std::fs::rename(&destination, &backup)?;
+            if let Err(error) = std::fs::rename(&file, &destination) {
+                std::fs::rename(&backup, &destination)?;
+                return Err(error.into());
+            }
+        } else {
+            std::fs::rename(file, destination)?;
+        }
+    }
+    Ok(outputs.into_iter().map(|(p, _)| p).collect())
 }

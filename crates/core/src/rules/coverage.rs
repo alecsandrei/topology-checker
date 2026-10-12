@@ -3,11 +3,7 @@ use super::violation;
 use crate::{
     Error, LayerId, RuleSpec, Topology, Violation, ViolationKind,
     aggregate::{Merge, aggregate},
-    engine::{
-        cluster::distance,
-        cross::{self, Views},
-        index,
-    },
+    engine::{cluster::distance, cross, index},
     model::{Part, Parts},
 };
 use geo::{Distance, Euclidean, Line, Point};
@@ -39,19 +35,24 @@ fn on_points(point: &Point, points: &[Part<Point>], tree: &index::Index, toleran
     tree.locate_in_envelope_intersecting(&index::at(point.0, tolerance))
         .any(|i| distance(points[i.data].geometry.0, point.0) <= tolerance)
 }
-fn covered(point: &Point, target: Target, parts: &Parts, views: &Views, tolerance: f64) -> bool {
+fn covered(point: &Point, target: Target, parts: &Parts, tolerance: f64) -> bool {
     match target {
-        Target::Linework => on_segments(point, &views.segments, &views.segment_index, tolerance),
-        Target::LineEndpoints => {
-            on_points(point, &views.endpoints, &views.endpoint_index, tolerance)
+        Target::Linework => {
+            let view = cross::segments(parts);
+            on_segments(point, &view.segments, &view.index, tolerance)
         }
-        Target::PolygonBoundaries => on_segments(
-            point,
-            &views.boundary_segments,
-            &views.boundary_index,
-            tolerance,
-        ),
-        Target::Points => on_points(point, &parts.points, &parts.point_index, tolerance),
+        Target::LineEndpoints => {
+            let view = cross::endpoints(parts);
+            on_points(point, &view.points, &view.index, tolerance)
+        }
+        Target::PolygonBoundaries => {
+            let locations = crate::engine::location::locations(parts);
+            parts
+                .polygon_index()
+                .locate_in_envelope_intersecting(&index::at(point.0, tolerance))
+                .any(|item| locations[item.data].near(point.0, tolerance))
+        }
+        Target::Points => on_points(point, &parts.points, parts.point_index(), tolerance),
     }
 }
 fn uncovered(
@@ -62,10 +63,9 @@ fn uncovered(
     sources: &[Part<Point>],
 ) -> Result<Vec<Violation>, Error> {
     let b = t.parts(other)?;
-    let bv = cross::views(b);
     let violations = sources
         .par_iter()
-        .filter(|p| !covered(&p.geometry, target, b, bv, t.tolerance()))
+        .filter(|p| !covered(&p.geometry, target, b, t.tolerance()))
         .map(|p| {
             violation(
                 spec,
@@ -95,8 +95,8 @@ pub(super) fn endpoints(
     other: LayerId,
     target: Target,
 ) -> Result<Vec<Violation>, Error> {
-    let a = cross::views(t.parts(spec.layer)?);
-    uncovered(t, spec, other, target, &a.endpoints)
+    let a = cross::endpoints(t.parts(spec.layer)?);
+    uncovered(t, spec, other, target, &a.points)
 }
 /// Report each point within tolerance of a line part.
 pub(super) fn line_contacts(
@@ -106,11 +106,11 @@ pub(super) fn line_contacts(
 ) -> Result<Vec<Violation>, Error> {
     let a = t.parts(spec.layer)?;
     let b = t.parts(other)?;
-    let violations = index::pairs(&a.point_index, &b.line_index, t.tolerance(), false)
-        .par_iter()
-        .filter_map(|&(i, j)| {
+    let violations = index::pairs(a.point_index(), b.line_index(), t.tolerance(), false)
+        .par_bridge()
+        .filter_map(|(i, j)| {
             let (p, l) = (&a.points[i], &b.lines[j]);
-            (Euclidean.distance(&l.geometry, &p.geometry) <= t.tolerance()).then(|| {
+            (Euclidean.distance(l.geometry.as_ref(), &p.geometry) <= t.tolerance()).then(|| {
                 violation(
                     spec,
                     ViolationKind::Intersection,

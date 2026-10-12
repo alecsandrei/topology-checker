@@ -14,6 +14,7 @@ use std::collections::BTreeMap;
 /// only the coordinate check can fail.
 fn line_error(invalid: Invalid) -> Error {
     match invalid {
+        Invalid::Polygon { .. } => unreachable!("line utilities have no polygon parts"),
         Invalid::NonFinite(fid) | Invalid::DuplicateFid(fid) => Error::NonFiniteLine {
             index: usize::try_from(fid).unwrap_or_default(),
         },

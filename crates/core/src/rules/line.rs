@@ -40,6 +40,39 @@ pub(super) enum LineCheck {
 }
 
 pub(super) fn run(t: &Topology, spec: RuleSpec, check: LineCheck) -> Result<Vec<Violation>, Error> {
+    if matches!(check, LineCheck::SelfOverlap | LineCheck::SelfIntersect) {
+        let mut out = Vec::new();
+        let layer = t.layer(spec.layer)?;
+        let features: Box<dyn Iterator<Item = (i64, &Geometry)> + '_> =
+            if let Some((_, fid)) = t.selected_feature() {
+                Box::new(layer.feature(layer.ranks()[&fid]).into_iter())
+            } else {
+                Box::new(layer.features())
+            };
+        for (fid, geometry) in features {
+            crate::cancel::check();
+            if !t.feature_matches(spec.layer, fid) {
+                continue;
+            }
+            let mut isolated = Topology::new(t.tolerance())?;
+            let layer = isolated.add_layer(crate::Layer::from_features(
+                "self",
+                [(fid, geometry.clone())],
+            ));
+            let graph = isolated.graph(vec![layer])?;
+            let mut errors = overlaps(&graph, spec, true, None);
+            if matches!(check, LineCheck::SelfIntersect) {
+                errors.extend(self_crossings(&graph, spec));
+            }
+            for mut error in errors {
+                if let Some(origin) = &mut error.origin {
+                    origin.layer = spec.layer;
+                }
+                out.push(error);
+            }
+        }
+        return Ok(out);
+    }
     let mut layers = vec![spec.layer];
     if let Some(other) = spec.other {
         layers.push(other);
@@ -48,16 +81,16 @@ pub(super) fn run(t: &Topology, spec: RuleSpec, check: LineCheck) -> Result<Vec<
     Ok(match check {
         LineCheck::Dangles => dangles(&graph, spec),
         LineCheck::PseudoNodes => pseudos(&graph, spec),
-        LineCheck::Overlap => overlaps(&graph, spec, false),
-        LineCheck::SelfOverlap => overlaps(&graph, spec, true),
+        LineCheck::Overlap => overlaps(&graph, spec, false, t.selected_feature()),
+        LineCheck::SelfOverlap => overlaps(&graph, spec, true, None),
         LineCheck::SelfIntersect => {
-            let mut violations = overlaps(&graph, spec, true);
+            let mut violations = overlaps(&graph, spec, true, None);
             violations.extend(self_crossings(&graph, spec));
             violations
         }
         LineCheck::Intersect { touch } => {
-            let mut violations = overlaps(&graph, spec, false);
-            violations.extend(meetings(&graph, spec, touch));
+            let mut violations = overlaps(&graph, spec, false, t.selected_feature());
+            violations.extend(meetings(&graph, spec, touch, t.selected_feature()));
             violations
         }
     })
@@ -143,21 +176,73 @@ fn selected(spec: RuleSpec, a: FeatureRef, b: FeatureRef) -> Option<(FeatureRef,
         Some((b, a))
     }
 }
-fn overlaps(g: &LineGraph, spec: RuleSpec, self_rule: bool) -> Vec<Violation> {
+fn feature_pairs(len: usize, chosen: Option<usize>) -> impl Iterator<Item = (usize, usize)> {
+    (0..len)
+        .filter(move |&i| chosen.is_none_or(|c| c == i))
+        .flat_map(move |i| {
+            (0..len)
+                .filter(move |&j| if chosen.is_some() { j != i } else { j > i })
+                .map(move |j| (i, j))
+        })
+}
+pub(crate) fn parallel(a: geo::Line, b: geo::Line) -> bool {
+    let p = Coord {
+        x: a.end.x - a.start.x,
+        y: a.end.y - a.start.y,
+    };
+    let q = Coord {
+        x: b.end.x - b.start.x,
+        y: b.end.y - b.start.y,
+    };
+    RobustKernel::orient2d(Coord { x: 0., y: 0. }, p, q) == Orientation::Collinear
+}
+fn compatible_overlap(a: geo::Line, b: geo::Line) -> bool {
+    if !parallel(a, b) {
+        return false;
+    }
+    let horizontal = (a.end.x - a.start.x).abs() >= (a.end.y - a.start.y).abs();
+    let values = if horizontal {
+        [a.start.x, a.end.x, b.start.x, b.end.x]
+    } else {
+        [a.start.y, a.end.y, b.start.y, b.end.y]
+    };
+    values[0].min(values[1]).max(values[2].min(values[3]))
+        < values[0].max(values[1]).min(values[2].max(values[3]))
+}
+fn overlaps(
+    g: &LineGraph,
+    spec: RuleSpec,
+    self_rule: bool,
+    selected_feature: Option<Feature>,
+) -> Vec<Violation> {
     let mut groups: BTreeMap<(Feature, Option<Feature>), Overlap> = BTreeMap::new();
-    for (edge_id, edge) in g.edges.iter().enumerate() {
-        let mut features: BTreeMap<Feature, (FeatureRef, usize)> = BTreeMap::new();
-        for usage in &edge.uses {
+    let edges: Box<dyn Iterator<Item = (usize, &crate::engine::line_graph::Edge)> + '_> =
+        match selected_feature {
+            Some(key) => Box::new(
+                g.feature(key)
+                    .into_iter()
+                    .flat_map(|f| f.edges.iter().copied())
+                    .map(|id| (id, &g.edges[id])),
+            ),
+            None => Box::new(g.edges.iter().enumerate()),
+        };
+    for (edge_id, edge) in edges {
+        let mut features: BTreeMap<Feature, (FeatureRef, Vec<usize>)> = BTreeMap::new();
+        for usage in edge.uses(g) {
             let reference = g.parts[usage.part].reference;
             let entry = features
                 .entry(reference.feature())
-                .or_insert((reference, 0));
+                .or_insert_with(|| (reference, Vec::new()));
             entry.0.aggregate(reference);
-            entry.1 += 1;
+            entry.1.push(usage.source);
         }
         if self_rule {
             for (key, (reference, count)) in features {
-                if count > 1 {
+                if count.iter().enumerate().any(|(i, &a)| {
+                    count[i + 1..]
+                        .iter()
+                        .any(|&b| compatible_overlap(g.source(a), g.source(b)))
+                }) {
                     let group = groups.entry((key, None)).or_insert(Overlap {
                         a: reference,
                         b: None,
@@ -168,25 +253,38 @@ fn overlaps(g: &LineGraph, spec: RuleSpec, self_rule: bool) -> Vec<Violation> {
                 }
             }
         } else {
-            let features = features.into_values().map(|(r, _)| r).collect::<Vec<_>>();
-            for i in 0..features.len() {
-                for j in i + 1..features.len() {
-                    let Some((a, b)) = selected(spec, features[i], features[j]) else {
-                        continue;
-                    };
-                    let group = groups
-                        .entry((a.feature(), Some(b.feature())))
-                        .or_insert(Overlap {
-                            a,
-                            b: Some(b),
-                            edges: Vec::new(),
-                        });
-                    group.a.aggregate(a);
-                    if let Some(old) = &mut group.b {
-                        old.aggregate(b);
-                    }
-                    group.edges.push(edge_id);
+            let (features, sources): (Vec<_>, Vec<_>) = features.into_values().unzip();
+            let chosen =
+                selected_feature.and_then(|key| features.iter().position(|r| r.feature() == key));
+            if selected_feature.is_some() && chosen.is_none() {
+                continue;
+            }
+            for (i, j) in feature_pairs(features.len(), chosen) {
+                if !sources[i].iter().any(|&a| {
+                    sources[j]
+                        .iter()
+                        .any(|&b| compatible_overlap(g.source(a), g.source(b)))
+                }) {
+                    continue;
                 }
+                let Some((a, b)) = selected(spec, features[i], features[j]) else {
+                    continue;
+                };
+                if selected_feature.is_some_and(|key| a.feature() != key) {
+                    continue;
+                }
+                let group = groups
+                    .entry((a.feature(), Some(b.feature())))
+                    .or_insert(Overlap {
+                        a,
+                        b: Some(b),
+                        edges: Vec::new(),
+                    });
+                group.a.aggregate(a);
+                if let Some(old) = &mut group.b {
+                    old.aggregate(b);
+                }
+                group.edges.push(edge_id);
             }
         }
     }
@@ -220,9 +318,24 @@ fn overlaps(g: &LineGraph, spec: RuleSpec, self_rule: bool) -> Vec<Violation> {
         })
         .collect()
 }
-fn meetings(g: &LineGraph, spec: RuleSpec, touch: bool) -> Vec<Violation> {
+fn meetings(
+    g: &LineGraph,
+    spec: RuleSpec,
+    touch: bool,
+    selected_feature: Option<Feature>,
+) -> Vec<Violation> {
     let mut out = Vec::new();
-    for (node, uses) in g.incident.iter().enumerate() {
+    let nodes: Box<dyn Iterator<Item = (usize, &[crate::engine::line_graph::Incident])> + '_> =
+        match selected_feature {
+            Some(key) => Box::new(
+                g.feature(key)
+                    .into_iter()
+                    .flat_map(|f| f.nodes.iter().copied())
+                    .map(|id| (id, &g.incident[id])),
+            ),
+            None => Box::new(g.incident.iter().enumerate()),
+        };
+    for (node, uses) in nodes {
         let mut features: BTreeMap<Feature, Meeting> = BTreeMap::new();
         for usage in uses {
             let part = &g.parts[usage.part];
@@ -244,41 +357,47 @@ fn meetings(g: &LineGraph, spec: RuleSpec, touch: bool) -> Vec<Violation> {
                 m
             })
             .collect::<Vec<_>>();
-        for i in 0..features.len() {
-            for j in i + 1..features.len() {
-                let a = features[i];
-                let b = features[j];
-                let Some((origin, destination)) = selected(spec, a.reference, b.reference) else {
-                    continue;
-                };
-                if !(a.interior && b.interior || touch && (a.interior || b.interior)) {
-                    continue;
-                }
-                // A shared edge is already an overlap, not an extra crossing at every vertex.
-                if uses.iter().any(|usage| {
-                    let edge = &g.edges[usage.edge];
-                    edge.uses
-                        .iter()
-                        .any(|u| g.parts[u.part].reference.feature() == a.reference.feature())
-                        && edge
-                            .uses
-                            .iter()
-                            .any(|u| g.parts[u.part].reference.feature() == b.reference.feature())
-                }) {
-                    continue;
-                }
-                out.push(point(
-                    spec,
-                    if a.interior && b.interior {
-                        ViolationKind::Crossing
-                    } else {
-                        ViolationKind::TouchInterior
-                    },
-                    g.coords[node],
-                    origin,
-                    Some(destination),
-                ));
+        let chosen = selected_feature
+            .and_then(|key| features.iter().position(|r| r.reference.feature() == key));
+        if selected_feature.is_some() && chosen.is_none() {
+            continue;
+        }
+        for (i, j) in feature_pairs(features.len(), chosen) {
+            let a = features[i];
+            let b = features[j];
+            let Some((origin, destination)) = selected(spec, a.reference, b.reference) else {
+                continue;
+            };
+            if selected_feature.is_some_and(|key| origin.feature() != key) {
+                continue;
             }
+            if !(a.interior && b.interior || touch && (a.interior || b.interior)) {
+                continue;
+            }
+            // A shared edge is already an overlap, not an extra crossing at every vertex.
+            if uses.iter().any(|usage| {
+                let edge = &g.edges[usage.edge];
+                edge.uses(g)
+                    .iter()
+                    .any(|u| g.parts[u.part].reference.feature() == a.reference.feature())
+                    && edge
+                        .uses(g)
+                        .iter()
+                        .any(|u| g.parts[u.part].reference.feature() == b.reference.feature())
+            }) {
+                continue;
+            }
+            out.push(point(
+                spec,
+                if a.interior && b.interior {
+                    ViolationKind::Crossing
+                } else {
+                    ViolationKind::TouchInterior
+                },
+                g.coords[node],
+                origin,
+                Some(destination),
+            ));
         }
     }
     out

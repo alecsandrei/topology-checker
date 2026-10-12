@@ -749,10 +749,15 @@ async fn natural_earth_examples_presets_match_direct_core_and_roundtrip_provenan
                 .iter()
                 .filter(|c| c.layer == layer.id)
             {
-                direct.add_rule(check.rule, id, None).unwrap();
+                if let Err(error) = direct.add_rule(check.rule, id, None) {
+                    assert!(
+                        matches!(error, topology_checker_core::Error::InvalidPolygon { .. }),
+                        "{error}"
+                    );
+                }
             }
         }
-        let report = direct.validate().unwrap();
+        let report = direct.validate();
         let id = ws["id"].as_str().unwrap();
         assert_eq!(
             call(&app, "POST", &format!("/workspaces/{id}/runs"), Value::Null)
@@ -761,41 +766,57 @@ async fn natural_earth_examples_presets_match_direct_core_and_roundtrip_provenan
             StatusCode::ACCEPTED
         );
         let complete = completed(&app, id).await;
-        assert_eq!(complete["job"]["status"], "completed", "{complete}");
-        assert_eq!(complete["result"]["total"], report.violation_count());
-        for (i, rule) in report.rules.iter().enumerate() {
-            assert_eq!(
-                complete["result"]["rules"][i]["counts"],
-                serde_json::to_value(&rule.counts).unwrap()
+        if let Err(error) = &report {
+            assert!(matches!(
+                error,
+                topology_checker_core::Error::InvalidPolygon { .. }
+            ));
+            assert_eq!(complete["job"]["status"], "failed", "{complete}");
+            assert!(
+                complete["job"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("polygon")
             );
-            assert_eq!(
-                complete["result"]["rules"][i]["total"],
-                rule.violations.len()
-            );
-        }
-        if example_id == "country-city-atlas" {
-            // Multipart detection aggregates collection members into one finding per parent FID.
-            assert_eq!(report.violation_count(), 169);
-            let all_fids = report.rules[0]
-                .violations
-                .iter()
-                .map(|e| e.origin.unwrap().fid)
-                .collect::<HashSet<_>>();
-            assert_eq!(all_fids.len(), report.violation_count());
-            let (_, page) = call(
-                &app,
-                "GET",
-                &format!("/workspaces/{id}/results"),
-                Value::Null,
-            )
-            .await;
-            let fids = page["violations"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|v| v["origin"]["fid"].as_str().unwrap())
-                .collect::<HashSet<_>>();
-            assert_eq!(fids.len(), 100);
+            assert!(complete["result"].is_null());
+        } else {
+            let report = report.unwrap();
+            assert_eq!(complete["job"]["status"], "completed", "{complete}");
+            assert_eq!(complete["result"]["total"], report.violation_count());
+            for (i, rule) in report.rules.iter().enumerate() {
+                assert_eq!(
+                    complete["result"]["rules"][i]["counts"],
+                    serde_json::to_value(&rule.counts).unwrap()
+                );
+                assert_eq!(
+                    complete["result"]["rules"][i]["total"],
+                    rule.violations.len()
+                );
+            }
+            if example_id == "country-city-atlas" {
+                // Multipart detection aggregates collection members into one finding per parent FID.
+                assert_eq!(report.violation_count(), 169);
+                let all_fids = report.rules[0]
+                    .violations
+                    .iter()
+                    .map(|e| e.origin.unwrap().fid)
+                    .collect::<HashSet<_>>();
+                assert_eq!(all_fids.len(), report.violation_count());
+                let (_, page) = call(
+                    &app,
+                    "GET",
+                    &format!("/workspaces/{id}/results"),
+                    Value::Null,
+                )
+                .await;
+                let fids = page["violations"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|v| v["origin"]["fid"].as_str().unwrap())
+                    .collect::<HashSet<_>>();
+                assert_eq!(fids.len(), 100);
+            }
         }
         let response = app
             .clone()
@@ -836,5 +857,66 @@ async fn natural_earth_examples_presets_match_direct_core_and_roundtrip_provenan
         .into_iter()
         .map(str::to_owned)
         .collect()
+    );
+}
+
+#[tokio::test]
+async fn precision_failure_has_failed_job_status_and_no_results_or_export() {
+    let app = api(AppState::default());
+    let (_, ws) = call(&app, "POST", "/workspaces", Value::Null).await;
+    let id = ws["id"].as_str().unwrap();
+    let x = 1f64.next_up();
+    let data=json!({"type":"FeatureCollection","features":[
+        {"type":"Feature","id":-17,"properties":{},"geometry":{"type":"Polygon","coordinates":[[[1.,0.],[x,0.],[x,1.],[1.,1.],[1.,0.]]]}},
+        {"type":"Feature","id":82,"properties":{},"geometry":{"type":"Polygon","coordinates":[[[1.,-1.],[x,-1.],[1.,1.],[1.,-1.]]]}}
+    ]}).to_string();
+    let (status, bytes) = multipart(
+        &app,
+        &format!("/workspaces/{id}/uploads"),
+        "narrow.geojson",
+        data.as_bytes(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let imported: Value = serde_json::from_slice(&bytes).unwrap();
+    let layer = imported["layers"][0]["id"].as_str().unwrap();
+    let mut config = imported["config"].clone();
+    config["tolerance"] = json!(0.);
+    config["layers"][0]["selected"] = json!(true);
+    config["checks"] =
+        json!([{"rule":"polygon/must-not-have-gaps","layer":layer,"other":null,"enabled":true}]);
+    let (status, _) = call(&app, "PUT", &format!("/workspaces/{id}/config"), config).await;
+    assert_eq!(status, StatusCode::OK);
+    call(&app, "POST", &format!("/workspaces/{id}/runs"), Value::Null).await;
+    let result = completed(&app, id).await;
+    assert_eq!(result["job"]["status"], "failed");
+    assert!(
+        result["job"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("precision failure")
+    );
+    assert!(result["result"].is_null());
+    assert_eq!(
+        call(
+            &app,
+            "GET",
+            &format!("/workspaces/{id}/results"),
+            Value::Null
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        call(
+            &app,
+            "GET",
+            &format!("/workspaces/{id}/export/geojson"),
+            Value::Null
+        )
+        .await
+        .0,
+        StatusCode::CONFLICT
     );
 }

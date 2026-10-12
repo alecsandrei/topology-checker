@@ -14,6 +14,7 @@ pub(crate) struct Cluster {
     exact: HashMap<(u64, u64), usize>,
     cells: HashMap<(i64, i64), Vec<usize>>,
     pub(crate) coords: Vec<Coord>,
+    members: Vec<Vec<Coord>>,
 }
 impl Cluster {
     pub(crate) fn new(tolerance: f64) -> Self {
@@ -22,7 +23,11 @@ impl Cluster {
             exact: HashMap::new(),
             cells: HashMap::new(),
             coords: Vec::new(),
+            members: Vec::new(),
         }
+    }
+    pub fn finish(self) -> Vec<Coord> {
+        self.coords
     }
     fn cell(&self, p: Coord) -> (i64, i64) {
         (
@@ -46,7 +51,12 @@ impl Cluster {
                     {
                         for &id in ids {
                             let d = distance(p, self.coords[id]);
-                            if d <= self.tolerance && best.is_none_or(|old| (d, id) < old) {
+                            if d <= self.tolerance
+                                && self.members[id]
+                                    .iter()
+                                    .all(|&member| distance(p, member) <= self.tolerance)
+                                && best.is_none_or(|old| (d, id) < old)
+                            {
                                 best = Some((d, id));
                             }
                         }
@@ -54,12 +64,16 @@ impl Cluster {
                 }
             }
             if let Some((_, id)) = best {
+                self.members[id].push(p);
                 self.exact.insert(key, id);
                 return id;
             }
         }
         let id = self.coords.len();
         self.coords.push(p);
+        if self.tolerance > 0. {
+            self.members.push(vec![p]);
+        }
         self.exact.insert(key, id);
         if self.tolerance > 0. {
             self.cells.entry(self.cell(p)).or_default().push(id);

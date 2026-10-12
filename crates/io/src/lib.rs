@@ -15,3 +15,5 @@ pub mod registry;
 pub mod write;
 mod xml;
 pub use crs::{Crs, Transform};
+
+pub mod report_store;

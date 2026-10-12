@@ -49,39 +49,59 @@ for (const example of examples) {
       "ca96624a56bd078437bca8184e78163e5039ad19",
     );
     await page.getByRole("button", { name: "Run topology checks" }).click();
-    await expect(
-      page.getByRole("button", { name: "Export report" }),
-    ).toBeEnabled();
-    await expect(page.locator(".clean-result, tbody tr").first()).toBeVisible();
-    if (await page.locator("tbody tr").count()) {
-      await page
-        .getByRole("button", { name: "Inspect violation 1", exact: true })
-        .click();
+    if (
+      ["Countries and islands", "Country and city atlas"].includes(
+        example.title,
+      )
+    ) {
       await expect(
-        page.getByRole("heading", { name: "Violation details" }),
+        page
+          .getByRole("region", { name: "Validation results" })
+          .getByText(/invalid polygon:/),
       ).toBeVisible();
+      await expect(
+        page.getByRole("button", { name: "Export report" }),
+      ).toBeDisabled();
     } else {
       await expect(
-        page.getByText("All configured checks passed"),
-      ).toBeVisible();
-      const response = await page.request.get(previewUrl);
-      const preview = await response.json();
-      const bounds = new URL(previewUrl).searchParams
-        .get("bbox")!
-        .split(",")
-        .map(Number);
-      const coord = preview.features[0].geometry.coordinates[0][0];
-      const map = page.locator(".map-target");
-      const box = (await map.boundingBox())!;
-      await map.click({
-        position: {
-          x: ((coord[0] - bounds[0]!) / (bounds[2]! - bounds[0]!)) * box.width,
-          y: ((bounds[3]! - coord[1]) / (bounds[3]! - bounds[1]!)) * box.height,
-        },
-      });
+        page.getByRole("button", { name: "Export report" }),
+      ).toBeEnabled();
       await expect(
-        page.getByRole("heading", { name: "Feature details" }),
+        page.locator(".clean-result, tbody tr").first(),
       ).toBeVisible();
+      if (await page.locator("tbody tr").count()) {
+        await page
+          .getByRole("button", { name: "Inspect violation 1", exact: true })
+          .click();
+        await expect(
+          page.getByRole("heading", { name: "Violation details" }),
+        ).toBeVisible();
+      } else {
+        await expect(
+          page.getByText("All configured checks passed"),
+        ).toBeVisible();
+        const response = await page.request.get(previewUrl);
+        const preview = await response.json();
+        const bounds = new URL(previewUrl).searchParams
+          .get("bbox")!
+          .split(",")
+          .map(Number);
+        const coord = preview.features[0].geometry.coordinates[0][0];
+        const map = page.locator(".map-target");
+        const box = (await map.boundingBox())!;
+        await map.click({
+          position: {
+            x:
+              ((coord[0] - bounds[0]!) / (bounds[2]! - bounds[0]!)) * box.width,
+            y:
+              ((bounds[3]! - coord[1]) / (bounds[3]! - bounds[1]!)) *
+              box.height,
+          },
+        });
+        await expect(
+          page.getByRole("heading", { name: "Feature details" }),
+        ).toBeVisible();
+      }
     }
     if (example.title === "Country and city atlas") {
       const download = page.waitForEvent("download");

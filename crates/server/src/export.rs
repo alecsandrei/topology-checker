@@ -88,7 +88,8 @@ fn features<'a>(
     result: &'a ValidationResult,
     operation: &'a CoordTransform,
 ) -> impl Iterator<Item = Result<Feature>> + 'a {
-    result.report.violations().enumerate().map(move |(i, e)| {
+    result.report.rows().enumerate().map(move |(i, row)| {
+        let (_, e) = row?;
         Ok(Feature {
             r#type: "Feature",
             id: i.to_string(),
@@ -144,7 +145,7 @@ pub fn dataset(result: &ValidationResult, path: &Path) -> Result<()> {
             .as_deref()
             .context("assign a working CRS before geographic export")?,
     )?;
-    write::report(
+    write::stored_report(
         path,
         None,
         false,

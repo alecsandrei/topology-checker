@@ -14,3 +14,13 @@ topology-checker-web --port 9000     # or TOPOLOGY_WEB_PORT=9000; 0 picks a free
 5. Save a project zip to reopen the setup later.
 
 Each browser tab has its own workspace. Workspaces idle for 4 hours are deleted.
+
+Validation rows and their fixed-width row index are held in workspace-owned
+temporary files. Pagination and export use stable violation IDs without keeping
+the entire report in memory. Downloads stream directly through the browser's
+download manager. Invalid polygon input is reported with its feature and ring
+location, including invalid geometry retained in the original example datasets.
+
+Polygon precision failures mark the validation job as failed and include its
+operation, rule and available source context in the job message. Temporary report
+rows are discarded; results and export endpoints remain unavailable for that job.

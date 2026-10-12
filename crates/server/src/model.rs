@@ -11,7 +11,7 @@ use std::{
     path::PathBuf,
     sync::{Arc, Mutex, PoisonError},
 };
-use topology_checker_core::{GeometryKind, Layer, Report, Rule, Topology};
+use topology_checker_core::{GeometryKind, Layer, Rule, Topology};
 use topology_checker_io::Transform as CoordTransform;
 use topology_checker_io::{crs, read};
 use ts_rs::TS;
@@ -467,10 +467,10 @@ pub struct ValidationResult {
     pub revision: u64,
     pub config: Config,
     pub layers: Vec<Arc<IndexedLayer>>,
-    pub report: Report,
+    pub report: topology_checker_io::report_store::DiskReport,
     /// Core, import and CRS warnings as display text.
     pub warnings: Vec<String>,
-    rows: Vec<(usize, usize)>,
+    _workspace_storage: Option<Arc<tempfile::TempDir>>,
 }
 impl ValidationResult {
     /// Validate an immutable workspace configuration with the existing core, reusing
@@ -479,6 +479,18 @@ impl ValidationResult {
     /// # Errors
     /// Returns an error for invalid rule inputs or core validation failures.
     pub fn run(revision: u64, config: Config, prepared: &Prepared) -> Result<Self> {
+        Self::run_in(revision, config, prepared, None)
+    }
+    /// Validate with result files owned by the workspace's storage lifetime.
+    ///
+    /// # Errors
+    /// Returns invalid rule inputs, validation or disk-write failures.
+    pub fn run_in(
+        revision: u64,
+        config: Config,
+        prepared: &Prepared,
+        storage: Option<Arc<tempfile::TempDir>>,
+    ) -> Result<Self> {
         if !config.checks.iter().any(|c| c.enabled) {
             bail!("enable at least one rule");
         }
@@ -517,9 +529,13 @@ impl ValidationResult {
                     .transpose()?,
             )?;
         }
-        let report = topology.validate()?;
+        let report = topology_checker_io::report_store::DiskReport::validate(
+            topology,
+            storage.as_ref().map(|root| root.path()),
+        )?;
         drop(cached);
         let mut warnings = report
+            .summary
             .warnings
             .iter()
             .map(ToString::to_string)
@@ -542,19 +558,13 @@ impl ValidationResult {
         {
             warnings.push("Tolerance is in angular units; calculations are planar".into());
         }
-        let rows = report
-            .rules
-            .iter()
-            .enumerate()
-            .flat_map(|(r, rule)| (0..rule.violations.len()).map(move |e| (r, e)))
-            .collect();
         Ok(Self {
             revision,
             config,
             layers,
             report,
             warnings,
-            rows,
+            _workspace_storage: storage,
         })
     }
     fn reference(&self, r: Option<topology_checker_core::FeatureRef>) -> Option<SourceRef> {
@@ -580,8 +590,7 @@ impl ValidationResult {
     /// # Errors
     /// Returns an error for an unknown violation or failed display transformation.
     pub fn violation(&self, index: usize, display: bool) -> Result<Violation> {
-        let &(rule, error) = self.rows.get(index).context("unknown violation")?;
-        let e = &self.report.rules[rule].violations[error];
+        let (_, e) = self.report.row(index)?;
         let transform = if display {
             Some(crs::transform_between(
                 self.config
@@ -616,6 +625,7 @@ impl ValidationResult {
             warnings: self.warnings.clone(),
             rules: self
                 .report
+                .summary
                 .rules
                 .iter()
                 .map(|r| RuleSummary {
@@ -626,7 +636,7 @@ impl ValidationResult {
                         .other
                         .map(|id| self.layers[id.index()].source.id.clone()),
                     counts: r.counts.clone(),
-                    total: r.violations.len(),
+                    total: r.total,
                 })
                 .collect(),
         }

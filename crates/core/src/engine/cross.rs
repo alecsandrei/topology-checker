@@ -4,7 +4,7 @@ use crate::{
     engine::index::{self, Index},
     model::{Part, PartRef, Parts},
 };
-use geo::{BoundingRect, Geometry, Line, LineString, MultiPolygon, Point, Rect, unary_union};
+use geo::{BoundingRect, Geometry, Line, LineString, Point, Rect};
 use std::collections::BTreeMap;
 
 #[derive(Debug)]
@@ -12,19 +12,13 @@ pub(crate) struct Feature {
     pub reference: PartRef,
     pub geometry: Geometry,
     pub points: Vec<Point>,
-    pub area: MultiPolygon,
+    pub locations: Vec<super::location::Location>,
+    pub area: Option<super::precision::Geometry>,
 }
 #[derive(Debug, Default)]
 pub(crate) struct Views {
     pub features: Vec<Feature>,
     pub feature_index: Index,
-    pub endpoints: Vec<Part<Point>>,
-    pub endpoint_index: Index,
-    pub boundaries: Vec<Part<LineString>>,
-    pub boundary_segments: Vec<Part<Line>>,
-    pub boundary_index: Index,
-    pub segments: Vec<Part<Line>>,
-    pub segment_index: Index,
 }
 
 pub(crate) fn views(parts: &Parts) -> &Views {
@@ -41,38 +35,13 @@ pub(crate) fn views(parts: &Parts) -> &Views {
             features
                 .entry(p.reference.fid)
                 .or_default()
-                .push(p.geometry.clone().into());
-            let ends = [p.geometry.0[0], *p.geometry.0.last().expect("clean line")];
-            if ends[0] != ends[1] {
-                views.endpoints.extend(ends.map(|c| Part {
-                    reference: p.reference,
-                    geometry: Point(c),
-                }));
-            }
-            views
-                .segments
-                .extend(p.geometry.lines().map(|geometry| Part {
-                    reference: p.reference,
-                    geometry,
-                }));
+                .push(p.geometry.as_ref().clone().into());
         }
         for p in &parts.polygons {
             features
                 .entry(p.reference.fid)
                 .or_default()
-                .push(p.geometry.clone().into());
-            for ring in std::iter::once(p.geometry.exterior()).chain(p.geometry.interiors()) {
-                views.boundaries.push(Part {
-                    reference: p.reference,
-                    geometry: ring.clone(),
-                });
-                views
-                    .boundary_segments
-                    .extend(ring.lines().map(|geometry| Part {
-                        reference: p.reference,
-                        geometry,
-                    }));
-            }
+                .push(p.geometry.as_ref().clone().into());
         }
         views.features = features
             .into_iter()
@@ -100,11 +69,23 @@ pub(crate) fn views(parts: &Parts) -> &Views {
                         }
                     })
                     .collect::<Vec<_>>();
+                let locations = polygons
+                    .iter()
+                    .map(super::location::Location::new)
+                    .collect();
+                let area = (polygons.len() > 1)
+                    .then(|| super::arrangement::overlay(&polygons, std::iter::empty(), false));
+                let geometry = if area.is_some() {
+                    Geometry::GeometryCollection(geo::GeometryCollection(geometries))
+                } else {
+                    Merge::AllDimensions.geometry(geometries)
+                };
                 Feature {
+                    area,
+                    locations,
                     reference: PartRef { fid, part: None },
-                    geometry: Merge::AllDimensions.geometry(geometries),
+                    geometry,
                     points,
-                    area: unary_union(&polygons),
                 }
             })
             .collect();
@@ -115,27 +96,125 @@ pub(crate) fn views(parts: &Parts) -> &Views {
                 .enumerate()
                 .filter_map(|(i, p)| p.geometry.bounding_rect().map(|r| (i, r))),
         );
-        views.endpoint_index = index::build(
-            views
-                .endpoints
+        views
+    })
+}
+
+/// Build only polygon boundaries, borrowing unchanged original rings.
+pub(crate) fn boundaries(parts: &Parts) -> &[Part<super::storage::Shared<LineString>>] {
+    parts.boundaries.get_or_init(|| {
+        parts
+            .polygons
+            .iter()
+            .flat_map(|p| {
+                (0..=p.geometry.interiors().len()).map(|ring| Part {
+                    reference: p.reference,
+                    geometry: p.geometry.boundary(ring),
+                    rings: Vec::new(),
+                })
+            })
+            .collect()
+    })
+}
+#[derive(Debug)]
+pub(crate) struct Endpoints {
+    pub points: Vec<Part<Point>>,
+    pub index: Index,
+}
+pub(crate) fn endpoints(parts: &Parts) -> &Endpoints {
+    parts.endpoints.get_or_init(|| {
+        let points = parts
+            .lines
+            .iter()
+            .filter(|p| p.geometry.0.first() != p.geometry.0.last())
+            .flat_map(|p| {
+                [p.geometry.0[0], *p.geometry.0.last().expect("clean line")].map(|c| Part {
+                    reference: p.reference,
+                    geometry: Point(c),
+                    rings: Vec::new(),
+                })
+            })
+            .collect::<Vec<_>>();
+        let index = index::build(
+            points
                 .iter()
                 .enumerate()
                 .map(|(i, p)| (i, Rect::new(p.geometry.0, p.geometry.0))),
         );
-        views.boundary_index = index::build(
-            views
-                .boundary_segments
-                .iter()
-                .enumerate()
-                .map(|(i, p)| (i, p.geometry.bounding_rect())),
-        );
-        views.segment_index = index::build(
-            views
-                .segments
-                .iter()
-                .enumerate()
-                .map(|(i, p)| (i, p.geometry.bounding_rect())),
-        );
-        views
+        Endpoints { points, index }
     })
+}
+#[derive(Debug)]
+pub(crate) struct Segments {
+    pub segments: Vec<Part<Line>>,
+    pub index: Index,
+}
+pub(crate) fn segments(parts: &Parts) -> &Segments {
+    parts.segments.get_or_init(|| {
+        let segments = parts
+            .lines
+            .iter()
+            .flat_map(|p| {
+                p.geometry.lines().map(|geometry| Part {
+                    reference: p.reference,
+                    geometry,
+                    rings: Vec::new(),
+                })
+            })
+            .collect::<Vec<_>>();
+        let index = index::build(
+            segments
+                .iter()
+                .enumerate()
+                .map(|(i, p)| (i, p.geometry.bounding_rect())),
+        );
+        Segments { segments, index }
+    })
+}
+
+impl Feature {
+    pub fn is_areal(&self) -> bool {
+        match &self.geometry {
+            Geometry::Polygon(_) | Geometry::MultiPolygon(_) => true,
+            Geometry::GeometryCollection(parts) => {
+                !parts.0.is_empty() && parts.iter().all(|g| matches!(g, Geometry::Polygon(_)))
+            }
+            _ => false,
+        }
+    }
+    pub fn output(&self) -> Result<Geometry, crate::Error> {
+        let Some(area) = &self.area else {
+            return Ok(self.geometry.clone());
+        };
+        let mut geometries = if let Geometry::GeometryCollection(parts) = &self.geometry {
+            parts
+                .iter()
+                .filter(|g| !matches!(g, Geometry::Polygon(_)))
+                .cloned()
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        geometries.push(area.emit(0.)?.into());
+        Ok(Merge::AllDimensions.geometry(geometries))
+    }
+
+    pub fn position(&self, p: geo::Coord) -> i8 {
+        self.area.as_ref().map_or_else(
+            || {
+                self.locations
+                    .iter()
+                    .map(|l| l.position(p))
+                    .max()
+                    .unwrap_or(-1)
+            },
+            |a| a.position(p),
+        )
+    }
+    pub fn near(&self, p: geo::Coord, tolerance: f64) -> bool {
+        self.area.as_ref().map_or_else(
+            || self.locations.iter().any(|l| l.near(p, tolerance)),
+            |a| a.near(p, tolerance),
+        )
+    }
 }

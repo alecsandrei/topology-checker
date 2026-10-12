@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import importlib.util
-import json
 from collections.abc import Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import FrozenInstanceError
@@ -44,19 +43,25 @@ def test_raw_dispatch_preserves_native_results(
         )
     )
     native.add_rule(canonical, first, second)
-    expected: Any = json.loads(native.validate())
+    expected = native.validate()
     assert report.rules[0].counts == {
-        category: expected["rules"][0]["counts"][category.value]
+        category: expected.summary.rules[0].counts[category.value]
         for category in report.rules[0].counts
     }
-    assert report.error_count == len(expected["rules"][0]["errors"])
-    for actual, error in zip(
-        report.errors, expected["rules"][0]["errors"], strict=True
-    ):
-        assert actual.geometry.equals_exact(shapely.from_wkb(bytes(error["wkb"])), 0)
-        assert actual.error_type.value == error["error_type"]
-        assert actual.to_dict()["origin"] == error["origin"]
-        assert actual.to_dict()["destination"] == error["destination"]
+    assert report.error_count == len(expected.errors)
+    for actual, error in zip(report.errors, expected.errors, strict=True):
+        assert actual.geometry.equals_exact(shapely.from_wkb(error.wkb), 0)
+        assert actual.error_type.value == error.error_type
+        assert actual.to_dict()["origin"] == (
+            None
+            if error.origin is None
+            else dict(zip(["layer", "fid", "part"], error.origin, strict=True))
+        )
+        assert actual.to_dict()["destination"] == (
+            None
+            if error.destination is None
+            else dict(zip(["layer", "fid", "part"], error.destination, strict=True))
+        )
         assert actual.to_dict()["rule"] == rule.value
         assert actual.to_dict()["resolved_rule"] == canonical
     assert report.rules[0].to_dict()["resolved_rule"] == canonical
@@ -337,7 +342,7 @@ def test_native_transaction_validates_before_commit(side: int, failure: str) -> 
     with pytest.raises(ValueError):
         native.register_rule("point/must-not-overlap-with", inputs)
     assert native.warnings() == []
-    assert json.loads(native.validate())["rules"] == []
+    assert native.validate().summary.rules == []
     assert native.register_rule(
         "point/must-not-overlap", [(None, "next", [(0, point)])]
     ) == (0, None)
@@ -361,7 +366,7 @@ def test_native_arity_and_same_id_failures_are_atomic() -> None:
     with pytest.raises(ValueError):
         native.register_rule("point/must-not-overlap-with", [(0, "", []), (0, "", [])])
     assert native.add_layer("after", []) == 1
-    assert json.loads(native.validate())["rules"] == []
+    assert native.validate().summary.rules == []
 
 
 @pytest.mark.parametrize("outer_rule", [False, True])

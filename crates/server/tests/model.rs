@@ -80,7 +80,7 @@ fn binary_mixed_geometry_results_match_direct_core_and_preserve_counts_in_export
     let result = ValidationResult::run(7, cfg, &prepared).unwrap();
     let direct = direct.validate().unwrap();
     assert_eq!(
-        result.report.violations().next().unwrap().geometry,
+        result.report.row(0).unwrap().1.geometry,
         direct.violations().next().unwrap().geometry
     );
     assert_eq!(result.report.violation_count(), 1);
@@ -350,7 +350,7 @@ fn all_geometry_collection_components_stay_one_violation() {
     let result = ValidationResult::run(1, cfg.clone(), &prepare(&cfg, &sources).unwrap()).unwrap();
     assert_eq!(result.report.violation_count(), 1);
     assert_eq!(
-        result.report.violations().next().unwrap().geometry,
+        result.report.row(0).unwrap().1.geometry,
         Geometry::GeometryCollection(geometry)
     );
 }

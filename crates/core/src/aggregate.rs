@@ -12,6 +12,7 @@ pub(crate) enum Merge {
     /// Keep only the highest dimension present, such as overlap areas over their edges.
     /// An unsupported first geometry, such as an empty multi geometry, is kept when
     /// nothing else contributes.
+    #[cfg(test)]
     HighestDimension,
     /// Keep every dimension, such as isolated contacts alongside line pieces, in a
     /// collection when several are present.
@@ -22,6 +23,7 @@ impl Merge {
     pub(crate) fn geometry(self, geometries: impl IntoIterator<Item = Geometry>) -> Geometry {
         let mut collected = Collected::default();
         match self {
+            #[cfg(test)]
             Self::HighestDimension => {
                 let mut fallback = None;
                 for (i, g) in geometries.into_iter().enumerate() {
@@ -107,6 +109,16 @@ impl Collected {
                 _ => Some(multi(parts).into()),
             }
         }
+        // Polygon rule aggregation occurs on original operands before emission.
+        // Never feed emitted intersection coordinates into another overlay.
+        // Parallel candidate discovery must not change multipart ordering.
+        self.lines.sort_by(|a, b| {
+            a.0.iter()
+                .zip(&b.0)
+                .map(|(a, b)| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)))
+                .find(|order| !order.is_eq())
+                .unwrap_or_else(|| a.0.len().cmp(&b.0.len()))
+        });
         self.points
             .sort_by(|a, b| a.x().total_cmp(&b.x()).then(a.y().total_cmp(&b.y())));
         self.points.dedup();

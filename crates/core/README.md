@@ -29,9 +29,37 @@ Part views and R-trees are cached. Polygon unions are cached per layer; line gra
 
 `merge_lines(lines, tolerance)` merges original parts through eligible degree-two endpoint joins and handles isolated cycles. Interior contacts stop joins. Duplicate uses are retained; direction follows the majority of input parts, with the earliest part breaking a tie. `explode_lines(lines)` emits every nondegenerate segment independently. Both functions return `Result` and are implemented in Rust without GEOS.
 
-Exact tolerance preserves distinct input coordinates. Proper line intersections are computed with exact rational arithmetic from their binary floating point inputs, then rounded once, so concurrent crossings share a coordinate. Polygon BooleanOps use geo's geometry engine. These are planar topology checks; polygon validity and geometry repair are outside the current API.
+Exact tolerance preserves distinct input coordinates. Proper line intersections are computed with exact rational arithmetic from their binary floating point inputs, then rounded once, so concurrent crossings share a coordinate. Polygon unions, intersections, and clipping use a component-based exact arrangement over binary input coordinates. Invalid polygon rings and multipart relationships are rejected after degenerate cleanup, with original FID, part, ring, and reason. Geometry repair remains an explicit caller action.
 
 Binary cross-geometry rules use `Topology::add_rule(rule, layer, Some(other))`.
 Public enums and report structs are `#[non_exhaustive]`, so new rules, kinds,
 errors and fields are additive. The original 18 rules remain the registry prefix.
 The core keeps its existing dependencies and planar tolerance model.
+
+`validate_into(sink)` emits deterministic aggregated violations and returns a
+`ReportSummary` without retaining the full report. Sink errors stop emission and
+are returned unchanged as `SinkError::Consumer`. `validate_into_cancellable`
+accepts a shared `CancellationToken`; cancellation releases construction scratch
+and leaves shared caches reusable. `snapshot()` retains immutable input and rule
+snapshots. Duplicate pairs are preserved individually.
+
+Parts share unchanged coordinates and build indexes lazily. Boundary and point
+location indexes are cached for repeated polygon queries. Collapsed lines emit
+`Warning::CollapsedLine` once per original part. Closed parts have no endpoints;
+open endpoints receive the configured boundary-crossing exemption. Polygon
+sliver filtering is `2 * area / perimeter >= tolerance`, including hole boundaries.
+
+Polygon boundary cycles retain exact node identities through articulation
+splitting, orientation, shell ownership and multipart aggregation. Area decisions
+use certified intervals and exact rational fallback; the inclusive perimeter
+threshold is evaluated on exact geometry before output conversion. Original
+vertices stay fixed, and each intersection node has one shared output coordinate.
+Nearest rounding is checked against topology constraints. Independent affected
+neighborhoods search within 1, 2, 4, 8 and 16 floating-point steps, with a limit of
+100,000 candidate assignments and cooperative cancellation. Rounded output never
+feeds another overlay or a containment decision.
+
+`Error::Precision` identifies an output constraint that cannot be satisfied or a
+search budget that was exhausted. Rule callers attach operation, layer and FID
+context. The error propagates through eager reports, sinks and disk-backed
+exports; no successful final summary is returned for a failed validation.

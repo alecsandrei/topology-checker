@@ -18,20 +18,35 @@ pub(super) fn contained(
     let av = cross::views(t.parts(spec.layer)?);
     let bv = cross::views(t.parts(other)?);
     let violations = index::pairs(&av.feature_index, &bv.feature_index, 0., false)
-        .par_iter()
-        .filter_map(|&(i, j)| {
+        .par_bridge()
+        .map(|(i, j)| {
             let (a, b) = (&av.features[i], &bv.features[j]);
-            let relation = b.geometry.relate(&a.geometry);
-            (relation.is_contains() && !relation.is_within()).then(|| {
-                violation(
-                    spec,
-                    ViolationKind::Contained,
-                    a.geometry.clone(),
-                    Some(a.reference.at(spec.layer)),
-                    Some(b.reference.at(other)),
-                )
-            })
+            let contained = if b.is_areal()
+                && matches!(
+                    a.geometry,
+                    geo::Geometry::Point(_) | geo::Geometry::MultiPoint(_)
+                ) {
+                let positions = a.points.iter().map(|p| b.position(p.0)).collect::<Vec<_>>();
+                positions.iter().all(|&p| p >= 0) && positions.contains(&1)
+            } else {
+                let relation = b.geometry.relate(&a.geometry);
+                relation.is_contains() && !relation.is_within()
+            };
+            if !contained {
+                return Ok(None);
+            }
+            let geometry = super::feature_geometry(t, spec, spec.layer, a)?;
+            Ok(Some(violation(
+                spec,
+                ViolationKind::Contained,
+                geometry,
+                Some(a.reference.at(spec.layer)),
+                Some(b.reference.at(other)),
+            )))
         })
+        .collect::<Result<Vec<_>, Error>>()?
+        .into_iter()
+        .flatten()
         .collect();
     Ok(aggregate(violations, Merge::AllDimensions))
 }

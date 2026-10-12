@@ -5,13 +5,21 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import math
 import sys
 from importlib.metadata import distribution
 from pathlib import Path
 
 import topology_checker
-from shapely.geometry import LineString, Point
-from topology_checker import Rule, Topology, _native, explode_lines, merge_lines
+from shapely.geometry import LineString, Point, Polygon, box
+from topology_checker import (
+    PrecisionError,
+    Rule,
+    Topology,
+    _native,
+    explode_lines,
+    merge_lines,
+)
 
 
 def check_install(without_geopandas: bool = False) -> None:
@@ -41,8 +49,44 @@ def check_install(without_geopandas: bool = False) -> None:
     report = topology.validate()
     assert report.error_count == 1
     assert report.to_dict()["rules"]
+    with topology.iter_validate(batch_size=1) as stream:
+        violations = tuple(stream)
+    assert len(violations) == 1
+    assert violations[0].to_dict() == report.violations[0].to_dict()
+    assert stream.summary is not None and stream.summary.error_count == 1
     lines = [LineString([(0, 0), (1, 0)]), LineString([(1, 0), (2, 0)])]
     assert len(explode_lines(merge_lines(lines))) == 2
+    triangle = Polygon(
+        [
+            (-1782079.763005541, -2764781.752256425),
+            (-2115977.5161031107, 2038587.3908392591),
+            (-2115977.5161031107, 2038587.390839259),
+        ]
+    )
+    exact = Topology()
+    exact.add_rule(Rule.MUST_NOT_OVERLAP, [triangle, box(-1e8, -1e8, 1e8, 1e8)])
+    (overlap,) = exact.validate().violations
+    assert overlap.geometry.is_valid
+    x = math.nextafter(1.0, 2.0)
+    narrow = Topology()
+    narrow.add_rule(
+        Rule.MUST_NOT_HAVE_GAPS, [box(1, 0, x, 1), Polygon([(1, -1), (x, -1), (1, 1)])]
+    )
+    try:
+        narrow.validate()
+    except PrecisionError as error:
+        assert isinstance(error, RuntimeError) and "polygon union emission" in str(
+            error
+        )
+    else:
+        raise AssertionError("unrepresentable exact geometry must fail explicitly")
+    with narrow.iter_validate(1) as failed:
+        try:
+            list(failed)
+        except PrecisionError:
+            assert failed.summary is None
+        else:
+            raise AssertionError("a failed stream cannot have a successful summary")
     print(f"Tested installed topology-checker {installed.version}: {package}")
 
 

@@ -1,20 +1,19 @@
 //! Line parts against individual polygon areas and their boundaries.
-use super::{boundary_distance, selected_pieces, violation};
+use super::{selected_pieces, violation};
 use crate::{
     Error, LayerId, RuleSpec, Topology, Violation, ViolationKind,
     aggregate::{Merge, aggregate},
     engine::{
         cluster::distance,
-        cross::{self, Views},
         index,
         line_graph::{projection, proper_intersection},
+        location::{self, Location},
         polygons,
     },
     model::Part,
 };
 use geo::{
-    BoundingRect, Contains, Coord, Distance, Euclidean, Geometry, Length, LineString, Point,
-    Polygon, Relate,
+    BoundingRect, Coord, Distance, Euclidean, Geometry, Length, LineString, Point, Polygon,
     line_intersection::{LineIntersection, line_intersection},
 };
 use rayon::prelude::*;
@@ -37,22 +36,19 @@ pub(super) fn properly_inside(
     other: LayerId,
 ) -> Result<Vec<Violation>, Error> {
     let a = t.parts(spec.layer)?;
-    let union = &polygons::union(t.parts(other)?).geometry;
+    let union = polygons::union(t.parts(other)?);
     let violations = a
         .lines
         .par_iter()
         .filter_map(|l| {
-            let inside = union.relate(&l.geometry).is_contains()
-                && union
-                    .0
-                    .iter()
-                    .flat_map(|p| std::iter::once(p.exterior()).chain(p.interiors()))
-                    .all(|r| Euclidean.distance(&l.geometry, r) > t.tolerance());
+            let inside = union
+                .geometry
+                .properly_contains(l.geometry.as_ref(), t.tolerance());
             (!inside).then(|| {
                 violation(
                     spec,
                     ViolationKind::Outside,
-                    l.geometry.clone(),
+                    l.geometry.as_ref().clone(),
                     Some(l.reference.at(spec.layer)),
                     None,
                 )
@@ -71,10 +67,12 @@ pub(super) fn run(
 ) -> Result<Vec<Violation>, Error> {
     let a = t.parts(spec.layer)?;
     let b = t.parts(other)?;
-    let bv = cross::views(b);
-    let violations = index::pairs(&a.line_index, &b.polygon_index, t.tolerance(), false)
-        .par_iter()
-        .flat_map_iter(|&(i, j)| pair(t, spec, other, mode, &a.lines[i], &b.polygons[j], bv))
+    let bv = location::locations(b);
+    let violations = index::pairs(a.line_index(), b.polygon_index(), t.tolerance(), false)
+        .par_bridge()
+        .flat_map_iter(|(i, j)| {
+            t.cancellable(|| pair(t, spec, other, mode, &a.lines[i], &b.polygons[j], &bv[j]))
+        })
         .collect();
     Ok(aggregate(violations, Merge::AllDimensions))
 }
@@ -89,15 +87,17 @@ fn pair(
     spec: RuleSpec,
     other: LayerId,
     mode: LinePolygon,
-    line: &Part<LineString>,
-    polygon: &Part<Polygon>,
-    views: &Views,
+    line: &Part<crate::engine::storage::Shared<LineString>>,
+    polygon: &Part<crate::engine::storage::Shared<Polygon>>,
+    views: &Location,
 ) -> Vec<Violation> {
     let origin = Some(line.reference.at(spec.layer));
     let destination = Some(polygon.reference.at(other));
     let mut cuts = Vec::new();
     let mut contacts = Vec::new();
+    let mut boundary_intervals = Vec::new();
     for (i, segment) in line.geometry.lines().enumerate() {
+        crate::cancel::check();
         cuts.push(Cut {
             position: i as f64,
             point: segment.start,
@@ -107,7 +107,7 @@ fn pair(
             point: segment.end,
         });
         let mut candidates = views
-            .boundary_index
+            .tree
             .locate_in_envelope_intersecting(&index::expanded(
                 segment.bounding_rect(),
                 t.tolerance(),
@@ -116,24 +116,21 @@ fn pair(
             .collect::<Vec<_>>();
         candidates.sort_unstable();
         for j in candidates {
-            let boundary = &views.boundary_segments[j];
-            // Both references come from the polygon layer's cached views.
-            if (boundary.reference.fid, boundary.reference.part)
-                != (polygon.reference.fid, polygon.reference.part)
-            {
-                continue;
-            }
-            if let Some(intersection) = line_intersection(segment, boundary.geometry) {
+            let boundary = views.segments[j];
+            if let Some(intersection) = line_intersection(segment, boundary) {
                 let points = match intersection {
                     LineIntersection::SinglePoint {
                         intersection,
                         is_proper,
                     } => vec![if is_proper {
-                        proper_intersection(segment, boundary.geometry).unwrap_or(intersection)
+                        proper_intersection(segment, boundary).unwrap_or(intersection)
                     } else {
                         intersection
                     }],
                     LineIntersection::Collinear { intersection } => {
+                        let first = i as f64 + projection(segment, intersection.start).0;
+                        let last = i as f64 + projection(segment, intersection.end).0;
+                        boundary_intervals.push((first.min(last), first.max(last)));
                         vec![intersection.start, intersection.end]
                     }
                 };
@@ -149,11 +146,11 @@ fn pair(
                 // A minimum segment distance occurs at an endpoint projection unless
                 // they cross, which has already supplied an exact contact.
                 for point in [segment.start, segment.end] {
-                    if Euclidean.distance(&Point(point), &boundary.geometry) <= t.tolerance() {
+                    if Euclidean.distance(&Point(point), &boundary) <= t.tolerance() {
                         contacts.push(Point(point));
                     }
                 }
-                for point in [boundary.geometry.start, boundary.geometry.end] {
+                for point in [boundary.start, boundary.end] {
                     let (_, projected) = projection(segment, point);
                     if distance(point, projected) <= t.tolerance() {
                         contacts.push(Point(projected));
@@ -167,13 +164,16 @@ fn pair(
     let states = cuts
         .windows(2)
         .map(|pair| {
-            let midpoint = Point(Coord {
-                x: pair[0].point.x + (pair[1].point.x - pair[0].point.x) / 2.,
-                y: pair[0].point.y + (pair[1].point.y - pair[0].point.y) / 2.,
-            });
-            if boundary_distance(&polygon.geometry, &midpoint) == 0. {
+            if boundary_intervals
+                .iter()
+                .any(|&(a, b)| pair[0].position >= a && pair[1].position <= b)
+            {
                 0
-            } else if polygon.geometry.contains(&midpoint) {
+            } else if crate::engine::arrangement::midpoint_inside(
+                views,
+                pair[0].point,
+                pair[1].point,
+            ) {
                 1
             } else {
                 -1
@@ -183,7 +183,15 @@ fn pair(
     if mode == LinePolygon::Cross {
         let mut violations = Vec::new();
         for i in 1..cuts.len().saturating_sub(1) {
-            if states[i - 1] * states[i] == -1 {
+            let open = line.geometry.0.first() != line.geometry.0.last();
+            let endpoint_contact = open
+                && [
+                    line.geometry.0[0],
+                    *line.geometry.0.last().expect("clean line"),
+                ]
+                .into_iter()
+                .any(|p| distance(p, cuts[i].point) <= t.tolerance());
+            if states[i - 1] * states[i] == -1 && !endpoint_contact {
                 violations.push(violation(
                     spec,
                     ViolationKind::Crossing,
@@ -246,4 +254,102 @@ fn pair(
             destination,
         )]
     }
+}
+
+/// Split source segments against local boundaries, then classify covered intervals.
+pub(super) fn inside(
+    t: &Topology,
+    spec: RuleSpec,
+    other: LayerId,
+) -> Result<Vec<Violation>, Error> {
+    let input = t.parts(spec.layer)?;
+    let target = t.parts(other)?;
+    let target_locations = location::locations(target);
+    let violations = input
+        .lines
+        .par_iter()
+        .flat_map_iter(|line| {
+            let Some(rect) = line.geometry.bounding_rect() else {
+                return Vec::new();
+            };
+            let locations = target
+                .polygon_index()
+                .locate_in_envelope_intersecting(&index::envelope(rect))
+                .map(|item| &target_locations[item.data])
+                .collect::<Vec<_>>();
+            let mut cuts = Vec::new();
+            let mut shared = Vec::new();
+            for (i, s) in line.geometry.lines().enumerate() {
+                crate::cancel::check();
+                cuts.push(Cut {
+                    position: i as f64,
+                    point: s.start,
+                });
+                cuts.push(Cut {
+                    position: (i + 1) as f64,
+                    point: s.end,
+                });
+                for location in &locations {
+                    for item in location
+                        .tree
+                        .locate_in_envelope_intersecting(&index::envelope(s.bounding_rect()))
+                    {
+                        let boundary = location.segments[item.data];
+                        if let Some(contact) = line_intersection(s, boundary) {
+                            let points = match contact {
+                                LineIntersection::SinglePoint {
+                                    intersection,
+                                    is_proper,
+                                } => vec![if is_proper {
+                                    proper_intersection(s, boundary).unwrap_or(intersection)
+                                } else {
+                                    intersection
+                                }],
+                                LineIntersection::Collinear { intersection } => {
+                                    let a = i as f64 + projection(s, intersection.start).0;
+                                    let b = i as f64 + projection(s, intersection.end).0;
+                                    shared.push((a.min(b), a.max(b)));
+                                    vec![intersection.start, intersection.end]
+                                }
+                            };
+                            for point in points {
+                                cuts.push(Cut {
+                                    position: i as f64 + projection(s, point).0,
+                                    point,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+            cuts.sort_by(|a, b| a.position.total_cmp(&b.position));
+            cuts.dedup_by(|a, b| a.position == b.position);
+            let coords = cuts.iter().map(|c| c.point).collect::<Vec<_>>();
+            let outside = cuts
+                .windows(2)
+                .map(|c| {
+                    !shared
+                        .iter()
+                        .any(|&(a, b)| c[0].position >= a && c[1].position <= b)
+                        && !locations.iter().any(|p| {
+                            crate::engine::arrangement::midpoint_inside(p, c[0].point, c[1].point)
+                        })
+                })
+                .collect::<Vec<_>>();
+            selected_pieces(&coords, &outside)
+                .into_iter()
+                .filter(|piece| Euclidean.length(piece) > t.tolerance())
+                .map(|piece| {
+                    violation(
+                        spec,
+                        ViolationKind::Outside,
+                        piece,
+                        Some(line.reference.at(spec.layer)),
+                        None,
+                    )
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    Ok(aggregate(violations, Merge::AllDimensions))
 }

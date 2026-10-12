@@ -90,20 +90,43 @@ pub(crate) fn read_geojson(path: &Path) -> Result<Vec<RawLayer>> {
     }])
 }
 pub(crate) fn write_geojson(path: &Path, layer: &DatasetLayer) -> Result<()> {
-    let features=layer.records.iter().map(|r|{
-        let mut f=json!({"type":"Feature","geometry":r.geometry.as_ref().map(|g|geojson::Geometry::from(&codec::normalize(g))),"properties":r.properties});
-        if let Some(id)=r.id{f["id"]=id.into();} f
-    }).collect::<Vec<_>>();
-    let mut collection = json!({"type":"FeatureCollection","name":layer.name,"features":features});
+    write_geojson_source(path, layer)
+}
+pub(crate) fn write_geojson_source(
+    path: &Path,
+    source: &dyn crate::write::RecordSource,
+) -> Result<()> {
+    use std::io::Write;
+    let layer = source.metadata();
+    let mut out = BufWriter::new(File::create(path)?);
+    out.write_all(b"{\"type\":\"FeatureCollection\",\"name\":")?;
+    serde_json::to_writer(&mut out, &layer.name)?;
     if let Some(s) = &layer.srs
         && s.epsg() != Some(4326)
     {
-        collection["crs"] =
-            json!({"type":"name","properties":{"name":s.authority().unwrap_or(s.to_wkt()?)}});
+        out.write_all(b",\"crs\":")?;
+        serde_json::to_writer(
+            &mut out,
+            &json!({"type":"name","properties":{"name":s.authority().unwrap_or(s.to_wkt()?)}}),
+        )?;
     }
-    serde_json::to_writer(BufWriter::new(File::create(path)?), &collection)?;
+    out.write_all(b",\"features\":[")?;
+    for (i, r) in source.records().enumerate() {
+        let r = r?;
+        if i > 0 {
+            out.write_all(b",")?;
+        }
+        let mut f = json!({"type":"Feature","geometry":r.geometry.as_ref().map(|g|geojson::Geometry::from(&codec::normalize(g))),"properties":r.properties});
+        if let Some(id) = r.id {
+            f["id"] = id.into();
+        }
+        serde_json::to_writer(&mut out, &f)?;
+    }
+    out.write_all(b"]}")?;
+    out.flush()?;
     Ok(())
 }
+
 fn dbf_json(v: shapefile::dbase::FieldValue) -> Value {
     use shapefile::dbase::FieldValue::*;
     match v {
@@ -245,6 +268,13 @@ fn dbf_integer_values(
     Ok(output)
 }
 pub(crate) fn write_shape(path: &Path, layer: &DatasetLayer) -> Result<()> {
+    write_shape_source(path, layer)
+}
+pub(crate) fn write_shape_source(
+    path: &Path,
+    source: &dyn crate::write::RecordSource,
+) -> Result<()> {
+    let layer = source.metadata();
     use shapefile::{
         Shape, Writer,
         dbase::{self, FieldValue, TableWriterBuilder},
@@ -265,7 +295,8 @@ pub(crate) fn write_shape(path: &Path, layer: &DatasetLayer) -> Result<()> {
         };
     }
     let mut writer = Writer::from_path(path, table)?;
-    for r in &layer.records {
+    for r in source.records() {
+        let r = r?;
         let g = r
             .geometry
             .as_ref()
@@ -320,7 +351,8 @@ pub(crate) fn write_shape(path: &Path, layer: &DatasetLayer) -> Result<()> {
     dbf.read_exact(&mut header)?;
     let begin = u16::from_le_bytes(header[8..10].try_into()?) as u64;
     let width = u16::from_le_bytes(header[10..12].try_into()?) as u64;
-    for (ordinal, record) in layer.records.iter().enumerate() {
+    for (ordinal, record) in source.records().enumerate() {
+        let record = record?;
         let mut offset = 1u64;
         for field in &layer.fields {
             if field.kind == FieldType::Integer
@@ -534,6 +566,10 @@ fn fgb_geometry<'a>(
     ))
 }
 pub(crate) fn write_fgb(path: &Path, layer: &DatasetLayer) -> Result<()> {
+    write_fgb_source(path, layer)
+}
+pub(crate) fn write_fgb_source(path: &Path, source: &dyn crate::write::RecordSource) -> Result<()> {
+    let layer = source.metadata();
     use flatgeobuf::{
         Column, ColumnArgs, ColumnType, Crs, CrsArgs, Feature, FeatureArgs, Header, HeaderArgs,
     };
@@ -542,19 +578,21 @@ pub(crate) fn write_fgb(path: &Path, layer: &DatasetLayer) -> Result<()> {
     while layer.fields.iter().any(|f| f.name == identity) {
         identity.push('_');
     }
-    let json_fields = layer
-        .fields
-        .iter()
-        .filter(|f| {
-            f.kind == FieldType::Text
-                && layer.records.iter().any(|r| {
-                    r.properties
-                        .get(&f.name)
-                        .is_some_and(|v| !v.is_null() && !v.is_string())
-                })
-        })
-        .map(|f| f.name.as_str())
-        .collect::<std::collections::HashSet<_>>();
+    let mut json_fields = std::collections::HashSet::new();
+    let mut feature_count = 0_u64;
+    for r in source.records() {
+        let r = r?;
+        feature_count += 1;
+        for f in &layer.fields {
+            if f.kind == FieldType::Text
+                && r.properties
+                    .get(&f.name)
+                    .is_some_and(|v| !v.is_null() && !v.is_string())
+            {
+                json_fields.insert(f.name.as_str());
+            }
+        }
+    }
     let mut builder = flatbuffers::FlatBufferBuilder::new();
     let mut columns = Vec::new();
     let name = builder.create_string(&identity);
@@ -610,7 +648,7 @@ pub(crate) fn write_fgb(path: &Path, layer: &DatasetLayer) -> Result<()> {
         &HeaderArgs {
             name: Some(name),
             columns: Some(columns),
-            features_count: layer.records.len().try_into()?,
+            features_count: feature_count,
             index_node_size: 0,
             crs,
             metadata: Some(metadata),
@@ -621,7 +659,8 @@ pub(crate) fn write_fgb(path: &Path, layer: &DatasetLayer) -> Result<()> {
     let mut output = BufWriter::new(File::create(path)?);
     output.write_all(&[b'f', b'g', b'b', 3, b'f', b'g', b'b', 0])?;
     output.write_all(builder.finished_data())?;
-    for (ordinal, r) in layer.records.iter().enumerate() {
+    for (ordinal, r) in source.records().enumerate() {
+        let r = r?;
         let mut builder = flatbuffers::FlatBufferBuilder::new();
         let geometry = r
             .geometry
