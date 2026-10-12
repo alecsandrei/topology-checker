@@ -945,7 +945,7 @@ fn contained_features_support_all_target_families_and_topological_equality() {
 }
 
 use serde_json::Value;
-use topology_checker_core::geo::Coord;
+use topology_checker_core::geo::{Area, Coord};
 
 fn geometry(value: &Value) -> Geometry {
     let line = |v: &Value| {
@@ -1017,6 +1017,63 @@ fn topology(rule: Rule, geometries: Vec<Geometry>, binary: bool, tolerance: f64)
     t
 }
 #[test]
+fn dc_and_ons_emission_preserve_substantial_area_and_original_provenance() {
+    for name in [
+        "dc_precinct_smd",
+        "ons_degree_two",
+        "ons_adjacent_nodes",
+        "ons_source_contacts",
+    ] {
+        for tolerance in [0., 0.001, 1.] {
+            let t = topology(
+                Rule::PolygonMustNotOverlapWith,
+                fixture(name),
+                true,
+                tolerance,
+            );
+            let report = t.validate().unwrap();
+            assert_eq!(report.violation_count(), 1, "{name}, {tolerance}");
+            let v = report.violations().next().unwrap();
+            assert_eq!(v.kind, ViolationKind::Overlap);
+            assert_eq!(v.origin.unwrap().fid, -91);
+            assert_eq!(v.destination.unwrap().fid, 872);
+            let area = match &v.geometry {
+                Geometry::Polygon(p) => p.unsigned_area(),
+                Geometry::MultiPolygon(p) => p.unsigned_area(),
+                _ => panic!("expected polygon"),
+            };
+            assert!(area > 0.);
+            if name == "dc_precinct_smd" {
+                assert!((area - 371430.874).abs() <= 37.1430874);
+            }
+            assert_eq!(
+                serde_json::to_value(&report).unwrap(),
+                serde_json::to_value(t.validate().unwrap()).unwrap()
+            );
+        }
+    }
+}
+#[test]
+fn ons_and_brp_gap_emission_accepts_original_contact_topology() {
+    for name in ["ons_gaps", "brp_contacts"] {
+        for tolerance in [0., 0.001, 1.] {
+            let t = topology(
+                Rule::PolygonMustNotHaveGaps,
+                fixture(name),
+                false,
+                tolerance,
+            );
+            let report = t.validate().unwrap();
+            assert!(report.violation_count() > 0);
+            assert!(
+                report
+                    .violations()
+                    .all(|v| v.origin.is_none() && v.destination.is_none())
+            );
+        }
+    }
+}
+#[test]
 fn chicago_near_boundary_interval_is_contact() {
     let t = topology(
         Rule::LineMustNotCrossPolygonBoundaries,
@@ -1065,4 +1122,21 @@ fn nearby_bent_original_intervals_support_both_boundary_coverage_directions() {
         1.,
     );
     assert_eq!(t.validate().unwrap().violation_count(), 1);
+}
+#[test]
+fn tfl_original_crossing_survives_tolerance() {
+    let t = topology(
+        Rule::LineMustNotSelfIntersect,
+        fixture("tfl_self_crossing"),
+        false,
+        0.001,
+    );
+    let report = t.validate().unwrap();
+    assert_eq!(
+        report
+            .violations()
+            .filter(|v| v.kind == ViolationKind::SelfCrossing)
+            .count(),
+        1
+    );
 }

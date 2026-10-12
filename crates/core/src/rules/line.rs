@@ -62,7 +62,33 @@ pub(super) fn run(t: &Topology, spec: RuleSpec, check: LineCheck) -> Result<Vec<
             let graph = isolated.graph(vec![layer])?;
             let mut errors = overlaps(&graph, spec, true, None);
             if matches!(check, LineCheck::SelfIntersect) {
-                errors.extend(self_crossings(&graph, spec));
+                // Original passages retain crossings that tolerance clustering
+                // would collapse onto a neighboring bend or source endpoint.
+                let mut exact = Topology::new(0.)?;
+                let exact_layer = exact.add_layer(crate::Layer::from_features(
+                    "self",
+                    [(fid, geometry.clone())],
+                ));
+                let original = exact.graph(vec![exact_layer])?;
+                errors.extend(
+                    self_crossings(&original, spec, t.tolerance())
+                        .into_iter()
+                        .filter(|v| {
+                            let Geometry::Point(p) = v.geometry else {
+                                return false;
+                            };
+                            !original.parts.iter().enumerate().any(|(i, part)| {
+                                let coords = &original.original(i).0;
+                                !part.closed()
+                                    && [coords[0], *coords.last().expect("source endpoint")]
+                                        .iter()
+                                        .any(|&q| {
+                                            crate::engine::cluster::distance(p.0, q)
+                                                <= t.tolerance()
+                                        })
+                            })
+                        }),
+                );
             }
             for mut error in errors {
                 if let Some(origin) = &mut error.origin {
@@ -85,7 +111,7 @@ pub(super) fn run(t: &Topology, spec: RuleSpec, check: LineCheck) -> Result<Vec<
         LineCheck::SelfOverlap => overlaps(&graph, spec, true, None),
         LineCheck::SelfIntersect => {
             let mut violations = overlaps(&graph, spec, true, None);
-            violations.extend(self_crossings(&graph, spec));
+            violations.extend(self_crossings(&graph, spec, t.tolerance()));
             violations
         }
         LineCheck::Intersect { touch } => {
@@ -426,10 +452,13 @@ fn crosses(origin: Coord, a: [Coord; 2], b: [Coord; 2]) -> bool {
     });
     (0..4).all(|i| rays[i].1 != rays[(i + 1) % 4].1)
 }
-fn self_crossings(g: &LineGraph, spec: RuleSpec) -> Vec<Violation> {
+fn self_crossings(g: &LineGraph, spec: RuleSpec, tolerance: f64) -> Vec<Violation> {
     type Passage = (FeatureRef, [usize; 2]);
     let mut visits: BTreeMap<(usize, Feature), Vec<Passage>> = BTreeMap::new();
-    for part in &g.parts {
+    for (part_id, part) in g.parts.iter().enumerate() {
+        if crate::engine::line_graph::collapsed(g.original(part_id), tolerance) {
+            continue;
+        }
         for triple in part.nodes.windows(3) {
             visits
                 .entry((triple[1], part.reference.feature()))

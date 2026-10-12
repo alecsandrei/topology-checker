@@ -10,7 +10,15 @@ from typing import Any
 
 import pytest
 import shapely
-from shapely.geometry import GeometryCollection, LineString, Point, mapping
+from shapely.geometry import (
+    GeometryCollection,
+    LineString,
+    MultiPolygon,
+    Point,
+    Polygon,
+    box,
+    mapping,
+)
 from shapely.geometry.base import BaseGeometry
 from topology_checker import GeometryKind, Rule, RuleSpec, Topology, _native
 
@@ -419,3 +427,28 @@ def test_one_shot_iterators_are_consumed_by_each_raw_registration() -> None:
     assert len(topology.layers) == 1
     topology.add_rule(Rule.MUST_NOT_OVERLAP, first.layer)
     assert topology.validate().error_count == 2
+
+
+def test_multipart_containment_and_point_contacts() -> None:
+    """Disjoint islands, islands in holes and point contacts are valid parts."""
+    shell = Polygon(
+        box(0, 0, 10, 10).exterior.coords, [box(2, 2, 8, 8).exterior.coords]
+    )
+    for parts in [
+        [shell, box(3, 3, 4, 4)],
+        [box(0, 0, 1, 1), box(1, 1, 2, 2)],
+        [box(0, 0, 1, 1), box(3, 3, 4, 4)],
+    ]:
+        multi = MultiPolygon(parts)
+        assert multi.is_valid
+        topology = Topology()
+        topology.add_layer([multi])
+    for parts in [
+        [box(0, 0, 10, 10), box(1, 1, 2, 2)],
+        [box(0, 0, 2, 2), box(1, 1, 3, 3)],
+        [box(0, 0, 1, 1), box(1, 0, 2, 1)],
+    ]:
+        topology = Topology()
+        with pytest.raises(ValueError, match="invalid multipart"):
+            topology.add_layer([MultiPolygon(parts)])
+        assert topology.layers == ()

@@ -556,6 +556,10 @@ impl Parts {
                     path.pop();
                 }
                 let polygons = &self.polygons[first..];
+                let locations = polygons
+                    .iter()
+                    .map(|p| crate::engine::location::Location::new(&p.geometry))
+                    .collect::<Vec<_>>();
                 let tree = index::build(
                     polygons
                         .iter()
@@ -568,8 +572,8 @@ impl Parts {
                     )) {
                         if item.data > i
                             && crate::engine::validity::multipart(
-                                &p.geometry,
-                                &polygons[item.data].geometry,
+                                &locations[i],
+                                &locations[item.data],
                             )
                         {
                             self.invalid = Some(Invalid::Polygon {
