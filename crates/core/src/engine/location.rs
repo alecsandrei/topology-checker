@@ -5,7 +5,7 @@ use super::{
     line_graph::projection,
 };
 use geo::{
-    BoundingRect, Coord, Kernel, Line, Polygon, Rect,
+    BoundingRect, Coord, Kernel, Line, Polygon, Rect, Winding,
     kernels::{Orientation, RobustKernel},
 };
 
@@ -15,9 +15,20 @@ pub(crate) struct Location {
     pub tree: Index,
     pub bounds: Rect,
     pub anchors: Vec<(usize, usize)>,
+    pub interior_left: Vec<bool>,
 }
 impl Location {
     pub fn new(polygon: &Polygon) -> Self {
+        let interior_left = std::iter::once(polygon.exterior())
+            .chain(polygon.interiors())
+            .enumerate()
+            .flat_map(|(i, r)| {
+                let left = (r.winding_order()
+                    == Some(geo::winding_order::WindingOrder::CounterClockwise))
+                    == (i == 0);
+                std::iter::repeat_n(left, r.0.len() - 1)
+            })
+            .collect();
         let mut start = 0;
         let anchors = std::iter::once(polygon.exterior())
             .chain(polygon.interiors())
@@ -43,6 +54,7 @@ impl Location {
             tree,
             bounds: polygon.bounding_rect().expect("clean polygon"),
             anchors,
+            interior_left,
         }
     }
     /// -1 outside, 0 boundary, 1 interior. Ray decisions use robust orientations.

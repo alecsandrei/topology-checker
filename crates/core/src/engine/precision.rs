@@ -1011,21 +1011,36 @@ fn search(
 
 #[derive(Debug, Default)]
 pub(crate) struct Geometry(pub(super) Vec<Component>);
-
-impl Geometry {
-    pub fn has_area(&self) -> bool {
-        self.0.iter().any(|c| {
-            c.polygons.iter().any(|p| {
-                substantial(
-                    &c.nodes,
-                    &std::iter::once(p.shell.as_slice())
-                        .chain(p.holes.iter().map(Vec::as_slice))
-                        .collect::<Vec<_>>(),
-                    0.,
-                )
-            })
-        })
+/// Emit an already validated original operand after certified filtering.
+/// No rounded overlay coordinates participate in the containment decision.
+pub(crate) fn original(polygon: &Polygon, tolerance: f64) -> MultiPolygon {
+    let mut nodes = Vec::new();
+    let mut rings = Vec::new();
+    for ring in std::iter::once(polygon.exterior()).chain(polygon.interiors()) {
+        let start = nodes.len();
+        nodes.extend(ring.0.iter().copied().map(Exact::Input));
+        rings.push((start..nodes.len()).collect::<Vec<_>>());
     }
+    if !substantial(
+        &nodes,
+        &rings.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+        tolerance,
+    ) {
+        return MultiPolygon(vec![]);
+    }
+    let mut polygon = polygon.clone();
+    use geo::Winding;
+    polygon.exterior_mut(|r| r.make_ccw_winding());
+    polygon.interiors_mut(|rings| {
+        for r in rings {
+            r.make_cw_winding();
+        }
+    });
+    let mut polygons = vec![polygon];
+    canonicalize(&mut polygons);
+    MultiPolygon(polygons)
+}
+impl Geometry {
     pub fn emit(&self, tolerance: f64) -> Result<MultiPolygon, Error> {
         let mut polygons = Vec::new();
         for component in &self.0 {
