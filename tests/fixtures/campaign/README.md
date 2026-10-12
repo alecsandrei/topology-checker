@@ -2,3 +2,5 @@ These immutable regression fixtures were copied from the sibling topology-checke
 
 
 `chicago_boundary.json` preserves Chicago transportation FID 31294 and community area FID 57 from the prepared WKB caches. At 1 mm tolerance the excursion lies along a sustained nearby boundary interval. `tiger_near_duplicate.json` preserves the source road reproducer. Bent synthetic copies use original interior vertices and unequal segmentation; their common length is exactly twice sqrt(26).
+
+`tfl_self_crossing.json` preserves TfL cycle lane FID 23456. Original first and third passages cross more than 1 mm from both open endpoints. Its five original vertices retain source CRS and attribution.
