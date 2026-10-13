@@ -27,6 +27,41 @@ def transform(g: BaseGeometry, scale: float, offset: float) -> BaseGeometry:
     return affine_transform(g, [scale, 0, 0, scale, offset, -offset])
 
 
+@pytest.mark.parametrize("tolerance", [0.0, 0.001, 1.0])
+@pytest.mark.parametrize("binary", [False, True])
+@pytest.mark.parametrize(
+    "rule",
+    [
+        Rule.MUST_NOT_OVERLAP,
+        Rule.MUST_NOT_INTERSECT,
+        Rule.MUST_NOT_INTERSECT_OR_TOUCH_INTERIOR,
+    ],
+)
+def test_triangulated_road_network_has_only_endpoint_contacts(
+    tolerance: float, binary: bool, rule: Rule
+) -> None:
+    """A triangulated grid has no shared intervals or interior intersections."""
+    lines: list[BaseGeometry] = []
+    for x, y in itertools.product(range(15), repeat=2):
+        start = (20 * x, 20 * y)
+        lines.extend(
+            [
+                LineString([start, (20 * x + 20, 20 * y)]),
+                LineString([start, (20 * x, 20 * y + 20)]),
+                LineString([start, (20 * x + 20, 20 * y + 20)]),
+            ]
+        )
+    lines = [shapely.reverse(line) for line in reversed(lines)]
+    t = case_topology(
+        rule,
+        lines[::2] if binary else lines,
+        lines[1::2] if binary else None,
+        tolerance,
+    )
+    assert t.validate().is_valid
+    assert_equivalent(t)
+
+
 def test_signed_zero_does_not_reverse_polygon_source_winding() -> None:
     polygon = Polygon([(-0.0, 1), (0.0, 0), (1, 0), (1, 1)])
     expected = box(0, 0, 1, 1)

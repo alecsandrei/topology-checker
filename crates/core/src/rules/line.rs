@@ -221,19 +221,10 @@ fn overlaps(
     let mut groups: BTreeMap<(Feature, Option<Feature>), Overlap> = BTreeMap::new();
     // Choose an immutable representative by geometry, independent of FIDs,
     // input order and traversal direction. Unequal segmentation remains local.
-    let reversed = (0..g.parts.len())
-        .map(|part| {
-            let coords = &g.original(part).0;
-            coords
-                .iter()
-                .zip(coords.iter().rev())
-                .map(|(a, b)| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)))
-                .find(|o| !o.is_eq())
-                .is_some_and(|o| o.is_gt())
-        })
-        .collect::<Vec<_>>();
-    for matched in g.matches() {
+    for matched in g.selected_matches(selected_feature) {
         crate::cancel::check();
+        #[cfg(test)]
+        crate::engine::line_graph::MATCHING_WORK.with(|n| n.set(n.get() + 1));
         let [x, y] = matched.sources;
         let (xp, yp) = (g.segment(x).part, g.segment(y).part);
         let (xr, yr) = (g.parts[xp].reference, g.parts[yp].reference);
@@ -254,10 +245,11 @@ fn overlaps(
             (a, Some(b))
         };
         let (ac, bc) = (&g.original(xp).0, &g.original(yp).0);
+        let (ar, br) = (g.canonical_reversed(xp), g.canonical_reversed(yp));
         let cmp = (0..ac.len().min(bc.len()))
             .map(|i| {
-                let a = ac[if reversed[xp] { ac.len() - i - 1 } else { i }];
-                let b = bc[if reversed[yp] { bc.len() - i - 1 } else { i }];
+                let a = ac[if ar { ac.len() - i - 1 } else { i }];
+                let b = bc[if br { bc.len() - i - 1 } else { i }];
                 a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y))
             })
             .find(|o| !o.is_eq())
