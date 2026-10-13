@@ -61,11 +61,8 @@ include = [
     "python/topology_checker/py.typed",
     "python/topology_checker/*.pyi",
     { path = "tests/**/*.py", format = "sdist" },
-    { path = "tests/fixtures/**/*.json", format = "sdist" },
-    { path = "tests/fixtures/**/README.md", format = "sdist" },
     { path = "Cargo.lock", format = "sdist" },
     { path = "docs/*.md", format = "sdist" },
-    { path = "docs/*.json", format = "sdist" },
     { path = "scripts/*.py", format = "sdist" },
     { path = "about.toml", format = "sdist" },
 ]
