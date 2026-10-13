@@ -1893,3 +1893,81 @@ fn detached_runs_in_the_same_parts_cannot_suppress_original_passage_contacts() {
         );
     }
 }
+#[test]
+fn line_endpoints_inside_retained_overlaps_are_not_interior_contacts() {
+    use topology_checker_core::geo::{Coord, MapCoords};
+    // One line of each pair ends inside its overlap with the other. The cracked
+    // endpoint and the overlap span are separately rounded forms of one parameter.
+    let shapes = fixture("endpoints_inside_overlaps");
+    for (pair, tolerance) in shapes.as_chunks::<2>().0.iter().zip([0.001, 0.001, 1.]) {
+        let mut frames = vec![
+            pair.to_vec(),
+            pair.iter()
+                .map(|g| {
+                    g.map_coords(|p| Coord {
+                        x: p.x + 1048576.,
+                        y: p.y - 524288.,
+                    })
+                })
+                .collect(),
+        ];
+        for line in 0..2 {
+            for end in [true, false] {
+                for axis in 0..2 {
+                    for step in [f64::next_up, f64::next_down] {
+                        let mut moved = pair.to_vec();
+                        let Geometry::LineString(l) = &mut moved[line] else {
+                            unreachable!()
+                        };
+                        let vertex = if end { l.0.len() - 1 } else { 0 };
+                        let c = &mut l.0[vertex];
+                        if axis == 0 {
+                            c.x = step(c.x);
+                        } else {
+                            c.y = step(c.y);
+                        }
+                        frames.push(moved);
+                    }
+                }
+            }
+        }
+        for frame in frames {
+            for rule in [
+                Rule::LineMustNotIntersect,
+                Rule::LineMustNotIntersectWith,
+                Rule::LineMustNotIntersectOrTouchInterior,
+                Rule::LineMustNotIntersectOrTouchInteriorWith,
+            ] {
+                let t = topology(rule, frame.clone(), rule.inputs().1.is_some(), tolerance);
+                let report = t.validate().unwrap();
+                let kinds = report.violations().map(|v| v.kind).collect::<Vec<_>>();
+                assert_eq!(kinds, [ViolationKind::Overlap], "{rule}: {report:?}");
+                let mut streamed = Vec::new();
+                t.validate_into(|_, v| {
+                    streamed.push(v);
+                    Ok::<_, ()>(())
+                })
+                .unwrap();
+                assert_eq!(streamed, report.rules[0].violations);
+            }
+        }
+    }
+}
+#[test]
+fn oblique_endpoints_inside_retained_overlaps_are_not_interior_contacts() {
+    // The endpoint (5, 0.9) is inside the overlap, but its projection onto the
+    // longer line differs from the span end by its offset times the slope.
+    let pair = vec![
+        line(&[(-6., 1.12), (5., 0.9)]),
+        line(&[(0., 0.), (10., 0.)]),
+    ];
+    for rule in [
+        Rule::LineMustNotIntersectOrTouchInterior,
+        Rule::LineMustNotIntersectOrTouchInteriorWith,
+    ] {
+        let t = topology(rule, pair.clone(), rule.inputs().1.is_some(), 1.);
+        let report = t.validate().unwrap();
+        let kinds = report.violations().map(|v| v.kind).collect::<Vec<_>>();
+        assert_eq!(kinds, [ViolationKind::Overlap], "{rule}: {report:?}");
+    }
+}
