@@ -521,3 +521,53 @@ def test_long_routes_are_clipped_against_segment_local_polygon_union(
                 assert v.geometry.hausdorff_distance(reference) < 1e-8 * scale
                 assert v.geometry.length == pytest.approx(reference.length, rel=1e-10)
             assert_equivalent(t)
+
+
+@pytest.mark.parametrize("tolerance", [0.0, 0.001, 1.0])
+@pytest.mark.parametrize("scale,offset", [(1.0, 0.0), (2**-3, 2**20)])
+def test_original_junctions_and_short_bends_have_no_shared_linework(
+    tolerance: float, scale: float, offset: float
+) -> None:
+    """Independent point intersections and a simple shoreline forbid overlap."""
+    for prefix, ids in [("WATERCOURSE", (3058, 3082)), ("ROAD", (819, 1066))]:
+        a, b = [case_geometry("junction_contacts", f"{prefix}_{fid}") for fid in ids]
+        assert a.intersection(b).geom_type == "Point"
+        for reverse, binary in itertools.product([False, True], repeat=2):
+            lines = [transform(g, scale, offset) for g in [a, b]]
+            if reverse:
+                lines = [shapely.reverse(g) for g in reversed(lines)]
+            for rule in [
+                Rule.MUST_NOT_OVERLAP,
+                Rule.MUST_NOT_INTERSECT,
+                Rule.MUST_NOT_INTERSECT_OR_TOUCH_INTERIOR,
+            ]:
+                t = case_topology(
+                    rule,
+                    lines[:1] if binary else lines,
+                    lines[1:] if binary else None,
+                    tolerance * scale,
+                )
+                assert all(
+                    v.error_type.value != "overlap" for v in t.validate().violations
+                )
+                if rule != Rule.MUST_NOT_INTERSECT_OR_TOUCH_INTERIOR:
+                    assert t.validate().is_valid
+                assert_equivalent(t)
+    shore = case_geometry("junction_contacts", "SHORE_20284")
+    assert shore.is_simple
+    coordinates = list(shapely.get_parts(shore))[0].coords
+    vertices = list(coordinates)[:-1]
+    for rotation, reverse in itertools.product([0, 7, 16], [False, True]):
+        ring = vertices[rotation:] + vertices[:rotation]
+        if reverse:
+            ring.reverse()
+        line = transform(LineString([*ring, ring[0]]), scale, offset)
+        for rule in [Rule.MUST_NOT_SELF_OVERLAP, Rule.MUST_NOT_SELF_INTERSECT]:
+            t = case_topology(
+                rule,
+                [line, transform(LineString([(0, 0), (0, 100)]), scale, offset)],
+                None,
+                tolerance * scale,
+            )
+            assert t.validate().is_valid
+            assert_equivalent(t)
