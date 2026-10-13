@@ -1,6 +1,7 @@
-# Polars layout on the gh-pages branch: the user guide at / follows the latest release, the
-# Python API is under /api/python/ (dev, 0.1, stable), the Rust API from master is at
-# /api/rust/dev/, and released Rust API docs are on docs.rs.
+# Versioned docs on the gh-pages branch: /dev/ follows master, /X.Y.Z/ is built from the
+# python-vX.Y.Z tag, /stable/ is the newest release and / redirects to it. The version selector
+# reads /versions.json. The Rust API from master is at /api/rust/dev/, and released Rust API
+# docs are on docs.rs.
 name: docs
 on:
   push:
@@ -18,64 +19,27 @@ env:
   TAG: ${{ inputs.tag || (github.ref_type == 'tag' && github.ref_name) || '' }}
   DEV: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 jobs:
-  guide:
+  site:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.TAG }}
       - uses: astral-sh/setup-uv@v6
-      # Tags from before the Zensical switch build with MkDocs.
+      # python-v0.1.0 predates Zensical and the version selector.
       - name: Build
         run: |
           if [[ -f zensical.toml ]]; then
             uv run --locked --only-group docs zensical build
           else
+            printf 'extra:\n  version:\n    provider: mike\n    alias: true\n' >> mkdocs.yml
             uv run --locked --only-group docs mkdocs build --strict
           fi
-      - name: Redirect moved pages
-        if: env.TAG
-        run: |
-          redirect() { mkdir -p "site/$1" && echo "<meta http-equiv=refresh content=0;url=$2>" > "site/$1/index.html"; }
-          [[ -e site/python-api/index.html ]] || redirect python-api ../api/python/stable/
-          redirect rust/topology_checker_core https://docs.rs/topology-checker-core/latest/topology_checker_core/
-          touch site/.nojekyll
-      - if: env.TAG
-        uses: actions/upload-artifact@v4
-        with:
-          name: guide
-          path: site
-          include-hidden-files: true
-          if-no-files-found: error
-  python-api:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      # API docs config comes from the workflow's commit, so tags made before it can be published too.
-      - name: Python sources from the tag
-        if: env.TAG
-        run: |
-          git fetch --depth 1 origin "refs/tags/$TAG"
-          rm -rf python/topology_checker
-          git checkout FETCH_HEAD -- python/topology_checker
-      - uses: astral-sh/setup-uv@v6
-      - name: Build
-        run: |
-          uv run --locked --only-group docs zensical build -f python-api/zensical.toml
-          mkdir python-api/root
-          cp python-api/versions.json python-api/root/
-          echo '<meta http-equiv=refresh content=0;url=stable/>' > python-api/root/index.html
       - if: env.TAG || env.DEV == 'true'
         uses: actions/upload-artifact@v4
         with:
-          name: python-api
-          path: python-api/site
-          if-no-files-found: error
-      - if: env.DEV == 'true'
-        uses: actions/upload-artifact@v4
-        with:
-          name: python-api-root
-          path: python-api/root
+          name: site
+          path: site
           if-no-files-found: error
   rust-api:
     runs-on: ubuntu-latest
@@ -97,7 +61,7 @@ jobs:
           if-no-files-found: error
   deploy:
     if: github.event_name != 'pull_request'
-    needs: [guide, python-api, rust-api]
+    needs: [site, rust-api]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -109,21 +73,39 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
-      - name: Python API (dev)
-        if: env.DEV == 'true'
+      # Only the newest final release becomes stable. versions.json lists dev and every
+      # python-v* tag, newest first.
+      - name: Version
+        id: version
+        run: |
+          [[ -z "$TAG" || "$TAG" =~ ^python-v[0-9]+\.[0-9]+\.[0-9]+ ]] || { echo "Not a python-v tag: $TAG"; exit 1; }
+          versions=$(git ls-remote --tags --refs origin 'python-v*' | sed 's|.*refs/tags/python-v||' | sort -rV)
+          newest=$(grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' <<< "$versions" | head -n 1)
+          version=${TAG#python-v}
+          echo "version=${version:-dev}" >> "$GITHUB_OUTPUT"
+          if [[ -n "$TAG" && "$version" == "$newest" ]]; then echo stable=true; else echo stable=false; fi >> "$GITHUB_OUTPUT"
+          mkdir root
+          touch root/.nojekyll
+          jq -n --arg stable "$newest" '[{version: "dev", title: "dev", aliases: []}]
+            + [$ARGS.positional[] | {version: ., title: ., aliases: (if . == $stable then ["stable"] else [] end)}]' \
+            --args $versions > root/versions.json
+          redirect() { mkdir -p "root/$1" && echo "<meta http-equiv=refresh content=0;url=$2>" > "root/$1/index.html"; }
+          redirect . stable/
+          # Pages that were at the root before the docs were versioned.
+          for page in install cli rules web-app python-usage python-api; do redirect "$page" "../stable/$page/"; done
+          redirect rust/topology_checker_core https://docs.rs/topology-checker-core/latest/topology_checker_core/
+      - name: Site
         uses: JamesIves/github-pages-deploy-action@v4
         with:
-          folder: artifacts/python-api
-          target-folder: api/python/dev
+          folder: artifacts/site
+          target-folder: ${{ steps.version.outputs.version }}
           single-commit: true
-      # versions.json and the redirect to stable/ sit next to the version folders.
-      - name: Python API version list
-        if: env.DEV == 'true'
+      - name: Stable
+        if: steps.version.outputs.stable == 'true'
         uses: JamesIves/github-pages-deploy-action@v4
         with:
-          folder: artifacts/python-api-root
-          target-folder: api/python
-          clean: false
+          folder: artifacts/site
+          target-folder: stable
           single-commit: true
       - name: Rust API (dev)
         if: env.DEV == 'true'
@@ -132,37 +114,10 @@ jobs:
           folder: artifacts/rust-api
           target-folder: api/rust/dev
           single-commit: true
-      # python-v0.Y.Z publishes as 0.Y and python-vX.Y.Z as X, like Polars. Only the newest
-      # final release becomes stable and replaces the user guide. Add new versions to
-      # python-api/versions.json by hand.
-      - name: Release version
-        id: release
-        if: env.TAG
-        run: |
-          [[ "$TAG" =~ ^python-v([0-9]+)\.([0-9]+)\.[0-9]+ ]] || { echo "Not a python-v tag: $TAG"; exit 1; }
-          if [[ "${BASH_REMATCH[1]}" == 0 ]]; then version="0.${BASH_REMATCH[2]}"; else version="${BASH_REMATCH[1]}"; fi
-          newest=$(git ls-remote --tags --refs origin 'python-v*' | sed 's|.*refs/tags/||' \
-            | grep -E '^python-v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1)
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-          if [[ "$TAG" == "$newest" ]]; then echo stable=true; else echo stable=false; fi >> "$GITHUB_OUTPUT"
-      - name: Python API (release)
-        if: env.TAG
+      # The redirects and versions.json sit next to the version folders.
+      - name: Root
         uses: JamesIves/github-pages-deploy-action@v4
         with:
-          folder: artifacts/python-api
-          target-folder: api/python/${{ steps.release.outputs.version }}
-          single-commit: true
-      - name: Python API (stable)
-        if: steps.release.outputs.stable == 'true'
-        uses: JamesIves/github-pages-deploy-action@v4
-        with:
-          folder: artifacts/python-api
-          target-folder: api/python/stable
-          single-commit: true
-      - name: User guide
-        if: steps.release.outputs.stable == 'true'
-        uses: JamesIves/github-pages-deploy-action@v4
-        with:
-          folder: artifacts/guide
-          clean-exclude: api/
+          folder: root
+          clean: false
           single-commit: true

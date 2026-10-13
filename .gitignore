@@ -22,4 +22,3 @@ builds
 /web/playwright-report/
 /web/*.tsbuildinfo
 /site/
-/python-api/site/
