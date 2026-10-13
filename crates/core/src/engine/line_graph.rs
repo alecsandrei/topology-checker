@@ -250,10 +250,8 @@ pub(crate) struct Incident {
 pub(crate) struct LineGraph {
     pub coords: Vec<Coord>,
     pub parts: Vec<GraphPart>,
-    pub edges: Vec<Edge>,
     pub incident: Incidences,
     pub contacts: BTreeMap<usize, Vec<Contact>>,
-    pub uses: Vec<EdgeUse>,
     sources: Vec<Segment>,
     matches: Cache<Vec<Matched>>,
     #[cfg(test)]
@@ -261,7 +259,7 @@ pub(crate) struct LineGraph {
     match_features: Cache<BTreeMap<FeatureKey, Vec<usize>>>,
     canonical_directions: Cache<Vec<bool>>,
     pub tolerance: f64,
-    by_feature: Cache<BTreeMap<(LayerId, i64), FeatureGraph>>,
+    contact_nodes: Cache<BTreeMap<FeatureKey, Vec<usize>>>,
 }
 #[derive(Debug)]
 pub(crate) struct Matched {
@@ -278,12 +276,6 @@ pub(crate) struct Contact {
     pub points: [Coord; 2],
     pub sources: [usize; 2],
 }
-#[derive(Debug, Default)]
-pub(crate) struct FeatureGraph {
-    pub parts: Vec<usize>,
-    pub edges: Vec<usize>,
-    pub nodes: Vec<usize>,
-}
 /// Compact contiguous incidences; construction allocation is released on caching.
 #[derive(Debug)]
 pub(crate) struct Incidences {
@@ -299,11 +291,6 @@ impl std::ops::Index<usize> for Incidences {
     type Output = [Incident];
     fn index(&self, i: usize) -> &Self::Output {
         &self.values[self.offsets[i]..self.offsets[i + 1]]
-    }
-}
-impl Edge {
-    pub fn uses<'a>(&self, graph: &'a LineGraph) -> &'a [EdgeUse] {
-        &graph.uses[self.uses.clone()]
     }
 }
 #[derive(Debug, Clone, Copy)]
@@ -350,6 +337,15 @@ pub(crate) fn projection(line: Line, point: Coord) -> (f64, Coord) {
             }
         },
     )
+}
+/// About sixteen units in the last place of the largest coordinate: the reach of
+/// rounding in a computation from these input coordinates, however they were translated.
+pub(crate) fn rounding(points: &[Coord]) -> f64 {
+    points
+        .iter()
+        .fold(0_f64, |m, p| m.max(p.x.abs()).max(p.y.abs()))
+        * f64::EPSILON
+        * 16.
 }
 fn parameter(line: Line, point: Coord) -> f64 {
     let dx = line.end.x - line.start.x;
@@ -1310,39 +1306,31 @@ impl LineGraph {
     pub fn source(&self, index: usize) -> Line {
         self.sources[index].line(&self.parts)
     }
-    pub fn feature(&self, key: (LayerId, i64)) -> Option<&FeatureGraph> {
-        self.by_feature
+    /// Nodes holding original contacts of one feature, in node order. A contact is
+    /// keyed by its own coordinate, which need not be a node of either noded part:
+    /// the cracked point can join a different cluster than the contacting endpoint.
+    pub fn feature_contacts(&self, key: FeatureKey) -> &[usize] {
+        self.contact_nodes
             .get_or_init(|| {
-                let mut features: BTreeMap<_, FeatureGraph> = BTreeMap::new();
-                for (id, edge) in self.edges.iter().enumerate() {
-                    for usage in edge.uses(self) {
-                        let entry = features
-                            .entry(self.parts[usage.part].reference.feature())
-                            .or_default();
-                        if entry.edges.last() != Some(&id) {
-                            entry.edges.push(id);
+                let mut features = BTreeMap::<_, Vec<_>>::new();
+                for (&node, contacts) in &self.contacts {
+                    crate::cancel::check();
+                    for contact in contacts {
+                        for part in contact.parts {
+                            let nodes = features
+                                .entry(self.parts[part].reference.feature())
+                                .or_default();
+                            if nodes.last() != Some(&node) {
+                                nodes.push(node);
+                            }
                         }
                     }
-                }
-                for (i, part) in self.parts.iter().enumerate() {
-                    features
-                        .entry(part.reference.feature())
-                        .or_default()
-                        .parts
-                        .push(i);
-                    features
-                        .entry(part.reference.feature())
-                        .or_default()
-                        .nodes
-                        .extend(&part.nodes);
-                }
-                for feature in features.values_mut() {
-                    feature.nodes.sort_unstable();
-                    feature.nodes.dedup();
                 }
                 features
             })
             .get(&key)
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
     }
     pub fn build(t: &Topology, layers: &[(LayerId, InputMode)]) -> Result<Self, Error> {
         let mut parts = Vec::new();
@@ -1449,10 +1437,30 @@ impl LineGraph {
                 ));
             }
         };
+        // Exact intersections meet a vertex lying on another segment only where rounding
+        // leaves it on or across that segment. A vertex within rounding of a segment, and
+        // within tolerance, meets it from either side, as in data stored without that
+        // rounding. A proper intersection beside such a segment end is the same meeting,
+        // so it is recorded there: its own rounded coordinate could join another node.
+        let tolerance = t.tolerance();
+        let near = |vertex: Coord, segment: Line| {
+            let (_, projected) = projection(segment, vertex);
+            (tolerance > 0.
+                && distance(vertex, projected)
+                    <= rounding(&[vertex, segment.start, segment.end]).min(tolerance))
+            .then_some(projected)
+        };
+        // Interior vertices, including ring seams. Part endpoints are cracked instead.
+        let vertex = |s: &Segment| {
+            let part = &parts[s.part];
+            (s.start > 0 || part.closed()).then(|| part.original.0[s.start])
+        };
+        let reach = rounding(&coordinates).min(tolerance);
         for (i, s) in segments.iter().enumerate() {
             crate::cancel::check();
             let line = s.line(&parts);
-            for item in tree.locate_in_envelope_intersecting(&index::envelope(line.bounding_rect()))
+            for item in
+                tree.locate_in_envelope_intersecting(&index::expanded(line.bounding_rect(), reach))
             {
                 let j = item.data;
                 if j <= i {
@@ -1470,7 +1478,25 @@ impl LineGraph {
                             } else {
                                 intersection
                             };
-                            contact(i, j, [point, point], point);
+                            // The nearest segment end within rounding of the other segment.
+                            let beside = [line.start, line.end, other.start, other.end]
+                                .into_iter()
+                                .enumerate()
+                                .filter(|&(_, p)| is_proper && distance(p, point) <= tolerance)
+                                .filter_map(|(k, p)| {
+                                    Some(if k < 2 {
+                                        (p, [p, near(p, other)?])
+                                    } else {
+                                        (p, [near(p, line)?, p])
+                                    })
+                                })
+                                .min_by(|a, b| {
+                                    distance(a.0, point).total_cmp(&distance(b.0, point))
+                                });
+                            match beside {
+                                Some((p, points)) => contact(i, j, points, p),
+                                None => contact(i, j, [point, point], point),
+                            }
                             add_cut(&mut split, i, line, point);
                             add_cut(&mut split, j, other, point);
                         }
@@ -1482,6 +1508,16 @@ impl LineGraph {
                             }
                         }
                     }
+                }
+                if let Some(v) = vertex(s)
+                    && let Some(projected) = near(v, other)
+                {
+                    contact(i, j, [v, projected], v);
+                }
+                if let Some(v) = vertex(&segments[j])
+                    && let Some(projected) = near(v, line)
+                {
+                    contact(i, j, [projected, v], v);
                 }
             }
         }
@@ -1649,12 +1685,10 @@ impl LineGraph {
             match_features: Cache::new(),
             canonical_directions: Cache::new(),
             tolerance: t.tolerance(),
-            by_feature: Cache::new(),
+            contact_nodes: Cache::new(),
             coords,
             sources: segments,
-            uses,
             parts,
-            edges,
             incident,
             contacts,
         })
