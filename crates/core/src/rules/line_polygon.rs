@@ -367,7 +367,13 @@ fn pair(
         if Euclidean.length(&piece) > t.tolerance() {
             pieces.push(piece);
         } else if any && piece.0.len() >= 2 {
-            contacts.push(Point(piece.0[0]));
+            // Select by original coordinate order so reversal agrees.
+            let first = piece
+                .0
+                .iter()
+                .min_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)))
+                .expect("piece has coordinates");
+            contacts.push(Point(*first));
         }
     }
     let mut geometries = pieces
