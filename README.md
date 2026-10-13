@@ -1,3 +1,8 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/banner-dark.svg">
+  <img alt="topology-checker" src="docs/images/banner-light.svg">
+</picture>
+
 # topology-checker
 
 topology-checker checks map data for duplicate points, gaps, overlaps, and disconnected lines. Use it with Python, the command line, or the local web app. See the [documentation](https://alecsandrei.github.io/topology-checker/).
