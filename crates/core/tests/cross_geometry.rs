@@ -1257,3 +1257,35 @@ fn original_junction_contacts_do_not_expand_into_overlaps() {
         }
     }
 }
+
+#[test]
+fn boundary_proximity_requires_passages_on_both_sides() {
+    use topology_checker_core::geo::MapCoords;
+    let shapes = fixture("boundary_proximity");
+    for offset in [coord! {x: 0., y: 0.}, coord! {x: 1048576., y: -524288.}] {
+        for pair in shapes.chunks_exact(2) {
+            let transformed = pair
+                .iter()
+                .map(|g| {
+                    g.map_coords(|p| Coord {
+                        x: p.x + offset.x,
+                        y: p.y + offset.y,
+                    })
+                })
+                .collect();
+            let t = topology(
+                Rule::LineMustNotCrossPolygonBoundaries,
+                transformed,
+                true,
+                0.001,
+            );
+            assert_eq!(t.validate().unwrap().violation_count(), 0);
+            assert_eq!(
+                t.validate_into(|_, _| Ok::<_, ()>(()))
+                    .unwrap()
+                    .violation_count(),
+                0
+            );
+        }
+    }
+}

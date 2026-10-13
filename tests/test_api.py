@@ -7,11 +7,13 @@ import json
 from collections.abc import Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import FrozenInstanceError
+from pathlib import Path
 from typing import Any
 
 import pytest
 import shapely
 from pyproj import CRS
+from shapely.affinity import affine_transform
 from shapely.geometry import (
     GeometryCollection,
     LineString,
@@ -42,6 +44,14 @@ SQUARE = box(0, 0, 10, 10)
 PERIMETER = LineString(SQUARE.exterior.coords)
 CROSSING = [LineString([(0, 0), (2, 2)]), LineString([(0, 2), (2, 0)])]
 TOUCHING = [LineString([(0, 0), (2, 0)]), LineString([(1, 0), (1, 1)])]
+
+
+def geometry_fixture(name: str) -> list[BaseGeometry]:
+    """Load the same frozen source coordinates used by the native rule tests."""
+    path = Path(__file__).parents[1] / "crates/core/tests/fixtures/geometry_cases.json"
+    data = json.loads(path.read_text())
+    return [shapely.from_geojson(json.dumps(g)) for g in data[name]["geometries"]]
+
 
 # Fixtures exercise each Rust rule through the Python WKB boundary.
 INVALID_CASES: list[
@@ -704,3 +714,77 @@ def test_operations_on_same_topology_are_serialized() -> None:
         reports = list(pool.map(snapshot, range(12)))
     assert all(report == reports[0] for report in reports)
     assert reports[0]["error_count"] == 3
+
+
+@pytest.mark.parametrize("tolerance", [0.0, 0.001, 0.01, 1.0])
+@pytest.mark.parametrize(
+    "scale,offset", [(1.0, 0.0), (1.0, 2**20), (0.5, 0.0), (2.0, 0.0)]
+)
+def test_boundary_band_requires_passages_on_both_sides(
+    tolerance: float, scale: float, offset: float
+) -> None:
+    """Nearby Chicago boundary runs stay contacts under equivalent source frames."""
+    shapes = geometry_fixture("boundary_proximity")
+    for line, area in zip(shapes[::2], shapes[1::2], strict=True):
+        for reverse in [False, True]:
+            matrix = [scale, 0.0, 0.0, scale, offset, -offset / 2]
+            road = affine_transform(shapely.reverse(line) if reverse else line, matrix)
+            polygon = affine_transform(
+                shapely.reverse(area) if reverse else area, matrix
+            )
+            topology = Topology(tolerance=tolerance * scale)
+            source = topology.add_layer([OUTSIDE, road], fids=[38, -91])
+            target = topology.add_layer([polygon], fids=[872])
+            topology.add_rule(Rule.MUST_NOT_CROSS_BOUNDARIES, source, other=target)
+            report = topology.validate()
+            expected = road.crosses(polygon) if tolerance == 0.0 else False
+            assert bool(report.error_count) == expected
+            assert all(v.error_type is ErrorType.CROSSING for v in report.violations)
+            assert all(v.geometry.is_valid for v in report.violations)
+            assert all(
+                v.origin is not None and v.origin.fid == -91 for v in report.violations
+            )
+            assert all(
+                v.destination is not None and v.destination.fid == 872
+                for v in report.violations
+            )
+            assert topology.validate().to_dict() == report.to_dict()
+            with topology.iter_validate(1) as stream:
+                assert [v.to_dict() for v in stream] == [
+                    v.to_dict() for v in report.violations
+                ]
+                assert (
+                    stream.summary is not None
+                    and stream.summary.error_count == report.error_count
+                )
+
+
+@pytest.mark.parametrize("tolerance", [0.0, 0.001, 1.0])
+def test_boundary_band_retains_crossings_and_closed_seams(tolerance: float) -> None:
+    """A band joins opposite passages, while same-side departures stay contacts."""
+    for before in [-2.0, 2.0]:
+        for after in [-2.0, 2.0]:
+            for reverse in [False, True]:
+                road = LineString([(before, 2), (0, 2), (0, 5), (after, 5)])
+                if reverse:
+                    road = shapely.reverse(road)
+                topology = Topology(tolerance=tolerance)
+                topology.add_rule(
+                    Rule.MUST_NOT_CROSS_BOUNDARIES, [road], other=[SQUARE]
+                )
+                report = topology.validate()
+                assert report.error_count == int(before != after)
+                for v in report.violations:
+                    assert v.error_type is ErrorType.CROSSING
+                    assert v.geometry.distance(SQUARE.boundary) == 0
+    # One crossing lies across the traversal seam of this closed source path.
+    coords = [(0, 2), (0, 5), (2, 5), (2, 7), (-2, 7), (-2, 2)]
+    for rotation in range(len(coords)):
+        points = coords[rotation:] + coords[:rotation]
+        road = LineString([*points, points[0]])
+        topology = Topology(tolerance=tolerance)
+        topology.add_rule(Rule.MUST_NOT_CROSS_BOUNDARIES, [road], other=[SQUARE])
+        report = topology.validate()
+        assert report.error_count == 1
+        assert isinstance(report.violations[0].geometry, MultiPoint)
+        assert len(report.violations[0].geometry.geoms) == 2
