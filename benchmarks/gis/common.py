@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 import psycopg
-from shapely import from_wkt, to_wkb
+from shapely import from_wkb, from_wkt, to_wkb
 from shapely import normalize as canonical
 from shapely.errors import GEOSException
 from shapely.geometry import MultiPolygon, Polygon, shape
@@ -57,8 +57,11 @@ def normalize(rule: str, result: dict[str, Any]) -> dict[str, Any]:
         ids = []
 
         def surface(error: dict[str, Any]) -> Any:
-            value = error["geometry"]
-            geometry = from_wkt(value) if isinstance(value, str) else shape(value)
+            if "geometry_wkb" in error:
+                geometry = from_wkb(bytes.fromhex(error["geometry_wkb"]))
+            else:
+                value = error["geometry"]
+                geometry = from_wkt(value) if isinstance(value, str) else shape(value)
             return (
                 Polygon(geometry.coords)
                 if geometry.geom_type == "LineString"

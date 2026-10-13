@@ -146,7 +146,7 @@ def main() -> None:
                     "id": fid,
                     "destination": destination,
                     "layer": 0,
-                    "geometry": json.loads(geometry.asJson(17)),
+                    "geometry_wkb": bytes(geometry.asWkb()).hex(),
                 }
                 for fid, destination, geometry in materialized
             ]

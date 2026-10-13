@@ -340,3 +340,18 @@ def test_warmups_and_recorded_results_required() -> None:
     data = complete_data()
     data["rules"][0]["workloads"][0]["warmups"][0]["status"] = "timeout"
     assert headline_size(data) == 0
+
+
+def test_gap_wkb_preserves_translated_coordinates() -> None:
+    """Binary geometry extraction keeps translated integer coordinates unchanged."""
+    from shapely import to_wkb
+    from shapely.geometry import shape
+
+    geometry = polygon(29902, 2, 2)
+    expected = {"errors": [{"kind": "gap", "geometry": geometry}]}
+    binary = {
+        "errors": [{"kind": "gap", "geometry_wkb": to_wkb(shape(geometry)).hex()}]
+    }
+    assert normalize("polygon/must-not-have-gaps", binary) == normalize(
+        "polygon/must-not-have-gaps", expected
+    )
