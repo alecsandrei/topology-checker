@@ -339,7 +339,7 @@ fn crossings_distinguish_vertices_tangencies_endpoint_touches_and_shared_paths()
         (vec![(-1., 1.), (0., 0.), (1., -1.)], 0),
         (vec![(-1., 5.), (0., 5.)], 0),
         (vec![(0., 5.), (5., 5.)], 0),
-        (vec![(-1., 0.), (5., 0.), (5., 5.)], 0),
+        (vec![(-1., 0.), (5., 0.), (5., 5.)], 1),
         (vec![(1., 1.), (2., 2.)], 0),
     ] {
         let errors = run(
@@ -1139,4 +1139,42 @@ fn tfl_original_crossing_survives_tolerance() {
             .count(),
         1
     );
+}
+
+#[test]
+fn crossings_connect_original_passages_across_boundary_runs() {
+    let shapes = fixture("boundary_run_crossings");
+    for tolerance in [0., 0.01, 1.] {
+        for start in [0, 2] {
+            let t = topology(
+                Rule::LineMustNotCrossPolygonBoundaries,
+                shapes[start..start + 2].to_vec(),
+                true,
+                tolerance,
+            );
+            let eager = t.validate().unwrap();
+            assert!(eager.violation_count() > 0);
+            if tolerance > 0. {
+                assert_eq!(eager.violation_count(), 1);
+            }
+            let mut streamed = Vec::new();
+            t.validate_into(|_, v| {
+                streamed.push(v);
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+            assert_eq!(streamed, eager.rules[0].violations);
+        }
+    }
+    for before in [-2., 2.] {
+        for after in [-2., 2.] {
+            let violations = run(
+                Rule::LineMustNotCrossPolygonBoundaries,
+                vec![line(&[(before, 2.), (0., 2.), (0., 5.), (after, 5.)])],
+                vec![square()],
+                0.01,
+            );
+            assert_eq!(violations.len(), usize::from(before != after));
+        }
+    }
 }

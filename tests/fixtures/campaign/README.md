@@ -1,5 +1,11 @@
 These immutable geometry fixtures were copied from the sibling topology-checker-test campaign of 2026-10-11. geometries.json contains only geometry constants extracted from the minimized reproducers, without their bug-present assertions. The original campaign remains unchanged. Natural Earth supplied BUG-018; BUG-019 contains Boston Census and Washington DC boundaries; BUG-021 contains IGN Argentina pipeline geometry. See the original campaign DATASETS.md for provenance and licenses.
 
+`boundary_run_crossings.json` preserves Seattle TIGER roads 498 and 1401 and
+Census block groups 216 and 329 in EPSG:32610 (US government public domain).
+Each connected road has more than 50 m strictly inside and 200 m strictly outside
+the polygon's 1 cm uncertainty band, independently checked by GEOS buffering.
+Their intervening boundary runs therefore connect opposite sides and cross.
+
 
 Frozen geometry inputs from the external fix-check campaign (12 October 2026).
 

@@ -27,6 +27,82 @@ def transform(g: BaseGeometry, scale: float, offset: float) -> BaseGeometry:
     return affine_transform(g, [scale, 0, 0, scale, offset, -offset])
 
 
+@pytest.mark.parametrize("tolerance", [0.0, 0.01, 1.0])
+@pytest.mark.parametrize("scale,offset", [(1.0, 0.0), (2.0, 2**20)])
+def test_crossings_survive_connected_boundary_runs(
+    tolerance: float, scale: float, offset: float
+) -> None:
+    """Connected passages well inside and outside cross despite a boundary run."""
+    for road, block in [(498, 216), (1401, 329)]:
+        line = case_geometry("boundary_run_crossings", f"ROAD_{road}")
+        polygon = case_geometry("boundary_run_crossings", f"BLOCK_GROUP_{block}")
+        assert line.intersection(polygon.buffer(-0.01)).length > 50
+        assert line.difference(polygon.buffer(0.01)).length > 200
+        for reverse in [False, True]:
+            source = transform(
+                shapely.reverse(line) if reverse else line, scale, offset
+            )
+            target = transform(
+                shapely.reverse(polygon) if reverse else polygon, scale, offset
+            )
+            t = case_topology(
+                Rule.MUST_NOT_CROSS_BOUNDARIES,
+                [source, transform(LineString([(0, 0), (0, 10)]), scale, offset)],
+                [target, transform(box(100, 100, 110, 110), scale, offset)],
+                tolerance * scale,
+            )
+            report = t.validate()
+            assert report.error_count >= 1
+            if tolerance > 0:
+                assert report.error_count == 1
+            for v in report.violations:
+                assert v.error_type.value == "crossing"
+                assert v.origin is not None and v.origin.fid == -91
+                assert v.destination is not None and v.destination.fid == 872
+                assert v.geometry.distance(target.boundary) < 1e-7 * scale
+            assert_equivalent(t)
+
+
+@pytest.mark.parametrize("tolerance", [0.0, 0.01])
+def test_boundary_runs_connect_opposite_sides_and_closed_seams(
+    tolerance: float,
+) -> None:
+    """Opposite sides cross once; a run joining the same side is contact only."""
+    polygon = box(0, 0, 10, 10)
+    for before, after in itertools.product([-2, 2], repeat=2):
+        line = LineString([(before, 2), (0, 2), (0, 5), (after, 5)])
+        results: list[BaseGeometry] = []
+        for source in [line, shapely.reverse(line)]:
+            t = case_topology(
+                Rule.MUST_NOT_CROSS_BOUNDARIES, [source], [polygon], tolerance
+            )
+            report = t.validate()
+            assert report.error_count == int(before != after)
+            if before != after:
+                results.append(report.violations[0].geometry)
+            assert_equivalent(t)
+        if results:
+            assert results[0].equals(results[1])
+    vertices = [(-2, 2), (0, 2), (0, 5), (2, 5), (2, 10), (0, 10), (-2, 10)]
+    for rotation, reverse in itertools.product(range(len(vertices)), [False, True]):
+        ring = vertices[rotation:] + vertices[:rotation]
+        if reverse:
+            ring.reverse()
+        t = case_topology(
+            Rule.MUST_NOT_CROSS_BOUNDARIES,
+            [LineString([*ring, ring[0]])],
+            [polygon],
+            tolerance,
+        )
+        assert t.validate().error_count == 1
+        crossings = t.validate().violations[0].geometry
+        assert isinstance(crossings, shapely.MultiPoint) and len(crossings.geoms) == 2
+        assert shapely.union_all([v.geometry for v in t.validate().violations]).equals(
+            shapely.MultiPoint([(0, 2), (0, 10)])
+        )
+        assert_equivalent(t)
+
+
 @pytest.mark.parametrize("tolerance", [0.0, 0.001, 1.0])
 @pytest.mark.parametrize("binary", [False, True])
 @pytest.mark.parametrize(

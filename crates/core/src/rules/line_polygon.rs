@@ -195,36 +195,56 @@ fn pair(
         .collect::<Vec<_>>();
     if mode == LinePolygon::Cross {
         let mut violations = Vec::new();
-        for i in 1..cuts.len().saturating_sub(1) {
-            let open = line.geometry.0.first() != line.geometry.0.last();
+        let open = line.geometry.0.first() != line.geometry.0.last();
+        // Boundary intervals join the two original passages on their sides.
+        // A change between inside and outside is still a crossing when the
+        // connecting passage follows the boundary. Closed paths also join at
+        // their traversal seam, including a boundary run across that seam.
+        let mut previous = (!open)
+            .then(|| {
+                states
+                    .iter()
+                    .enumerate()
+                    .rev()
+                    .find(|(_, state)| **state != 0)
+                    .map(|(i, &state)| (i, state))
+            })
+            .flatten();
+        for (i, &state) in states.iter().enumerate() {
+            if state == 0 {
+                continue;
+            }
+            let Some((before, prior)) = previous.replace((i, state)) else {
+                continue;
+            };
+            if prior * state != -1 {
+                continue;
+            }
+            // A boundary run has two possible transition endpoints. Select by
+            // original coordinate order so reversal and ring rotation agree.
+            let a = cuts[before + 1].point;
+            let b = cuts[i].point;
+            let contact = if a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)).is_le() {
+                a
+            } else {
+                b
+            };
             let endpoint_contact = open
                 && [
                     line.geometry.0[0],
                     *line.geometry.0.last().expect("clean line"),
                 ]
                 .into_iter()
-                .any(|p| distance(p, cuts[i].point) <= t.tolerance());
-            if states[i - 1] * states[i] == -1 && !endpoint_contact {
+                .any(|p| distance(p, contact) <= t.tolerance());
+            if !endpoint_contact {
                 violations.push(violation(
                     spec,
                     ViolationKind::Crossing,
-                    Point(cuts[i].point),
+                    Point(contact),
                     origin,
                     destination,
                 ));
             }
-        }
-        if line.geometry.0.first() == line.geometry.0.last()
-            && states.len() > 1
-            && states[0] * states[states.len() - 1] == -1
-        {
-            violations.push(violation(
-                spec,
-                ViolationKind::Crossing,
-                Point(cuts[0].point),
-                origin,
-                destination,
-            ));
         }
         return violations;
     }
