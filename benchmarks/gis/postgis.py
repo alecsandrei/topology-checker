@@ -8,8 +8,8 @@ from typing import Any, LiteralString, cast
 import psycopg
 from psycopg import sql
 
-from benchmarks.qgis.fixtures import ROOT
-from benchmarks.qgis.run import EngineFailure
+from benchmarks.gis.fixtures import ROOT
+from benchmarks.gis.sessions import EngineFailure
 
 from .catalog import SUPPORT
 

@@ -17,7 +17,7 @@ from shapely.errors import GEOSException
 from shapely.geometry import MultiPolygon, Polygon, shape
 from shapely.ops import unary_union
 
-from benchmarks.qgis.run import EngineFailure, atomic_json, close_process, wait_file
+from benchmarks.gis.sessions import EngineFailure, atomic_json, close_process, wait_file
 
 
 class Session(Protocol):
@@ -242,7 +242,7 @@ class WorkerSession:
 
     def reload(self, fixture: dict[str, Any], timeout: float) -> None:
         """Load another fixture in a resident gvSIG process, outside validation."""
-        from benchmarks.qgis.fixtures import ROOT
+        from benchmarks.gis.fixtures import ROOT
 
         self.request(
             {

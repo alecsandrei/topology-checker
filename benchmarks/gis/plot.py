@@ -12,8 +12,6 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt  # noqa: E402
 
-from benchmarks.qgis.plot import quantile
-
 from .catalog import CHECK_LABELS, ENGINES, HEADLINE_RULES, LABELS
 
 COLORS = {
@@ -23,6 +21,19 @@ COLORS = {
     "postgis": "#7c3aed",
     "gvsig": "#0891b2",
 }
+
+
+def quantile(values: list[float], fraction: float) -> float:
+    """Interpolate sorted samples using the standard linear quantile convention."""
+    if not values:
+        raise ValueError("no samples")
+    if not 0 <= fraction <= 1:
+        raise ValueError("fraction must be between zero and one")
+    ordered = sorted(values)
+    index = (len(ordered) - 1) * fraction
+    lower = int(index)
+    upper = min(lower + 1, len(ordered) - 1)
+    return ordered[lower] + (ordered[upper] - ordered[lower]) * (index - lower)
 
 
 def summary(samples: list[dict[str, Any]]) -> dict[str, Any] | None:

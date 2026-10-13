@@ -6,8 +6,8 @@ import shutil
 from pathlib import Path
 from typing import Any
 
-from benchmarks.qgis.fixtures import ROOT
-from benchmarks.qgis.run import QgisSession, RustSession
+from benchmarks.gis.fixtures import ROOT
+from benchmarks.gis.sessions import QgisSession, RustSession
 
 from .catalog import GVSIG, NATIVE_RULES
 from .common import WorkerSession

@@ -6,6 +6,21 @@ duplicate points, line dangles, polygon overlaps and polygon gaps. Every tool
 uses identical inputs at one common feature count. Full-suite mode retains the
 broader rule catalog and reports unsupported checks and semantic differences.
 
+All benchmark fixtures, session runners, native workers, tests and reports live
+in this directory. `sessions.py` launches the Rust benchmark and QGIS containment
+plugin; `qgis_startup.py` runs inside QGIS. The previous standalone QGIS benchmark
+runner and its old reports have been removed. Published measurements retain the
+paths and hashes from their recorded source revision, including historical
+`benchmarks/qgis` paths.
+
+| Platform | Validation entry point |
+| :--- | :--- |
+| topology-checker | Rust API in a release-build benchmark executable, driven by Python |
+| QGIS | C++ Topology Checker plugin for containment, native geometry operations through PyQGIS for the other four checks |
+| GRASS | Native vector modules and topology bindings, driven by Python |
+| PostGIS | Server-side SQL spatial operations, submitted through `psycopg` |
+| gvSIG | Stock topology rules for containment, bundled Java/JTS operations through Jython for the other four checks |
+
 The official QGIS 4.2 Ubuntu image is pinned by digest. gvSIG 2.7.0 build 5016 is
 pinned by archive SHA-256 and runs with OpenJDK. The report records exact versions
 and resolved package versions.
