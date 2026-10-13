@@ -37,7 +37,7 @@ geopandas = ["geopandas>=0.14,<2"]
 
 [dependency-groups]
 release = ["packaging>=24", "tomli>=2", "twine>=6"]
-docs = ["mkdocs-material>=9", "mkdocstrings-python>=1"]
+docs = ["zensical>=0.0.70", "mkdocstrings-python>=1"]
 dev = [
     "maturin==1.15.0",
     "pytest>=8",
@@ -48,6 +48,9 @@ dev = [
     "types-shapely>=2",
     "types-geopandas>=1.1.4.20261006",
 ]
+
+[tool.uv.dependency-groups]
+docs = { requires-python = ">=3.11" }
 
 [tool.maturin]
 manifest-path = "crates/python/Cargo.toml"

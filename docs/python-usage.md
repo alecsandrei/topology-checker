@@ -5,7 +5,8 @@ Install from PyPI with `uv add topology-checker`, or use
 through GeoPandas. Python 3.10 through 3.14 on regular CPython are supported.
 The base package uses Shapely and pyproj. It does not require GeoPandas or a
 separate Rust installation when a compatible wheel is available. See the
-[API reference](python-api.md) for every class and function.
+[API reference](https://alecsandrei.github.io/topology-checker/api/python/stable/)
+for every class and function.
 
 ## Register and validate
 
