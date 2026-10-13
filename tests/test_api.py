@@ -788,3 +788,303 @@ def test_boundary_band_retains_crossings_and_closed_seams(tolerance: float) -> N
         assert report.error_count == 1
         assert isinstance(report.violations[0].geometry, MultiPoint)
         assert len(report.violations[0].geometry.geoms) == 2
+
+
+@pytest.mark.parametrize(
+    "scale,offset", [(1.0, 0.0), (1.0, 2**20), (0.5, 0.0), (2.0, 0.0)]
+)
+@pytest.mark.parametrize("tolerance", [0.0, 0.001, 1.0])
+def test_short_junction_passages_do_not_gain_overlap_from_endpoint_caps(
+    scale: float, offset: float, tolerance: float
+) -> None:
+    """Original Iceland and Argentina junctions lack sustained shared linework."""
+    from pathlib import Path
+
+    from shapely.affinity import affine_transform
+
+    path = Path(__file__).parents[1] / "crates/core/tests/fixtures/geometry_cases.json"
+    data = json.loads(path.read_text())
+    shapes = [
+        shapely.from_geojson(json.dumps(g))
+        for g in data["junction_support"]["geometries"]
+    ]
+    for a, b in zip(shapes[::2], shapes[1::2], strict=True):
+        for reverse in [False, True]:
+            matrix = [scale, 0.0, 0.0, scale, offset, -offset / 2]
+            pair = [
+                affine_transform(shapely.reverse(g) if reverse else g, matrix)
+                for g in [a, b]
+            ]
+            for rule in [
+                Rule.MUST_NOT_OVERLAP,
+                Rule.MUST_NOT_INTERSECT,
+                Rule.MUST_NOT_INTERSECT_OR_TOUCH_INTERIOR,
+            ]:
+                for binary in [False, True]:
+                    topology = Topology(tolerance=tolerance * scale)
+                    if reverse:
+                        pair = pair[::-1]
+                    if binary:
+                        source = topology.add_layer(pair[:1], fids=[-91])
+                        target = topology.add_layer(pair[1:], fids=[872])
+                    else:
+                        source = topology.add_layer(pair, fids=[-91, 872])
+                        target = None
+                    topology.add_rule(rule, source, other=target)
+                    report = topology.validate()
+                    assert all(
+                        v.error_type is not ErrorType.OVERLAP for v in report.violations
+                    )
+                    assert all(v.geometry.is_valid for v in report.violations)
+                    assert topology.validate().to_dict() == report.to_dict()
+                    with topology.iter_validate(1) as stream:
+                        assert [v.to_dict() for v in stream] == [
+                            v.to_dict() for v in report.violations
+                        ]
+                        assert (
+                            stream.summary is not None
+                            and stream.summary.error_count == report.error_count
+                        )
+            topology = Topology(tolerance=tolerance * scale)
+            parts = [
+                list(part.coords)
+                for g in pair
+                for part in (g.geoms if isinstance(g, MultiLineString) else [g])
+            ]
+            topology.add_rule(Rule.MUST_NOT_SELF_OVERLAP, [MultiLineString(parts)])
+            assert topology.validate().error_count == 0
+
+
+def test_compact_bent_and_unequal_segmented_nearby_runs_remain_overlaps() -> None:
+    """Source traversal length, not planar diameter or segmentation, supports a run."""
+    cases = [
+        (
+            LineString([(-0.6, 0), (-0.6, 0.6), (0.6, 0.6), (0.6, 0), (0, 0)]),
+            LineString([(0, 0), (-0.5, 0), (-0.5, 0.5), (0.5, 0.5), (0.5, 0)]),
+        ),
+        (
+            LineString([(i / 2, 0) for i in range(9)]),
+            LineString([(0, 0.25), (4, 0.25)]),
+        ),
+        (LineString([(0, 0), (1.5, 0)]), LineString([(0, 0.25), (1.5, 0.25)])),
+        (
+            LineString([(-0.75, -0.05), (0.75, 0.05)]),
+            LineString([(-0.75, 0.05), (0.75, -0.05)]),
+        ),
+    ]
+    for a, b in cases:
+        for binary in [False, True]:
+            topology = Topology(tolerance=1)
+            topology.add_rule(
+                Rule.MUST_NOT_OVERLAP,
+                [a] if binary else [a, b],
+                other=[b] if binary else None,
+            )
+            report = topology.validate()
+            assert report.error_count == 1
+            assert report.violations[0].error_type is ErrorType.OVERLAP
+            assert report.violations[0].geometry.is_valid
+
+
+def test_boundary_coverage_keeps_short_contributions_from_distinct_targets() -> None:
+    """Coverage applies its length threshold after combining target intervals."""
+    topology = Topology(tolerance=1)
+    topology.add_rule(
+        Rule.MUST_BE_COVERED_BY_BOUNDARIES,
+        [LineString([(0, 0), (3, 0)])],
+        other=[box(i / 2, 0, (i + 1) / 2, 10) for i in range(6)],
+    )
+    assert topology.validate().error_count == 0
+    lines = [
+        LineString([(i / 2, 0), ((i + 1) / 2, 0), ((i + 1) / 2, -10)]) for i in range(6)
+    ]
+    lines += [
+        LineString([(0, 0), (0, 10)]),
+        LineString([(0, 10), (3, 10)]),
+        LineString([(3, 0), (3, 10)]),
+    ]
+    topology = Topology(tolerance=1)
+    topology.add_rule(
+        Rule.BOUNDARIES_MUST_BE_COVERED_BY, [box(0, 0, 3, 10)], other=lines
+    )
+    assert topology.validate().error_count == 0
+
+
+def test_nearby_closed_run_support_survives_source_seam_rotation() -> None:
+    """Unexpanded support joins cyclic source passages before overlap filtering."""
+    a = [(0.0, 0.0), (0.75, 0.0), (0.75, 5.0), (-0.75, 5.0), (-0.75, 0.0)]
+    b = [(0.0, 0.25), (0.75, 0.25), (0.75, -5.0), (-0.75, -5.0), (-0.75, 0.25)]
+    for rotate_a in range(len(a)):
+        for rotate_b in range(len(b)):
+            aa, bb = a[rotate_a:] + a[:rotate_a], b[rotate_b:] + b[:rotate_b]
+            for reverse in [False, True]:
+                roads = [LineString([*aa, aa[0]]), LineString([*bb, bb[0]])]
+                if reverse:
+                    roads = [shapely.reverse(g) for g in roads]
+                topology = Topology(tolerance=1)
+                topology.add_rule(Rule.MUST_NOT_OVERLAP, roads)
+                report = topology.validate()
+                assert report.error_count == 1
+                assert report.violations[0].error_type is ErrorType.OVERLAP
+                assert report.violations[0].geometry.is_valid
+
+
+def test_uncertain_path_prefixes_preserve_original_interval_evidence() -> None:
+    """Finite extreme coordinates and large prefixes cannot erase local overlap."""
+    cases = [
+        (
+            LineString([(0, 0), (9e307, 0), (0, 0), (9e307, 0)]),
+            LineString([(0, 1e300), (9e307, 1e300), (0, 1e300), (9e307, 1e300)]),
+            1e301,
+        ),
+        (
+            LineString([(1e16, 1e16), (0, 1e16), (0, 0), (2, 0)]),
+            LineString([(0, 0.25), (1.5, 0.25)]),
+            1.0,
+        ),
+    ]
+    for a, b, tolerance in cases:
+        topology = Topology(tolerance=tolerance)
+        topology.add_rule(Rule.MUST_NOT_OVERLAP, [a], other=[b])
+        report = topology.validate()
+        assert report.error_count == 1
+        assert report.violations[0].error_type is ErrorType.OVERLAP
+
+
+@pytest.mark.parametrize("offset", [0.0, 0.25])
+@pytest.mark.parametrize(
+    "scale,translation", [(1.0, 0.0), (0.5, 0.0), (2.0, 0.0), (1.0, 2**20)]
+)
+def test_shared_support_combines_short_contributions_across_parts(
+    offset: float,
+    scale: float,
+    translation: float,
+) -> None:
+    """Exact and nearby multipart passages contribute one sustained shared run."""
+    a = LineString([(0, 0), (3, 0)])
+    parts = [
+        [(i / 2, offset), ((i + 1) / 2, offset), ((i + 1) / 2, -10)] for i in range(6)
+    ]
+    b = MultiLineString(parts)
+    from shapely.affinity import affine_transform
+
+    for rule, source, other in [
+        (Rule.MUST_NOT_OVERLAP, [a, b], None),
+        (Rule.MUST_NOT_OVERLAP, [a], [b]),
+        (Rule.MUST_NOT_SELF_OVERLAP, [MultiLineString([list(a.coords), *parts])], None),
+    ]:
+        matrix = [scale, 0.0, 0.0, scale, translation, -translation / 2]
+        topology = Topology(tolerance=scale)
+        layer = topology.add_layer(
+            [affine_transform(g, matrix) for g in source],
+            fids=[-91 + i * 963 for i in range(len(source))],
+        )
+        target = (
+            None
+            if other is None
+            else topology.add_layer(
+                [affine_transform(g, matrix) for g in other], fids=[872]
+            )
+        )
+        topology.add_rule(rule, layer, other=target)
+        report = topology.validate()
+        assert report.error_count == 1
+        assert report.violations[0].error_type in {
+            ErrorType.OVERLAP,
+            ErrorType.SELF_OVERLAP,
+        }
+        assert report.violations[0].geometry.is_valid
+        if rule is Rule.MUST_NOT_SELF_OVERLAP:
+            reference = affine_transform(a, matrix)
+            assert (
+                report.violations[0].geometry.intersection(reference).length
+                >= 3 * scale
+            )
+        with topology.iter_validate(1) as stream:
+            assert [v.to_dict() for v in stream] == [
+                v.to_dict() for v in report.violations
+            ]
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_nearby_third_passage_keeps_connected_self_support(reverse: bool) -> None:
+    """Conflicting short correspondences keep their own rejection decisions."""
+    parts = [[(0.0, 0.0), (3.0, 0.0)]] + [
+        [(i / 2, 0.25), ((i + 1) / 2, 0.25), ((i + 1) / 2, -10.0)] for i in range(6)
+    ]
+    parts.append([(0.0, 0.35), (0.5, 0.35), (0.5, 10.0)])
+    if reverse:
+        parts = [part[::-1] for part in parts[::-1]]
+    topology = Topology(tolerance=1.0)
+    topology.add_rule(Rule.MUST_NOT_SELF_OVERLAP, [MultiLineString(parts)])
+    report = topology.validate()
+    horizontal = LineString([(0, 0), (3, 0)])
+    assert any(
+        v.geometry.intersection(horizontal).length >= 3 for v in report.violations
+    )
+    with topology.iter_validate(1) as stream:
+        assert [v.to_dict() for v in stream] == [v.to_dict() for v in report.violations]
+
+
+@pytest.mark.parametrize("tolerance", [0.0, 0.001, 1.0])
+def test_duplicate_junction_parts_add_no_original_longitudinal_support(
+    tolerance: float,
+) -> None:
+    """Duplicate and unrelated parts cannot restore rejected junction geometry."""
+    from pathlib import Path
+
+    path = Path(__file__).parents[1] / "crates/core/tests/fixtures/geometry_cases.json"
+    data = json.loads(path.read_text())
+    shapes = [
+        shapely.from_geojson(json.dumps(g))
+        for g in data["junction_support"]["geometries"]
+    ]
+    for a, b in zip(shapes[::2], shapes[1::2], strict=True):
+        a_parts = [
+            list(p.coords) for p in (a.geoms if isinstance(a, MultiLineString) else [a])
+        ]
+        b_parts = [
+            list(p.coords) for p in (b.geoms if isinstance(b, MultiLineString) else [b])
+        ]
+        for duplicate_a in [False, True]:
+            topology = Topology(tolerance=tolerance)
+            source = topology.add_layer(
+                [MultiLineString(a_parts * (2 if duplicate_a else 1))], fids=[-831]
+            )
+            target = topology.add_layer(
+                [MultiLineString(b_parts * (1 if duplicate_a else 2))], fids=[791]
+            )
+            topology.add_rule(Rule.MUST_NOT_OVERLAP, source, other=target)
+            assert topology.validate().error_count == 0
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_disconnected_role_cannot_supply_missing_junction_support(
+    reverse: bool,
+) -> None:
+    """Both multipart passage roles need their own connected supporting union."""
+    a = [(0.0, 0.0), (1.5, 0.0)]
+    b = [(0.75, 0.5), (10.0, 0.5)]
+    c = [(0.75, 1.25), (10.0, 1.25)]
+    if reverse:
+        a, b, c = a[::-1], b[::-1], c[::-1]
+    for self_rule in [False, True]:
+        topology = Topology(tolerance=1.0)
+        if self_rule:
+            topology.add_rule(
+                Rule.MUST_NOT_SELF_OVERLAP,
+                [MultiLineString([c, b, a] if reverse else [a, b, c])],
+            )
+        else:
+            source = topology.add_layer(
+                [MultiLineString([c, a] if reverse else [a, c])]
+            )
+            target = topology.add_layer([LineString(b)])
+            topology.add_rule(Rule.MUST_NOT_OVERLAP, source, other=target)
+        report = topology.validate()
+        assert report.error_count == 1
+        assert report.violations[0].geometry.equals(LineString(b))
+        with topology.iter_validate(1) as stream:
+            assert [v.to_dict() for v in stream] == [
+                v.to_dict() for v in report.violations
+            ]
