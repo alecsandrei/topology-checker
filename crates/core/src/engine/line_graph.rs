@@ -641,6 +641,10 @@ impl LineGraph {
                 }
             }
         }
+        // Endpoint parity is construction evidence, not retained graph storage.
+        // Release it before allocating noded edges and incidences.
+        drop(endpoint_counts);
+        drop(endpoint_sources);
         drop(tree);
         let mut cluster = Cluster::new(t.tolerance());
         endpoints.sort_by(coordinate_order);
