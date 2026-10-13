@@ -33,6 +33,13 @@ pub(crate) fn interval(a: Line, b: Line, tolerance: f64) -> Option<[[f64; 2]; 2]
             _ => None,
         };
     }
+    let endpoint_contact = matches!(
+        line_intersection(a, b),
+        Some(LineIntersection::SinglePoint {
+            is_proper: false,
+            ..
+        })
+    );
     let vector = |s: Line| (s.end.x - s.start.x, s.end.y - s.start.y);
     let (ax, ay) = vector(a);
     let (bx, by) = vector(b);
@@ -78,6 +85,13 @@ pub(crate) fn interval(a: Line, b: Line, tolerance: f64) -> Option<[[f64; 2]; 2]
     }
     let drift = ((a1.x - b1.x) - (a0.x - b0.x)).hypot((a1.y - b1.y) - (a0.y - b0.y));
     if drift >= hi - lo {
+        return None;
+    }
+    // A junction needs sustained support beyond its tolerance neighbourhood.
+    // Subtract transverse drift before testing the common longitudinal extent,
+    // and do so before extending endpoint caps. Long near-duplicate passages
+    // sharing source vertices still qualify, including unequal segmentation.
+    if endpoint_contact && hi - lo <= tolerance + drift {
         return None;
     }
     // Short endpoint caps are covered only by an actual nearby target segment.

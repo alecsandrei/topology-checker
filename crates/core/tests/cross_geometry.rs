@@ -1178,3 +1178,33 @@ fn crossings_connect_original_passages_across_boundary_runs() {
         }
     }
 }
+
+#[test]
+fn original_junction_contacts_do_not_expand_into_overlaps() {
+    let shapes = fixture("junction_contacts");
+    for tolerance in [0., 0.001, 1.] {
+        for rule in [
+            Rule::LineMustNotOverlap,
+            Rule::LineMustNotIntersect,
+            Rule::LineMustNotOverlapWith,
+            Rule::LineMustNotIntersectWith,
+        ] {
+            for start in [0, 2] {
+                for reverse in [false, true] {
+                    let mut pair = shapes[start..start + 2].to_vec();
+                    if reverse {
+                        pair.reverse();
+                    }
+                    let t = topology(rule, pair, rule.inputs().1.is_some(), tolerance);
+                    assert_eq!(t.validate().unwrap().violation_count(), 0, "{rule}");
+                    let summary = t.validate_into(|_, _| Ok::<_, ()>(())).unwrap();
+                    assert_eq!(summary.violation_count(), 0);
+                }
+            }
+        }
+        for rule in [Rule::LineMustNotSelfOverlap, Rule::LineMustNotSelfIntersect] {
+            let t = topology(rule, vec![shapes[4].clone()], false, tolerance);
+            assert_eq!(t.validate().unwrap().violation_count(), 0, "{rule}");
+        }
+    }
+}
