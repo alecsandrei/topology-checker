@@ -17,12 +17,73 @@ use std::collections::{BTreeMap, HashMap};
 type FeatureKey = (LayerId, i64);
 type MatchPairs = BTreeMap<(FeatureKey, FeatureKey), Vec<usize>>;
 
+#[cfg(test)]
+thread_local! {
+    pub(crate) static MATCHING_WORK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 #[derive(Debug)]
 pub(crate) struct GraphPart {
     pub reference: FeatureRef,
     pub nodes: Vec<usize>,
     pub is_closed: bool,
     original: Shared<LineString>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Layer, Rule};
+
+    #[test]
+    fn feature_streaming_visits_sparse_matches_and_canonical_directions_once() {
+        for tolerance in [0., 0.001] {
+            for rule in [
+                Rule::LineMustNotOverlap,
+                Rule::LineMustNotIntersect,
+                Rule::LineMustNotIntersectOrTouchInterior,
+                Rule::LineMustNotOverlapWith,
+                Rule::LineMustNotIntersectWith,
+                Rule::LineMustNotIntersectOrTouchInteriorWith,
+            ] {
+                let mut t = Topology::new(tolerance).unwrap();
+                let lines = (0..512)
+                    .map(|i| {
+                        let x = (i / 2) as f64 * 20.;
+                        let shift = (i % 2) as f64;
+                        (
+                            i as i64 * 7 - 91,
+                            LineString::from(vec![(x + shift, 0.), (x + shift + 10., 0.)]).into(),
+                        )
+                    })
+                    .collect::<Vec<_>>();
+                let a = t.add_layer(Layer::from_features("primary", lines.clone()));
+                let other = rule
+                    .inputs()
+                    .1
+                    .map(|_| t.add_layer(Layer::from_features("target", lines)));
+                t.add_rule(rule, a, other).unwrap();
+                MATCHING_WORK.with(|n| n.set(0));
+                let mut streamed = Vec::new();
+                t.validate_into(|_, v| {
+                    streamed.push(v);
+                    Ok::<_, ()>(())
+                })
+                .unwrap();
+                let work = MATCHING_WORK.with(std::cell::Cell::get);
+                assert!(
+                    work < 16_384,
+                    "{rule}: {work} visits must be linear in sparse intervals"
+                );
+                assert!(!streamed.is_empty());
+                assert_eq!(
+                    streamed,
+                    t.validate().unwrap().rules[0].violations,
+                    "{rule}"
+                );
+            }
+        }
+    }
 }
 impl GraphPart {
     pub fn closed(&self) -> bool {
@@ -57,6 +118,8 @@ pub(crate) struct LineGraph {
     sources: Vec<Segment>,
     matches: Cache<Vec<Matched>>,
     match_pairs: Cache<MatchPairs>,
+    match_features: Cache<BTreeMap<FeatureKey, Vec<usize>>>,
+    canonical_directions: Cache<Vec<bool>>,
     pub tolerance: f64,
     by_feature: Cache<BTreeMap<(LayerId, i64), FeatureGraph>>,
 }
@@ -222,6 +285,54 @@ impl IndexedNodes {
     }
 }
 impl LineGraph {
+    pub fn canonical_reversed(&self, part: usize) -> bool {
+        self.canonical_directions.get_or_init(|| {
+            self.parts
+                .iter()
+                .map(|p| {
+                    crate::cancel::check();
+                    #[cfg(test)]
+                    MATCHING_WORK.with(|n| n.set(n.get() + p.original.0.len()));
+                    p.original
+                        .0
+                        .iter()
+                        .zip(p.original.0.iter().rev())
+                        .map(|(a, b)| coordinate_order(a, b))
+                        .find(|o| !o.is_eq())
+                        .is_some_and(|o| o.is_gt())
+                })
+                .collect()
+        })[part]
+    }
+    /// Streaming keeps only the selected feature's intervals in its working set.
+    pub fn selected_matches(
+        &self,
+        feature: Option<FeatureKey>,
+    ) -> Box<dyn Iterator<Item = &Matched> + '_> {
+        let Some(feature) = feature else {
+            return Box::new(self.matches().iter());
+        };
+        let ids = self.match_features.get_or_init(|| {
+            let mut features = BTreeMap::<_, Vec<_>>::new();
+            for (id, m) in self.matches().iter().enumerate() {
+                crate::cancel::check();
+                let [a, b] = m
+                    .sources
+                    .map(|s| self.parts[self.segment(s).part].reference.feature());
+                features.entry(a).or_default().push(id);
+                if a != b {
+                    features.entry(b).or_default().push(id);
+                }
+            }
+            features
+        });
+        Box::new(
+            ids.get(&feature)
+                .into_iter()
+                .flatten()
+                .map(|&id| &self.matches()[id]),
+        )
+    }
     pub fn matched_pair(&self, a: (LayerId, i64), b: (LayerId, i64)) -> &[usize] {
         let key = if a < b { (a, b) } else { (b, a) };
         self.match_pairs
@@ -533,6 +644,8 @@ impl LineGraph {
         Ok(Self {
             matches: Cache::new(),
             match_pairs: Cache::new(),
+            match_features: Cache::new(),
+            canonical_directions: Cache::new(),
             tolerance: t.tolerance(),
             by_feature: Cache::new(),
             coords,

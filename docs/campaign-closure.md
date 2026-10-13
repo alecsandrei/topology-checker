@@ -1,5 +1,17 @@
 # Campaign closure, 2026-10-12
 
+The 13 October line-network follow-up (REG-006) is covered by
+`test_triangulated_road_network_has_only_endpoint_contacts` and a native structural
+test for sparse interval visits and cached canonical directions. Streaming uses
+feature-indexed original matches, and canonical source direction is computed once
+per graph. A 95,974-line Delaunay network takes 0.503 s for intersection validation,
+compared with 53.326 s on the previous release. Overlap takes 0.315 s instead of
+23.071 s, and binary overlap takes 0.323 s instead of 11.044 s. All outputs contain
+zero violations and agree across eager, repeated and streaming execution.
+`scripts/line_network_benchmark.py` reproduces the isolated workload; machine-readable
+measurements, separate ingestion times and artifact identity are in
+`campaign-evidence.json` under `line_network_matching`.
+
 All 21 correctness findings have tests against a freshly built
 release extension. The four performance findings pass the representative gates
 below. The sibling `topology-checker-test` campaign was read only. Its minimized
