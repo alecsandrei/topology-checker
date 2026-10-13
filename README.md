@@ -5,7 +5,7 @@
 
 <p align="center">
   <a href="https://github.com/alecsandrei/topology-checker/actions/workflows/build.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/alecsandrei/topology-checker/build.yml?branch=master&amp;label=CI"></a>
-  <a href="https://github.com/alecsandrei/topology-checker/actions/workflows/build.yml"><img alt="Coverage" src="https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Falecsandrei%2Ftopology-checker%2Fbadges%2Fcoverage.json"></a>
+  <a href="https://github.com/alecsandrei/topology-checker/actions/workflows/build.yml"><img alt="Coverage" src="https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Falecsandrei%2Ftopology-checker%2Fbadges%2Fcoverage.json&amp;label=coverage"></a>
   <a href="https://github.com/alecsandrei/topology-checker/releases/latest"><img alt="Release" src="https://img.shields.io/github/v/release/alecsandrei/topology-checker"></a>
   <a href="LICENSE"><img alt="License" src="https://img.shields.io/github/license/alecsandrei/topology-checker"></a>
   <br>
