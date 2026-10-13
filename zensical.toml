@@ -1,0 +1,32 @@
+# Preview: uv run --only-group docs zensical serve
+[project]
+site_name = "topology-checker"
+site_url = "https://alecsandrei.github.io/topology-checker/"
+repo_url = "https://github.com/alecsandrei/topology-checker"
+edit_uri = "edit/master/docs/"
+strict = true
+nav = [
+  { Home = "README.md" },
+  { Install = "install.md" },
+  { CLI = "cli.md" },
+  { Rules = "rules.md" },
+  { "Web app" = "web-app.md" },
+  { Python = [
+    { Usage = "python-usage.md" },
+    { "API reference" = "https://alecsandrei.github.io/topology-checker/api/python/stable/" },
+  ] },
+  { "Rust API" = "https://docs.rs/topology-checker-core/latest/topology_checker_core/" },
+]
+
+[project.theme]
+name = "material"
+variant = "modern"
+features = ["content.code.copy"]
+
+[project.markdown_extensions]
+toc.permalink = true
+pymdownx.highlight = {}
+pymdownx.superfences = {}
+
+[project.plugins]
+search = {}
