@@ -44,4 +44,4 @@ The frontend is embedded in `target/release/topology-checker-web`. See [Web app]
 topology-checker-core = "0.1"
 ```
 
-See the [Rust API](https://alecsandrei.github.io/topology-checker/rust/topology_checker_core/).
+See the [Rust API](https://docs.rs/topology-checker-core/latest/topology_checker_core/).

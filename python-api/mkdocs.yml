@@ -1,0 +1,41 @@
+# Preview: uv run --only-group docs mkdocs serve -f python-api/mkdocs.yml
+site_name: topology-checker Python API
+site_url: https://alecsandrei.github.io/topology-checker/api/python/
+repo_url: https://github.com/alecsandrei/topology-checker
+theme:
+  name: material
+  features:
+    - content.code.copy
+nav:
+  - API reference: index.md
+  - User guide: https://alecsandrei.github.io/topology-checker/
+extra:
+  version:
+    provider: mike
+    alias: true
+plugins:
+  - search
+  - mike:
+      alias_type: copy
+      deploy_prefix: api/python
+      canonical_version: stable
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [../python]
+          options:
+            docstring_style: google
+            members_order: source
+            show_root_heading: false
+            heading_level: 2
+            show_source: false
+            show_if_no_docstring: true
+            separate_signature: true
+            show_signature_annotations: true
+            merge_init_into_class: true
+            filters: ["!^_"]
+markdown_extensions:
+  - toc:
+      permalink: true
+  - pymdownx.highlight
+  - pymdownx.superfences
