@@ -1099,5 +1099,46 @@
       "clippy": true,
       "rust_workspace_release": 204
     }
+  },
+  "boundary_run_crossings": {
+    "finding": "REG-008",
+    "artifact_sha256": "35ca6d138bd4e12fc9f221297c2e19c49799a1965e107276ed21d2c918e9b0ca",
+    "original_examples": [
+      "Seattle road 498/block group 216",
+      "Seattle road 1401/block group 329"
+    ],
+    "independent_reference": {
+      "uncertainty_band_m": 0.01,
+      "inside_lengths_m": [
+        55.6,
+        129.5
+      ],
+      "outside_lengths_m": [
+        235.3,
+        784.7
+      ]
+    },
+    "before_crossing_counts": [
+      0,
+      0
+    ],
+    "after_crossing_counts": [
+      1,
+      1
+    ],
+    "tests": [
+      "crossings_connect_original_passages_across_boundary_runs",
+      "test_crossings_survive_connected_boundary_runs",
+      "test_boundary_runs_connect_opposite_sides_and_closed_seams"
+    ],
+    "notes": "Opposite-sided original passages cross through connected neutral boundary runs. Same-sided passages and boundary-only lines remain contacts. A deterministic endpoint represents each crossed boundary run.",
+    "verification": {
+      "rust_workspace_release": 205,
+      "pytest": 521,
+      "clippy": true,
+      "ruff": true,
+      "pyright": true,
+      "formatting": true
+    }
   }
 }

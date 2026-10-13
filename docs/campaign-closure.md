@@ -1,5 +1,14 @@
 # Campaign closure, 2026-10-12
 
+The 13 October boundary-run follow-up (REG-008) retains crossings between original
+inside and outside passages connected by boundary contact. Both Seattle TIGER
+examples now report a crossing. Same-sided contact and boundary-only travel remain
+allowed. Tests cover zero and positive tolerances, binary scaling, translation,
+reversal, ring rotation across closed seams, original provenance, unrelated features
+and eager/streaming equivalence. Crossings across a boundary run use a deterministic
+source endpoint. Frozen inputs and independent buffered-distance expectations are
+in `tests/fixtures/campaign/boundary_run_crossings.json` and `campaign-evidence.json`.
+
 The 13 October line-network follow-up (REG-006) is covered by
 `test_triangulated_road_network_has_only_endpoint_contacts` and a native structural
 test for sparse interval visits and cached canonical directions. Streaming uses
