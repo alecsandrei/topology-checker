@@ -15,6 +15,7 @@ use num_rational::BigRational;
 use num_traits::ToPrimitive;
 use std::collections::{BTreeMap, HashMap};
 type FeatureKey = (LayerId, i64);
+#[cfg(test)]
 type MatchPairs = BTreeMap<(FeatureKey, FeatureKey), Vec<usize>>;
 
 #[cfg(test)]
@@ -156,7 +157,6 @@ pub(crate) struct Edge {
 }
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Incident {
-    pub edge: usize,
     pub part: usize,
 }
 #[derive(Debug)]
@@ -165,9 +165,11 @@ pub(crate) struct LineGraph {
     pub parts: Vec<GraphPart>,
     pub edges: Vec<Edge>,
     pub incident: Incidences,
+    pub contacts: BTreeMap<usize, Vec<Contact>>,
     pub uses: Vec<EdgeUse>,
     sources: Vec<Segment>,
     matches: Cache<Vec<Matched>>,
+    #[cfg(test)]
     match_pairs: Cache<MatchPairs>,
     match_features: Cache<BTreeMap<FeatureKey, Vec<usize>>>,
     canonical_directions: Cache<Vec<bool>>,
@@ -178,6 +180,14 @@ pub(crate) struct LineGraph {
 pub(crate) struct Matched {
     pub sources: [usize; 2],
     pub spans: [[f64; 2]; 2],
+}
+/// Original incidences at one actual source contact, before node clustering.
+#[derive(Debug)]
+pub(crate) struct Contact {
+    pub parts: [usize; 2],
+    pub interior: [bool; 2],
+    pub points: [Coord; 2],
+    pub sources: [usize; 2],
 }
 #[derive(Debug, Default)]
 pub(crate) struct FeatureGraph {
@@ -384,6 +394,7 @@ impl LineGraph {
                 .map(|&id| &self.matches()[id]),
         )
     }
+    #[cfg(test)]
     pub fn matched_pair(&self, a: (LayerId, i64), b: (LayerId, i64)) -> &[usize] {
         let key = if a < b { (a, b) } else { (b, a) };
         self.match_pairs
@@ -473,6 +484,7 @@ impl LineGraph {
         let mut parts = Vec::new();
         let mut segments = Vec::new();
         let mut endpoints = Vec::new();
+        let mut endpoint_sources = Vec::new();
         let mut coordinates = Vec::new();
         for &(layer, mode) in layers {
             let input = t.parts(layer)?;
@@ -503,6 +515,8 @@ impl LineGraph {
                 });
                 if !closed {
                     endpoints.extend([geometry.0[0], geometry.0[geometry.0.len() - 1]]);
+                    endpoint_sources
+                        .extend([segments.len(), segments.len() + geometry.0.len() - 2]);
                 }
                 segments.extend((0..geometry.0.len() - 1).map(|start| Segment { start, part: id }));
             }
@@ -516,6 +530,61 @@ impl LineGraph {
         // Most source segments have no interior contact. Store only actual cuts,
         // avoiding one empty Vec allocation header per original segment.
         let mut split = HashMap::new();
+        // Multipart endpoint parity belongs to original feature coordinates.
+        // Nearby clustered endpoints do not form an original through passage.
+        let mut endpoint_counts = HashMap::<_, usize>::new();
+        for (&point, &source) in endpoints.iter().zip(&endpoint_sources) {
+            let feature = parts[segments[source].part].reference.feature();
+            *endpoint_counts
+                .entry((
+                    feature,
+                    super::cluster::bits(point.x),
+                    super::cluster::bits(point.y),
+                ))
+                .or_default() += 1;
+        }
+        let mut original_contacts = Vec::new();
+        let mut contact = |a: usize, b: usize, points: [Coord; 2], coordinate: Coord| {
+            let sources = [a, b];
+            let [a, b] = sources.map(|source| segments[source].part);
+            if parts[a].reference.feature() == parts[b].reference.feature() {
+                return;
+            }
+            let interior = [0, 1].map(|side| {
+                let p = &parts[[a, b][side]];
+                if p.closed() {
+                    return true;
+                }
+                let feature = p.reference.feature();
+                let endpoints = [p.original.0[0], *p.original.0.last().expect("source")];
+                let endpoint = endpoints
+                    .into_iter()
+                    .filter(|&point| distance(points[side], point) <= t.tolerance())
+                    .min_by(|&a, &b| {
+                        distance(points[side], a).total_cmp(&distance(points[side], b))
+                    });
+                endpoint.is_none_or(|point| {
+                    endpoint_counts[&(
+                        feature,
+                        super::cluster::bits(point.x),
+                        super::cluster::bits(point.y),
+                    )]
+                        .is_multiple_of(2)
+                })
+            });
+            // Endpoint junctions need no retained meeting evidence.
+            if interior[0] || interior[1] {
+                original_contacts.push((
+                    coordinate,
+                    Contact {
+                        parts: [a, b],
+                        interior,
+                        points,
+                        sources,
+                    },
+                ));
+            }
+        };
         for (i, s) in segments.iter().enumerate() {
             crate::cancel::check();
             let line = s.line(&parts);
@@ -537,11 +606,13 @@ impl LineGraph {
                             } else {
                                 intersection
                             };
+                            contact(i, j, [point, point], point);
                             add_cut(&mut split, i, line, point);
                             add_cut(&mut split, j, other, point);
                         }
                         LineIntersection::Collinear { intersection } => {
                             for p in [intersection.start, intersection.end] {
+                                contact(i, j, [p, p], p);
                                 add_cut(&mut split, i, line, p);
                                 add_cut(&mut split, j, other, p);
                             }
@@ -553,7 +624,7 @@ impl LineGraph {
         let mut cracked = Vec::new();
         // Endpoint cracking has no effect on the immutable input geometries.
         if t.tolerance() > 0. {
-            for &point in &endpoints {
+            for (&point, &source) in endpoints.iter().zip(&endpoint_sources) {
                 let mut candidates = tree
                     .locate_in_envelope_intersecting(&index::at(point, t.tolerance()))
                     .map(|i| i.data)
@@ -563,6 +634,7 @@ impl LineGraph {
                     let line = segments[i].line(&parts);
                     let (_, projected) = projection(line, point);
                     if distance(point, projected) <= t.tolerance() {
+                        contact(source, i, [point, projected], point);
                         add_cut(&mut split, i, line, projected);
                         cracked.push(projected);
                     }
@@ -632,6 +704,19 @@ impl LineGraph {
                 ));
             }
         }
+        let mut contacts = BTreeMap::<_, Vec<_>>::new();
+        for (coordinate, contact) in original_contacts {
+            crate::cancel::check();
+            let node = if let Some(indexed) = &indexed {
+                indexed.node(coordinate)
+            } else {
+                cluster
+                    .as_mut()
+                    .expect("tolerance cluster")
+                    .insert(coordinate)
+            };
+            contacts.entry(node).or_default().push(contact);
+        }
         let coords = if let Some(indexed) = indexed {
             indexed.coords
         } else {
@@ -679,14 +764,11 @@ impl LineGraph {
             offsets[i] += offsets[i - 1];
         }
         let mut cursor = offsets[..coords.len()].to_vec();
-        let mut values = vec![Incident { edge: 0, part: 0 }; uses.len() * 2];
-        for (id, edge) in edges.iter().enumerate() {
+        let mut values = vec![Incident { part: 0 }; uses.len() * 2];
+        for edge in &edges {
             for usage in &uses[edge.uses.clone()] {
                 for node in edge.nodes {
-                    values[cursor[node]] = Incident {
-                        edge: id,
-                        part: usage.part,
-                    };
+                    values[cursor[node]] = Incident { part: usage.part };
                     cursor[node] += 1;
                 }
             }
@@ -694,6 +776,7 @@ impl LineGraph {
         let incident = Incidences { offsets, values };
         Ok(Self {
             matches: Cache::new(),
+            #[cfg(test)]
             match_pairs: Cache::new(),
             match_features: Cache::new(),
             canonical_directions: Cache::new(),
@@ -705,6 +788,7 @@ impl LineGraph {
             parts,
             edges,
             incident,
+            contacts,
         })
     }
 }

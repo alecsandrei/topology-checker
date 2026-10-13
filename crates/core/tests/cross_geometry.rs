@@ -1325,3 +1325,179 @@ fn vertices_just_beyond_the_boundary_band_remain_passages() {
         }
     }
 }
+
+#[test]
+fn source_endpoint_junctions_remain_endpoint_contacts_after_clustering() {
+    use topology_checker_core::geo::MapCoords;
+    let shapes = fixture("endpoint_junction_meetings");
+    for pair in shapes.as_chunks::<2>().0 {
+        for tolerance in [0., 0.001, 1.] {
+            for shift in [0., 1048576.] {
+                for scale in [0.5, 1., 2.] {
+                    let transformed = pair
+                        .iter()
+                        .map(|g| {
+                            g.map_coords(|p| Coord {
+                                x: p.x * scale + shift,
+                                y: p.y * scale - shift / 2.,
+                            })
+                        })
+                        .collect::<Vec<_>>();
+                    for rule in [
+                        Rule::LineMustNotIntersect,
+                        Rule::LineMustNotIntersectWith,
+                        Rule::LineMustNotIntersectOrTouchInterior,
+                        Rule::LineMustNotIntersectOrTouchInteriorWith,
+                    ] {
+                        let t = topology(
+                            rule,
+                            transformed.clone(),
+                            rule.inputs().1.is_some(),
+                            tolerance * scale,
+                        );
+                        let report = t.validate().unwrap();
+                        assert!(
+                            report
+                                .violations()
+                                .all(|v| v.kind != ViolationKind::Crossing),
+                            "{rule}: {report:?}"
+                        );
+                        let mut streamed = Vec::new();
+                        t.validate_into(|_, v| {
+                            streamed.push(v);
+                            Ok::<_, ()>(())
+                        })
+                        .unwrap();
+                        assert_eq!(streamed, report.rules[0].violations);
+                    }
+                }
+            }
+        }
+    }
+}
+#[test]
+fn original_interior_contacts_survive_unrelated_endpoint_clustering() {
+    for tolerance in [0., 0.25] {
+        let a = line(&[(-10., 0.), (10., 0.)]);
+        for (b, expected) in [
+            (line(&[(-10., -0.5), (10., 0.5)]), ViolationKind::Crossing),
+            (
+                line(&[(-2., 2.), (0., 0.), (2., 2.)]),
+                ViolationKind::Crossing,
+            ),
+            (
+                line(&[(0., 0.125), (0., 10.)]),
+                ViolationKind::TouchInterior,
+            ),
+        ] {
+            for rule in [
+                Rule::LineMustNotIntersectWith,
+                Rule::LineMustNotIntersectOrTouchInteriorWith,
+            ] {
+                let errors = run(
+                    rule,
+                    vec![a.clone(), line(&[(0., 0.2), (100., 100.)])],
+                    vec![b.clone()],
+                    tolerance,
+                );
+                let contacts = errors
+                    .iter()
+                    .filter(|v| v.origin.unwrap().fid == -20 && v.kind != ViolationKind::Overlap)
+                    .collect::<Vec<_>>();
+                let want = if expected == ViolationKind::TouchInterior {
+                    tolerance > 0. && rule == Rule::LineMustNotIntersectOrTouchInteriorWith
+                } else {
+                    true
+                };
+                assert_eq!(contacts.len(), usize::from(want), "{errors:?}");
+                if want {
+                    assert_eq!(contacts[0].kind, expected);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn connected_original_multipart_endpoints_form_through_passages() {
+    let a: Geometry = MultiLineString(vec![
+        LineString::from(vec![(-10., 0.), (0., 0.)]),
+        LineString::from(vec![(0., 0.), (10., 0.)]),
+    ])
+    .into();
+    let b = line(&[(0., -10.), (0., 10.)]);
+    for tolerance in [0., 0.1] {
+        for rule in [
+            Rule::LineMustNotIntersectWith,
+            Rule::LineMustNotIntersectOrTouchInteriorWith,
+        ] {
+            let errors = run(rule, vec![a.clone()], vec![b.clone()], tolerance);
+            assert_eq!(errors.len(), 1);
+            assert_eq!(errors[0].kind, ViolationKind::Crossing);
+            assert_eq!(errors[0].geometry, point(0., 0.));
+        }
+    }
+    // Distinct endpoints that merely cluster together remain separate junctions.
+    let a: Geometry = MultiLineString(vec![
+        LineString::from(vec![(-10., 0.), (0., 0.)]),
+        LineString::from(vec![(0.05, 0.), (10., 0.)]),
+    ])
+    .into();
+    assert!(run(Rule::LineMustNotIntersectWith, vec![a], vec![b], 0.1).is_empty());
+}
+
+#[test]
+fn disconnected_emitted_overlap_cannot_subsume_discarded_short_contact_support() {
+    let a = LineString::from(vec![(-10., 2.), (-0.4, 0.), (0.4, 0.), (10., -2.)]);
+    let b = LineString::from(vec![(-10., -0.5), (10., 0.5)]);
+    let shared = LineString::from(vec![(-10., 0.8), (10., 0.8)]);
+    for rule in [
+        Rule::LineMustNotIntersectWith,
+        Rule::LineMustNotIntersectOrTouchInteriorWith,
+    ] {
+        let errors = run(
+            rule,
+            vec![MultiLineString(vec![a.clone(), shared.clone()]).into()],
+            vec![MultiLineString(vec![b.clone(), shared.clone()]).into()],
+            1.,
+        );
+        assert!(
+            errors.iter().any(|v| v.kind == ViolationKind::Crossing
+                && v.origin.unwrap().part == Some(0)
+                && v.destination.unwrap().part == Some(0)),
+            "{errors:?}"
+        );
+    }
+}
+
+#[test]
+fn detached_runs_in_the_same_parts_cannot_suppress_original_passage_contacts() {
+    let a = line(&[
+        (-10., 0.8),
+        (10., 0.8),
+        (20., 10.),
+        (-20., 10.),
+        (-10., 2.),
+        (-0.4, 0.),
+        (0.4, 0.),
+        (10., -2.),
+    ]);
+    let b = line(&[
+        (-10., 0.8),
+        (10., 0.8),
+        (20., -10.),
+        (-20., -10.),
+        (-10., -0.5),
+        (10., 0.5),
+    ]);
+    for rule in [
+        Rule::LineMustNotIntersectWith,
+        Rule::LineMustNotIntersectOrTouchInteriorWith,
+    ] {
+        let errors = run(rule, vec![a.clone()], vec![b.clone()], 1.);
+        assert!(
+            errors.iter().any(|v| v.kind == ViolationKind::Crossing),
+            "{errors:?}"
+        );
+    }
+}

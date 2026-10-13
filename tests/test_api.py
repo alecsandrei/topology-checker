@@ -788,3 +788,154 @@ def test_boundary_band_retains_crossings_and_closed_seams(tolerance: float) -> N
         assert report.error_count == 1
         assert isinstance(report.violations[0].geometry, MultiPoint)
         assert len(report.violations[0].geometry.geoms) == 2
+
+
+@pytest.mark.parametrize("tolerance", [0.0, 0.001, 1.0])
+@pytest.mark.parametrize("scale,offset", [(1.0, 0.0), (0.5, 0.0), (2.0, 2**20)])
+def test_original_endpoint_junctions_keep_contact_roles(
+    tolerance: float, scale: float, offset: float
+) -> None:
+    """Iceland streams and Argentina ducts meet at their original endpoints."""
+    from pathlib import Path
+
+    from shapely.affinity import affine_transform
+
+    path = Path(__file__).parents[1] / "crates/core/tests/fixtures/geometry_cases.json"
+    data = json.loads(path.read_text())
+    shapes = [
+        shapely.from_geojson(json.dumps(g))
+        for g in data["endpoint_junction_meetings"]["geometries"]
+    ]
+    for a, b in zip(shapes[::2], shapes[1::2], strict=True):
+        for reverse in [False, True]:
+            pair = [
+                affine_transform(
+                    shapely.reverse(g) if reverse else g,
+                    [scale, 0.0, 0.0, scale, offset, -offset / 2],
+                )
+                for g in [a, b]
+            ]
+            if reverse:
+                pair.reverse()
+            for rule in [
+                Rule.MUST_NOT_INTERSECT,
+                Rule.MUST_NOT_INTERSECT_OR_TOUCH_INTERIOR,
+            ]:
+                for binary in [False, True]:
+                    for unrelated in [False, True]:
+                        topology = Topology(tolerance=tolerance * scale)
+                        extra = (
+                            [LineString([(2e7, 0), (2e7 + 10, 0)])] if unrelated else []
+                        )
+                        if binary:
+                            source = topology.add_layer(
+                                pair[:1] + extra,
+                                fids=[-91] + ([-873] if unrelated else []),
+                            )
+                            target = topology.add_layer(pair[1:], fids=[872])
+                        else:
+                            source = topology.add_layer(
+                                pair + extra,
+                                fids=[-91, 872] + ([-873] if unrelated else []),
+                            )
+                            target = None
+                        topology.add_rule(rule, source, other=target)
+                        report = topology.validate()
+                        assert all(
+                            v.error_type is not ErrorType.CROSSING
+                            for v in report.violations
+                        )
+                        assert all(v.geometry.is_valid for v in report.violations)
+                        assert topology.validate().to_dict() == report.to_dict()
+                        with topology.iter_validate(1) as stream:
+                            assert [v.to_dict() for v in stream] == [
+                                v.to_dict() for v in report.violations
+                            ]
+            parts = [
+                list(part.coords)
+                for g in pair
+                for part in (g.geoms if isinstance(g, MultiLineString) else [g])
+            ]
+            topology = Topology(tolerance=tolerance * scale)
+            topology.add_rule(Rule.MUST_NOT_SELF_INTERSECT, [MultiLineString(parts)])
+            assert all(
+                v.error_type is not ErrorType.SELF_CROSSING
+                for v in topology.validate().violations
+            )
+
+
+@pytest.mark.parametrize("tolerance", [0.0, 0.1])
+def test_connected_original_multipart_endpoints_are_through_passages(
+    tolerance: float,
+) -> None:
+    """Only endpoints sharing an original coordinate supply feature parity."""
+    for gap in [0.0, 0.05]:
+        a = MultiLineString([[(-10, 0), (0, 0)], [(gap, 0), (10, 0)]])
+        b = LineString([(0, -10), (0, 10)])
+        topology = Topology(tolerance=tolerance)
+        topology.add_rule(Rule.MUST_NOT_INTERSECT, [a, b])
+        report = topology.validate()
+        assert report.error_count == int(gap == 0)
+        if gap == 0:
+            assert report.violations[0].error_type is ErrorType.CROSSING
+            assert report.violations[0].geometry.equals(Point(0, 0))
+
+
+def test_disconnected_overlap_does_not_hide_short_crossing_contributions() -> None:
+    """An accepted source contribution must itself reach retained overlap output."""
+    a = [(-10, 2), (-0.4, 0), (0.4, 0), (10, -2)]
+    b = [(-10, -0.5), (10, 0.5)]
+    shared = [(-10, 0.8), (10, 0.8)]
+    for reverse in [False, True]:
+        topology = Topology(tolerance=1.0)
+        parts = [[a, shared], [b, shared]]
+        if reverse:
+            parts = [[part[::-1] for part in feature[::-1]] for feature in parts[::-1]]
+        source = topology.add_layer([MultiLineString(parts[0])], fids=[-57])
+        target = topology.add_layer([MultiLineString(parts[1])], fids=[892])
+        topology.add_rule(Rule.MUST_NOT_INTERSECT, source, other=target)
+        report = topology.validate()
+        part = 1 if reverse else 0
+        assert any(
+            v.error_type is ErrorType.CROSSING
+            and v.origin is not None
+            and v.destination is not None
+            and v.origin.part == part
+            and v.destination.part == part
+            for v in report.violations
+        )
+        assert topology.validate().to_dict() == report.to_dict()
+        with topology.iter_validate(1) as stream:
+            assert [v.to_dict() for v in stream] == [
+                v.to_dict() for v in report.violations
+            ]
+
+
+@pytest.mark.parametrize("reverse", [False, True])
+def test_detached_runs_in_same_part_do_not_cover_original_contact(
+    reverse: bool,
+) -> None:
+    """Accepted spans need original source identity or an actual shared vertex."""
+    a = [
+        (-10, 0.8),
+        (10, 0.8),
+        (20, 10),
+        (-20, 10),
+        (-10, 2),
+        (-0.4, 0),
+        (0.4, 0),
+        (10, -2),
+    ]
+    b = [(-10, 0.8), (10, 0.8), (20, -10), (-20, -10), (-10, -0.5), (10, 0.5)]
+    topology = Topology(tolerance=1.0)
+    pair = [
+        LineString(a[::-1] if reverse else a),
+        LineString(b[::-1] if reverse else b),
+    ]
+    if reverse:
+        pair.reverse()
+    topology.add_rule(Rule.MUST_NOT_INTERSECT, pair)
+    report = topology.validate()
+    assert any(v.error_type is ErrorType.CROSSING for v in report.violations)
+    with topology.iter_validate(1) as stream:
+        assert [v.to_dict() for v in stream] == [v.to_dict() for v in report.violations]
