@@ -5,5 +5,5 @@
 - [Rules](rules.md): all 38 rules
 - [Web app](web-app.md)
 - [Python usage](python-usage.md)
-- [Python API](https://alecsandrei.github.io/topology-checker/api/python/stable/)
+- [Python API](python-api.md)
 - [Rust API](https://docs.rs/topology-checker-core/latest/topology_checker_core/)

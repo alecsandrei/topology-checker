@@ -1,7 +1,8 @@
 # Preview: uv run --only-group docs zensical serve
 [project]
 site_name = "topology-checker"
-site_url = "https://alecsandrei.github.io/topology-checker/"
+# Every version's canonical URL is stable, so search engines prefer the release docs.
+site_url = "https://alecsandrei.github.io/topology-checker/stable/"
 repo_url = "https://github.com/alecsandrei/topology-checker"
 edit_uri = "edit/master/docs/"
 strict = true
@@ -13,10 +14,16 @@ nav = [
   { "Web app" = "web-app.md" },
   { Python = [
     { Usage = "python-usage.md" },
-    { "API reference" = "https://alecsandrei.github.io/topology-checker/api/python/stable/" },
+    { "API reference" = "python-api.md" },
   ] },
   { "Rust API" = "https://docs.rs/topology-checker-core/latest/topology_checker_core/" },
 ]
+
+# The version selector reads ../versions.json, which the docs workflow writes from the
+# python-v* tags. The mike provider name is only the file format.
+[project.extra.version]
+provider = "mike"
+alias = true
 
 [project.theme]
 name = "material"
@@ -30,3 +37,18 @@ pymdownx.superfences = {}
 
 [project.plugins]
 search = {}
+
+[project.plugins.mkdocstrings.handlers.python]
+paths = ["python"]
+
+[project.plugins.mkdocstrings.handlers.python.options]
+docstring_style = "google"
+members_order = "source"
+show_root_heading = false
+heading_level = 2
+show_source = false
+show_if_no_docstring = true
+separate_signature = true
+show_signature_annotations = true
+merge_init_into_class = true
+filters = ["!^_"]
