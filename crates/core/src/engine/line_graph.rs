@@ -396,6 +396,178 @@ pub(crate) fn collapsed(line: &LineString, tolerance: f64) -> bool {
         .enumerate()
         .all(|(i, &p)| line.0[i + 1..].iter().all(|&q| distance(p, q) <= tolerance))
 }
+/// One visit of a part's node path, with the first and last original points
+/// it covers, their segment indices, and the edge arriving at it.
+struct Visit {
+    node: usize,
+    first: (Coord, usize),
+    last: (Coord, usize),
+    edge: Option<([usize; 2], EdgeUse)>,
+}
+/// A part whose node path can drop returns to its end nodes.
+struct Trim {
+    part: usize,
+    /// First and last kept visits.
+    bounds: [usize; 2],
+    /// Raw edge arriving at each visit.
+    edges: Vec<Option<usize>>,
+}
+/// Most vertices within twice the tolerance of a line end for which returns
+/// to the end are tested, at a cost of their square. Ends with more are left
+/// as noded.
+const END_VERTICES: usize = 64;
+/// Whether a line end has not returned to its own line. `vertex(0)` is the far
+/// end and `vertex(n - 1)` this end; segment `k` joins `vertex(k)` and
+/// `vertex(k + 1)`. From the nearest point of every own segment within
+/// tolerance of the end, and from each given point on segment `k`, the line
+/// must reach the end within tolerance of the chord between them. Distance to
+/// a segment is convex along a segment, so testing the vertices suffices.
+fn free_end(
+    vertex: impl Fn(usize) -> Coord,
+    n: usize,
+    points: [(Coord, usize); 2],
+    tolerance: f64,
+) -> bool {
+    let end = vertex(n - 1);
+    let chord = |point: Coord, k: usize| {
+        let chord = Line::new(point, end);
+        (k + 1..n).all(|i| {
+            let p = vertex(i);
+            distance(p, projection(chord, p).1) <= tolerance
+        })
+    };
+    // Each chord lies within the tolerance of the end, so a vertex farther than
+    // twice the tolerance after a nearby segment is a genuine return.
+    let mut near = n - 1;
+    while near > 0 && distance(vertex(near - 1), end) <= 2. * tolerance {
+        near -= 1;
+    }
+    n - near <= END_VERTICES
+        && points.into_iter().all(|(point, k)| chord(point, k))
+        && (0..n - 1).all(|k| {
+            let (_, p) = projection(Line::new(vertex(k), vertex(k + 1)), end);
+            distance(p, end) > tolerance || (k + 1 >= near && chord(p, k))
+        })
+}
+/// Kept visits of an open part's node path. A path that reaches an end node
+/// earlier, but has not returned to itself, ends there: the rest belongs to
+/// the end node, as a final segment within tolerance does. Otherwise a sharp
+/// final bend just longer than the tolerance would fold back as a retrace
+/// through a three-way node. The earliest revisit is tested from its first and
+/// last points.
+fn kept_visits(path: &[Visit], coords: &[Coord], tolerance: f64) -> [usize; 2] {
+    let n = path.len();
+    let mut bounds = [0, n - 1];
+    if n < 3 || path[0].node == path[n - 1].node {
+        return bounds;
+    }
+    let m = coords.len();
+    if let Some(j) = path[1..n - 1]
+        .iter()
+        .position(|v| v.node == path[n - 1].node)
+        && free_end(
+            |i| coords[i],
+            m,
+            [path[j + 1].first, path[j + 1].last],
+            tolerance,
+        )
+    {
+        bounds[1] = j + 1;
+    }
+    // From the start, points on segment `k` lie on reversed segment `m - 2 - k`.
+    let reversed = |(point, k): (Coord, usize)| (point, m - 2 - k);
+    if let Some(i) = path[1..n - 1].iter().rposition(|v| v.node == path[0].node)
+        && i + 1 < bounds[1]
+        && free_end(
+            |i| coords[m - 1 - i],
+            m,
+            [reversed(path[i + 1].first), reversed(path[i + 1].last)],
+            tolerance,
+        )
+    {
+        bounds[0] = i + 1;
+    }
+    bounds
+}
+/// Remove trimmed visits and their edges, unless one of their nodes is an end
+/// node of another part or of the part's other end. Dangles and pseudo-nodes
+/// of other lines are then unchanged; their edges and contacts are untouched.
+/// An end that also lies within tolerance of another part, at a crack point
+/// outside its node, keeps its path: it still touches that part.
+fn trim_returns(
+    parts: &mut [GraphPart],
+    raw_edges: &mut Vec<([usize; 2], EdgeUse)>,
+    trims: Vec<Trim>,
+    ties: &HashMap<(usize, bool), Vec<Coord>>,
+    node: impl Fn(Coord) -> Option<usize>,
+) {
+    // Removed visits before the kept start and after the kept end, without
+    // the end visits themselves.
+    let removed = |trim: &Trim, n: usize| {
+        [
+            1..trim.bounds[0].max(1),
+            (trim.bounds[1] + 1).min(n - 1)..n - 1,
+        ]
+    };
+    // Parts ending at a removed node.
+    let mut ends = HashMap::<usize, Vec<usize>>::new();
+    for trim in &trims {
+        let nodes = &parts[trim.part].nodes;
+        for range in removed(trim, nodes.len()) {
+            for &node in &nodes[range] {
+                ends.entry(node).or_default();
+            }
+        }
+    }
+    for (id, part) in parts.iter().enumerate() {
+        if part.is_closed {
+            continue;
+        }
+        for node in [part.nodes.first(), part.nodes.last()]
+            .into_iter()
+            .flatten()
+        {
+            if let Some(ends) = ends.get_mut(node)
+                && !ends.contains(&id)
+            {
+                ends.push(id);
+            }
+        }
+    }
+    let mut dropped = Vec::<usize>::new();
+    for trim in trims {
+        let nodes = &parts[trim.part].nodes;
+        let n = nodes.len();
+        let [mut start, mut end] = removed(&trim, n);
+        let [first, last] = [nodes[0], nodes[n - 1]];
+        let own = |i: &usize| ends[&nodes[*i]].iter().all(|&p| p == trim.part);
+        let tied = |end: bool, at: usize| {
+            ties.get(&(trim.part, end))
+                .is_some_and(|points| points.iter().any(|&p| node(p) != Some(at)))
+        };
+        let mut bounds = [0, n - 1];
+        if !tied(true, last) && end.all(|i| nodes[i] == last || (nodes[i] != first && own(&i))) {
+            bounds[1] = trim.bounds[1];
+            dropped.extend(trim.edges[bounds[1] + 1..].iter().flatten());
+        }
+        if !tied(false, first) && start.all(|i| nodes[i] == first || (nodes[i] != last && own(&i)))
+        {
+            bounds[0] = trim.bounds[0];
+            dropped.extend(trim.edges[1..=bounds[0]].iter().flatten());
+        }
+        if bounds != [0, n - 1] {
+            parts[trim.part].nodes = nodes[bounds[0]..=bounds[1]].to_vec();
+        }
+    }
+    dropped.sort_unstable();
+    let mut next = dropped.into_iter().peekable();
+    let mut index = 0;
+    raw_edges.retain(|_| {
+        let keep = next.next_if_eq(&index).is_none();
+        index += 1;
+        keep
+    });
+}
 fn add_cut(cuts: &mut HashMap<usize, Vec<Coord>>, source: usize, line: Line, point: Coord) {
     if point != line.start && point != line.end {
         cuts.entry(source).or_default().push(point);
@@ -1522,6 +1694,8 @@ impl LineGraph {
             }
         }
         let mut cracked = Vec::new();
+        // Crack points on other parts, for line ends also near their own line.
+        let mut ties = HashMap::<(usize, bool), Vec<Coord>>::new();
         // Endpoint cracking has no effect on the immutable input geometries.
         if t.tolerance() > 0. {
             for (&point, &source) in endpoints.iter().zip(&endpoint_sources) {
@@ -1530,6 +1704,8 @@ impl LineGraph {
                     .map(|i| i.data)
                     .collect::<Vec<_>>();
                 candidates.sort_unstable();
+                let part = segments[source].part;
+                let (mut own, mut others) = (false, Vec::new());
                 for i in candidates {
                     let line = segments[i].line(&parts);
                     let (_, projected) = projection(line, point);
@@ -1537,7 +1713,16 @@ impl LineGraph {
                         contact(source, i, [point, projected], point);
                         add_cut(&mut split, i, line, projected);
                         cracked.push(projected);
+                        if segments[i].part == part {
+                            own |= i != source;
+                        } else {
+                            others.push(projected);
+                        }
                     }
+                }
+                if own && !others.is_empty() {
+                    let last = point == *parts[part].original.0.last().expect("source");
+                    ties.insert((part, last), others);
                 }
             }
         }
@@ -1570,6 +1755,9 @@ impl LineGraph {
         let indexed = (t.tolerance() == 0.)
             .then(|| IndexedNodes::new(cluster.take().expect("cluster").finish()));
         let mut raw_edges: Vec<([usize; 2], EdgeUse)> = Vec::with_capacity(segments.len());
+        // Segments of one part are consecutive, so one path is built at a time.
+        let mut path: Vec<Visit> = Vec::new();
+        let mut trims = Vec::new();
         for (source, s) in segments.iter().enumerate() {
             crate::cancel::check();
             let line = s.line(&parts);
@@ -1577,36 +1765,76 @@ impl LineGraph {
             cuts.extend([line.start, line.end]);
             cuts.sort_by(|a, b| parameter(line, *a).total_cmp(&parameter(line, *b)));
             cuts.dedup();
-            let mut nodes = Vec::new();
+            let mut previous = None;
             for point in cuts {
                 let node = if let Some(indexed) = &indexed {
                     indexed.node(point)
                 } else {
                     cluster.as_mut().expect("tolerance cluster").insert(point)
                 };
-                if nodes.last() != Some(&node) {
-                    nodes.push(node);
-                }
-            }
-            let part = &mut parts[s.part];
-            for &node in &nodes {
-                if part.nodes.last() != Some(&node) {
-                    part.nodes.push(node);
-                }
-            }
-            for pair in nodes.windows(2) {
-                let [a, b] = [pair[0], pair[1]];
-                if a == b {
+                let at = (point, s.start);
+                if previous == Some(node) {
+                    if let Some(visit) = path.last_mut() {
+                        visit.last = at;
+                    }
                     continue;
                 }
-                raw_edges.push((
-                    [a.min(b), a.max(b)],
-                    EdgeUse {
-                        part: s.part,
-                        source,
-                    },
-                ));
+                let edge = previous.map(|p: usize| {
+                    (
+                        [p.min(node), p.max(node)],
+                        EdgeUse {
+                            part: s.part,
+                            source,
+                        },
+                    )
+                });
+                previous = Some(node);
+                match path.last_mut() {
+                    Some(visit) if visit.node == node => visit.last = at,
+                    _ => path.push(Visit {
+                        node,
+                        first: at,
+                        last: at,
+                        edge,
+                    }),
+                }
             }
+            if segments
+                .get(source + 1)
+                .is_some_and(|next| next.part == s.part)
+            {
+                continue;
+            }
+            let part = &mut parts[s.part];
+            let bounds = if part.is_closed || t.tolerance() == 0. {
+                [0, path.len() - 1]
+            } else {
+                kept_visits(&path, &part.original.0, t.tolerance())
+            };
+            part.nodes.extend(path.iter().map(|v| v.node));
+            if bounds == [0, path.len() - 1] {
+                raw_edges.extend(path.iter().filter_map(|v| v.edge));
+            } else {
+                let edges = path
+                    .iter()
+                    .map(|v| {
+                        v.edge.map(|edge| {
+                            raw_edges.push(edge);
+                            raw_edges.len() - 1
+                        })
+                    })
+                    .collect();
+                trims.push(Trim {
+                    part: s.part,
+                    bounds,
+                    edges,
+                });
+            }
+            path.clear();
+        }
+        if !trims.is_empty() {
+            let cluster = cluster.as_ref().expect("tolerance cluster");
+            trim_returns(&mut parts, &mut raw_edges, trims, &ties, |p| cluster.get(p));
         }
         let mut contacts = BTreeMap::<_, Vec<_>>::new();
         for (coordinate, contact) in original_contacts {
