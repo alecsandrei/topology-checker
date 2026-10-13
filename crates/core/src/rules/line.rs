@@ -441,10 +441,17 @@ fn meetings(
                             }
                         }
 
+                        let line = g.source(source);
                         let (parameter, projected) =
-                            crate::engine::line_graph::projection(g.source(source), point);
-                        parameter >= m.spans[side][0]
-                            && parameter <= m.spans[side][1]
+                            crate::engine::line_graph::projection(line, point);
+                        // A cracked endpoint often defines the span boundary it is
+                        // tested against. Its projection differs from that boundary by
+                        // rounding, and by up to its offset from the line when the
+                        // segments are not parallel, so allow one tolerance along it.
+                        let slack =
+                            g.tolerance / crate::engine::cluster::distance(line.start, line.end);
+                        parameter >= m.spans[side][0] - slack
+                            && parameter <= m.spans[side][1] + slack
                             && crate::engine::cluster::distance(projected, point) <= g.tolerance
                     })
                 });
