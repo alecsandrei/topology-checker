@@ -1,6 +1,7 @@
 # Preview: uv run --only-group docs mkdocs serve -f python-api/mkdocs.yml
 site_name: topology-checker Python API
-site_url: https://alecsandrei.github.io/topology-checker/api/python/
+# Every version's canonical URL is stable, so search engines prefer the release docs.
+site_url: https://alecsandrei.github.io/topology-checker/api/python/stable/
 repo_url: https://github.com/alecsandrei/topology-checker
 theme:
   name: material
@@ -9,16 +10,14 @@ theme:
 nav:
   - API reference: index.md
   - User guide: https://alecsandrei.github.io/topology-checker/
+# Material's version selector reads ../versions.json, which is maintained by hand like
+# Polars' version_switcher.json. The mike provider name is only the file format.
 extra:
   version:
     provider: mike
     alias: true
 plugins:
   - search
-  - mike:
-      alias_type: copy
-      deploy_prefix: api/python
-      canonical_version: stable
   - mkdocstrings:
       handlers:
         python:

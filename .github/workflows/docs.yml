@@ -1,6 +1,6 @@
 # Polars layout on the gh-pages branch: the user guide at / follows the latest release, the
-# Python API is versioned under /api/python/ (dev, 0.1, stable), the Rust API from master is
-# at /api/rust/dev/, and released Rust API docs are on docs.rs.
+# Python API is under /api/python/ (dev, 0.1, stable), the Rust API from master is at
+# /api/rust/dev/, and released Rust API docs are on docs.rs.
 name: docs
 on:
   push:
@@ -16,6 +16,7 @@ permissions:
   contents: read
 env:
   TAG: ${{ inputs.tag || (github.ref_type == 'tag' && github.ref_name) || '' }}
+  DEV: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
 jobs:
   guide:
     runs-on: ubuntu-latest
@@ -53,7 +54,23 @@ jobs:
           git checkout FETCH_HEAD -- python/topology_checker
       - uses: astral-sh/setup-uv@v6
       - name: Build
-        run: uv run --locked --only-group docs mkdocs build --strict -f python-api/mkdocs.yml
+        run: |
+          uv run --locked --only-group docs mkdocs build --strict -f python-api/mkdocs.yml
+          mkdir python-api/root
+          cp python-api/versions.json python-api/root/
+          echo '<meta http-equiv=refresh content=0;url=stable/>' > python-api/root/index.html
+      - if: env.TAG || env.DEV == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-api
+          path: python-api/site
+          if-no-files-found: error
+      - if: env.DEV == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: python-api-root
+          path: python-api/root
+          if-no-files-found: error
   rust-api:
     runs-on: ubuntu-latest
     steps:
@@ -66,7 +83,7 @@ jobs:
         run: |
           cargo doc -p topology-checker-core --no-deps --locked
           echo '<meta http-equiv=refresh content=0;url=topology_checker_core/index.html>' > target/doc/index.html
-      - if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+      - if: env.DEV == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: rust-api
@@ -81,34 +98,37 @@ jobs:
     concurrency:
       group: gh-pages
       cancel-in-progress: false
-    env:
-      DEV: ${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
     steps:
       - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
-      - name: Git identity
-        run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
       - name: Python API (dev)
         if: env.DEV == 'true'
-        run: |
-          git fetch --depth 1 origin gh-pages:gh-pages || true
-          uv run --locked --only-group docs mike deploy --push -F python-api/mkdocs.yml dev
-      - if: env.DEV == 'true'
-        uses: actions/download-artifact@v4
+        uses: JamesIves/github-pages-deploy-action@v4
         with:
-          name: rust-api
-          path: rust-api
+          folder: artifacts/python-api
+          target-folder: api/python/dev
+          single-commit: true
+      # versions.json and the redirect to stable/ sit next to the version folders.
+      - name: Python API version list
+        if: env.DEV == 'true'
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          folder: artifacts/python-api-root
+          target-folder: api/python
+          clean: false
+          single-commit: true
       - name: Rust API (dev)
         if: env.DEV == 'true'
         uses: JamesIves/github-pages-deploy-action@v4
         with:
-          folder: rust-api
+          folder: artifacts/rust-api
           target-folder: api/rust/dev
           single-commit: true
-      # python-v0.Y.Z publishes as 0.Y and python-vX.Y.Z as X. Only the newest final
-      # release becomes stable and replaces the user guide.
+      # python-v0.Y.Z publishes as 0.Y and python-vX.Y.Z as X, like Polars. Only the newest
+      # final release becomes stable and replaces the user guide. Add new versions to
+      # python-api/versions.json by hand.
       - name: Release version
         id: release
         if: env.TAG
@@ -119,35 +139,24 @@ jobs:
             | grep -E '^python-v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n 1)
           echo "version=$version" >> "$GITHUB_OUTPUT"
           if [[ "$TAG" == "$newest" ]]; then echo stable=true; else echo stable=false; fi >> "$GITHUB_OUTPUT"
-      - name: Python sources from the tag
-        if: env.TAG
-        run: |
-          git fetch --depth 1 origin "refs/tags/$TAG"
-          rm -rf python/topology_checker
-          git checkout FETCH_HEAD -- python/topology_checker
       - name: Python API (release)
         if: env.TAG
-        env:
-          VERSION: ${{ steps.release.outputs.version }}
-          STABLE: ${{ steps.release.outputs.stable }}
-        run: |
-          git fetch --depth 1 origin gh-pages:gh-pages || true
-          mike() { uv run --locked --only-group docs mike "$@" --push -F python-api/mkdocs.yml; }
-          if [[ "$STABLE" == true ]]; then
-            mike deploy --update-aliases "$VERSION" stable
-            mike set-default stable
-          else
-            mike deploy "$VERSION"
-          fi
-      - if: steps.release.outputs.stable == 'true'
-        uses: actions/download-artifact@v4
+        uses: JamesIves/github-pages-deploy-action@v4
         with:
-          name: guide
-          path: guide
+          folder: artifacts/python-api
+          target-folder: api/python/${{ steps.release.outputs.version }}
+          single-commit: true
+      - name: Python API (stable)
+        if: steps.release.outputs.stable == 'true'
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          folder: artifacts/python-api
+          target-folder: api/python/stable
+          single-commit: true
       - name: User guide
         if: steps.release.outputs.stable == 'true'
         uses: JamesIves/github-pages-deploy-action@v4
         with:
-          folder: guide
+          folder: artifacts/guide
           clean-exclude: api/
           single-commit: true
