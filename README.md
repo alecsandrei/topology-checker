@@ -3,9 +3,22 @@
   <img alt="topology-checker" src="docs/images/banner-light.svg">
 </picture>
 
+[![PyPI](https://img.shields.io/pypi/v/topology-checker)](https://pypi.org/project/topology-checker/)
+[![crates.io](https://img.shields.io/crates/v/topology-checker)](https://crates.io/crates/topology-checker)
+[![Release](https://img.shields.io/github/v/release/alecsandrei/topology-checker)](https://github.com/alecsandrei/topology-checker/releases/latest)
+[![CI](https://img.shields.io/github/actions/workflow/status/alecsandrei/topology-checker/build.yml?branch=master&label=CI)](https://github.com/alecsandrei/topology-checker/actions/workflows/build.yml)
+[![Coverage](https://img.shields.io/endpoint?url=https%3A%2F%2Fraw.githubusercontent.com%2Falecsandrei%2Ftopology-checker%2Fbadges%2Fcoverage.json)](https://github.com/alecsandrei/topology-checker/actions/workflows/build.yml)
+[![Python](https://img.shields.io/pypi/pyversions/topology-checker)](https://pypi.org/project/topology-checker/)
+[![MSRV](https://img.shields.io/crates/msrv/topology-checker)](https://crates.io/crates/topology-checker)
+[![PyPI downloads](https://img.shields.io/pepy/dt/topology-checker?label=PyPI%20downloads)](https://pepy.tech/projects/topology-checker)
+[![crates.io downloads](https://img.shields.io/crates/d/topology-checker?label=crates.io%20downloads)](https://crates.io/crates/topology-checker)
+[![License](https://img.shields.io/github/license/alecsandrei/topology-checker)](LICENSE)
+
+**Docs:** [Home](https://alecsandrei.github.io/topology-checker/stable/) · [Install](https://alecsandrei.github.io/topology-checker/stable/install/) · [CLI](https://alecsandrei.github.io/topology-checker/stable/cli/) · [Rules](https://alecsandrei.github.io/topology-checker/stable/rules/) · [Web app](https://alecsandrei.github.io/topology-checker/stable/web-app/) · [Python usage](https://alecsandrei.github.io/topology-checker/stable/python-usage/) · [Python API](https://alecsandrei.github.io/topology-checker/stable/python-api/) · [Rust API](https://docs.rs/topology-checker-core/latest/topology_checker_core/)
+
 # topology-checker
 
-topology-checker checks map data for duplicate points, gaps, overlaps, and disconnected lines. Use it with Python, the command line, or the local web app. See the [documentation](https://alecsandrei.github.io/topology-checker/).
+topology-checker checks map data for duplicate points, gaps, overlaps, and disconnected lines. Use it with Python, the command line, or the local web app.
 
 ![Validation time for topology-checker, QGIS 4.2, GRASS GIS, PostGIS and gvSIG](benchmarks/gis/results/comparison.png)
 
