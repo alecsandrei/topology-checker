@@ -13,7 +13,7 @@ use crate::{
     model::Part,
 };
 use geo::{
-    BoundingRect, Coord, Distance, Euclidean, Geometry, Length, LineString, Point, Polygon,
+    BoundingRect, Coord, Distance, Euclidean, Geometry, Length, Line, LineString, Point, Polygon,
     line_intersection::{LineIntersection, line_intersection},
 };
 use rayon::prelude::*;
@@ -82,6 +82,62 @@ struct Cut {
     position: f64,
     point: Coord,
 }
+
+/// Parameter intervals covered by a boundary segment's tolerance capsule.
+/// Crossing evidence must leave this band, even at a short transverse contact.
+fn boundary_band(segment: Line, boundary: Line, tolerance: f64) -> Vec<[f64; 2]> {
+    let (vx, vy) = (
+        segment.end.x - segment.start.x,
+        segment.end.y - segment.start.y,
+    );
+    let length = vx.hypot(vy);
+    let (bx, by) = (
+        boundary.end.x - boundary.start.x,
+        boundary.end.y - boundary.start.y,
+    );
+    let boundary_length = bx.hypot(by);
+    let (ux, uy) = (bx / boundary_length, by / boundary_length);
+    let (px, py) = (
+        segment.start.x - boundary.start.x,
+        segment.start.y - boundary.start.y,
+    );
+    let mut spans = Vec::with_capacity(3);
+    let mut strip = [0., 1.];
+    for (start, change, low, high) in [
+        (px * ux + py * uy, vx * ux + vy * uy, 0., boundary_length),
+        (px * uy - py * ux, vx * uy - vy * ux, -tolerance, tolerance),
+    ] {
+        if change == 0. {
+            if start < low || start > high {
+                strip = [1., 0.];
+                break;
+            }
+        } else {
+            let a = (low - start) / change;
+            let b = (high - start) / change;
+            strip[0] = f64::max(strip[0], a.min(b));
+            strip[1] = f64::min(strip[1], a.max(b));
+        }
+    }
+    if strip[0] < strip[1] {
+        spans.push(strip);
+    }
+    for p in [boundary.start, boundary.end] {
+        let (dx, dy) = (p.x - segment.start.x, p.y - segment.start.y);
+        let perpendicular = (dx * vy - dy * vx) / length;
+        if perpendicular.abs() <= tolerance {
+            let center = (dx * (vx / length) + dy * (vy / length)) / length;
+            let radius = ((tolerance - perpendicular.abs()) * (tolerance + perpendicular.abs()))
+                .sqrt()
+                / length;
+            let span = [(center - radius).max(0.), (center + radius).min(1.)];
+            if span[0] < span[1] {
+                spans.push(span);
+            }
+        }
+    }
+    crate::engine::matching::union(spans)
+}
 fn pair(
     t: &Topology,
     spec: RuleSpec,
@@ -95,6 +151,7 @@ fn pair(
     let destination = Some(polygon.reference.at(other));
     let mut cuts = Vec::new();
     let mut contacts = Vec::new();
+    let mut crossing_contacts = Vec::new();
     let mut boundary_intervals = Vec::new();
     for (i, segment) in line.geometry.lines().enumerate() {
         crate::cancel::check();
@@ -135,11 +192,23 @@ fn pair(
                     }
                 };
                 for point in points {
-                    cuts.push(Cut {
-                        position: i as f64 + projection(segment, point).0,
-                        point,
-                    });
+                    let position = i as f64 + projection(segment, point).0;
+                    cuts.push(Cut { position, point });
                     contacts.push(Point(point));
+                    if mode == LinePolygon::Cross {
+                        crossing_contacts.push((position, point));
+                    }
+                }
+            }
+            if mode == LinePolygon::Cross && t.tolerance() > 0. {
+                for span in boundary_band(segment, boundary, t.tolerance()) {
+                    boundary_intervals.push((i as f64 + span[0], i as f64 + span[1]));
+                    for parameter in span {
+                        cuts.push(Cut {
+                            position: i as f64 + parameter,
+                            point: crate::engine::matching::point(segment, parameter),
+                        });
+                    }
                 }
             }
             if let Some([span, _]) =
@@ -174,12 +243,25 @@ fn pair(
     }
     cuts.sort_by(|a, b| a.position.total_cmp(&b.position));
     cuts.dedup_by(|a, b| a.position == b.position);
+    let boundary_intervals = crate::engine::matching::union(
+        boundary_intervals
+            .into_iter()
+            .map(|(a, b)| [a, b])
+            .collect(),
+    );
+    let mut intervals = boundary_intervals.iter().peekable();
     let states = cuts
         .windows(2)
         .map(|pair| {
-            if boundary_intervals
-                .iter()
-                .any(|&(a, b)| pair[0].position >= a && pair[1].position <= b)
+            while intervals
+                .peek()
+                .is_some_and(|span| span[1] <= pair[0].position)
+            {
+                intervals.next();
+            }
+            if intervals
+                .peek()
+                .is_some_and(|span| pair[0].position >= span[0] && pair[1].position <= span[1])
             {
                 0
             } else if crate::engine::arrangement::midpoint_inside(
@@ -194,6 +276,7 @@ fn pair(
         })
         .collect::<Vec<_>>();
     if mode == LinePolygon::Cross {
+        crossing_contacts.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
         let mut violations = Vec::new();
         let open = line.geometry.0.first() != line.geometry.0.last();
         // Boundary intervals join the two original passages on their sides.
@@ -224,11 +307,39 @@ fn pair(
             // original coordinate order so reversal and ring rotation agree.
             let a = cuts[before + 1].point;
             let b = cuts[i].point;
-            let contact = if a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)).is_le() {
-                a
+            let coordinate_order =
+                |a: &Coord, b: &Coord| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y));
+            let start = crossing_contacts.partition_point(|&(position, _)| {
+                #[cfg(test)]
+                CROSSING_CONTACT_VISITS.with(|n| n.set(n.get() + 1));
+                position < cuts[before + 1].position
+            });
+            let end = crossing_contacts.partition_point(|&(position, _)| {
+                #[cfg(test)]
+                CROSSING_CONTACT_VISITS.with(|n| n.set(n.get() + 1));
+                position <= cuts[i].position
+            });
+            let (first, seam) = if before < i {
+                (&crossing_contacts[start..end], &[][..])
             } else {
-                b
+                (&crossing_contacts[start..], &crossing_contacts[..end])
             };
+            let contact = first
+                .iter()
+                .chain(seam)
+                .inspect(|_| {
+                    #[cfg(test)]
+                    CROSSING_CONTACT_VISITS.with(|n| n.set(n.get() + 1));
+                })
+                .map(|&(_, point)| point)
+                .min_by(coordinate_order)
+                .unwrap_or_else(|| {
+                    if coordinate_order(&a, &b).is_le() {
+                        a
+                    } else {
+                        b
+                    }
+                });
             let endpoint_contact = open
                 && [
                     line.geometry.0[0],
@@ -322,6 +433,8 @@ pub(super) fn inside(
 
 #[cfg(test)]
 thread_local! { static SEGMENT_POLYGONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
+#[cfg(test)]
+thread_local! { static CROSSING_CONTACT_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
 
 fn outside_pieces(
     line: &LineString,
@@ -412,6 +525,53 @@ fn outside_pieces(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn crossing_contact_selection_visits_only_transition_ranges() {
+        let count = 4096;
+        for tolerance in [0., 0.001] {
+            let mut t = Topology::new(tolerance).unwrap();
+            let source = t.add_layer(crate::Layer::from_geometries(
+                "zigzag",
+                [LineString(
+                    (0..count)
+                        .map(|i| Coord {
+                            x: if i % 2 == 0 { -5. } else { 5. },
+                            y: 5. + i as f64 / count as f64,
+                        })
+                        .collect(),
+                )
+                .into()],
+            ));
+            let target = t.add_layer(crate::Layer::from_geometries(
+                "box",
+                [
+                    geo::Rect::new(Coord { x: 0., y: 0. }, Coord { x: 10., y: 10. })
+                        .to_polygon()
+                        .into(),
+                ],
+            ));
+            t.add_rule(
+                crate::Rule::LineMustNotCrossPolygonBoundaries,
+                source,
+                Some(target),
+            )
+            .unwrap();
+            let a = t.parts(source).unwrap();
+            let b = t.parts(target).unwrap();
+            CROSSING_CONTACT_VISITS.with(|n| n.set(0));
+            let violations = pair(
+                &t,
+                t.rules().next().unwrap(),
+                target,
+                LinePolygon::Cross,
+                &a.lines[0],
+                &b.polygons[0],
+                &location::locations(b)[0],
+            );
+            assert_eq!(violations.len(), count - 1);
+            assert!(CROSSING_CONTACT_VISITS.with(|n| n.get()) <= 32 * count);
+        }
+    }
     #[test]
     fn line_coverage_queries_only_segment_local_polygons() {
         let mut t = Topology::new(0.001).unwrap();
