@@ -107,6 +107,29 @@ pub(crate) fn overlap_into<E>(
                     );
                 }
             }
+            // Unary roles follow input order. Report the lower FID's points so the
+            // location does not depend on that order.
+            if spec.other.is_none() && target < fid {
+                let (own, theirs) = (a.point_feature(fid), b.point_feature(target));
+                points = theirs
+                    .iter()
+                    .filter(|q| {
+                        theirs.len() == 1
+                            || own
+                                .iter()
+                                .any(|p| distance(p.geometry.0, q.geometry.0) <= t.tolerance())
+                    })
+                    .map(|q| {
+                        (
+                            (
+                                crate::engine::cluster::bits(q.geometry.x()),
+                                crate::engine::cluster::bits(q.geometry.y()),
+                            ),
+                            q.geometry,
+                        )
+                    })
+                    .collect();
+            }
             let mut points = points.into_values().collect::<Vec<_>>();
             points.sort_by(|a, b| a.x().total_cmp(&b.x()).then(a.y().total_cmp(&b.y())));
             let geometry = if points.len() == 1 {
