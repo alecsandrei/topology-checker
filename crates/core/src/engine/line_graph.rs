@@ -366,6 +366,16 @@ fn parameter(line: Line, point: Coord) -> f64 {
 /// creating spurious tiny edges even at zero user tolerance. Endpoint contacts retain their
 /// original coordinates and do not pay for rational arithmetic.
 pub(crate) fn proper_intersection(a: Line, b: Line) -> Option<Coord> {
+    let (_, [x, y]) = exact_crossing(a, b)?;
+    Some(Coord {
+        x: x.to_f64()?,
+        y: y.to_f64()?,
+    })
+}
+/// The exact crossing of the lines through `a` and `b`, from their binary
+/// floats: its parameter along `a` and its rational coordinates. `None` for
+/// parallel or non-finite input.
+pub(crate) fn exact_crossing(a: Line, b: Line) -> Option<(BigRational, [BigRational; 2])> {
     let [ax, ay, bx, by, cx, cy, dx, dy] = [
         a.start.x, a.start.y, a.end.x, a.end.y, b.start.x, b.start.y, b.end.x, b.end.y,
     ]
@@ -380,10 +390,8 @@ pub(crate) fn proper_intersection(a: Line, b: Line) -> Option<Coord> {
         return None;
     }
     let t = ((cx - &ax) * sy - (cy - &ay) * sx) / determinant;
-    Some(Coord {
-        x: (ax + &t * rx).to_f64()?,
-        y: (ay + t * ry).to_f64()?,
-    })
+    let point = [ax + &t * rx, ay + &t * ry];
+    Some((t, point))
 }
 pub(crate) fn collapsed(line: &LineString, tolerance: f64) -> bool {
     if tolerance == 0. {
