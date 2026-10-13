@@ -13,6 +13,8 @@ from shapely.geometry import GeometryCollection, LineString, Point, Polygon, box
 from shapely.geometry.base import BaseGeometry
 from topology_checker import Rule, Topology
 
+from .fraction_reference import intersections
+from .fraction_reference import point as exact_point
 from .test_campaign import (
     assert_equivalent,
     case_geometry,
@@ -612,6 +614,97 @@ def test_original_endpoint_contacts_retain_incidence_under_translation(
                     assert (
                         v.geometry.distance(transform(endpoint, scale, offset))
                         <= tolerance * scale
+                    )
+                    assert v.origin is not None and v.destination is not None
+                    assert (v.origin.fid, v.destination.fid) == (
+                        (-91, 872) if binary else (-91, -90)
+                    )
+                assert_equivalent(t)
+
+
+@pytest.mark.parametrize("scale,offset", [(1.0, 0.0), (2**-3, 2**20), (8.0, -(2**20))])
+def test_shallow_crossings_survive_short_interval_evidence(
+    scale: float, offset: float
+) -> None:
+    """Independent proper intersections remain visible below the overlap threshold."""
+    for prefix, ids, positive in [
+        ("SF", (8040, 8042), 0.001),
+        ("TRACK", (938, 1333), 1.0),
+    ]:
+        a, b = [case_geometry("shallow_crossings", f"{prefix}_{fid}") for fid in ids]
+        assert isinstance(a, LineString) and isinstance(b, LineString)
+        assert a.crosses(b)
+        reference = [
+            p
+            for p in shapely.get_parts(a.intersection(b))
+            if all(
+                p.distance(Point(line.coords[index])) > positive
+                for line in [a, b]
+                for index in [0, -1]
+            )
+        ]
+        assert reference
+        transformed = [transform(g, scale, offset) for g in [a, b]]
+        assert isinstance(transformed[0], LineString) and isinstance(
+            transformed[1], LineString
+        )
+        coordinates = [list(g.coords) for g in transformed]
+        exact_reference: list[Point] = []
+        for a0, a1 in zip(coordinates[0], coordinates[0][1:], strict=False):
+            for b0, b1 in zip(coordinates[1], coordinates[1][1:], strict=False):
+                if any(
+                    max(min(a0[k], a1[k]), min(b0[k], b1[k]))
+                    > min(max(a0[k], a1[k]), max(b0[k], b1[k]))
+                    for k in [0, 1]
+                ):
+                    continue
+                for x, y in intersections(
+                    *(exact_point(p[0], p[1]) for p in [a0, a1, b0, b1])
+                ):
+                    p = Point(float(x), float(y))
+                    if all(
+                        p.distance(Point(c[index])) > positive * scale
+                        for c in coordinates
+                        for index in [0, -1]
+                    ):
+                        exact_reference.append(p)
+        assert exact_reference
+        expected = shapely.union_all(exact_reference)
+        rounding = 2 * max(math.ulp(value) for g in transformed for value in g.bounds)
+        for tolerance, reverse, binary, permute in itertools.product(
+            [0.0, positive], [False, True], [False, True], [False, True]
+        ):
+            lines = [
+                transform(shapely.reverse(g) if reverse else g, scale, offset)
+                for g in [a, b]
+            ]
+            if permute:
+                lines.reverse()
+            for rule in [
+                Rule.MUST_NOT_INTERSECT,
+                Rule.MUST_NOT_INTERSECT_OR_TOUCH_INTERIOR,
+            ]:
+                t = case_topology(
+                    rule,
+                    (lines[:1] if binary else lines)
+                    + [transform(LineString([(0, 0), (0, 100)]), scale, offset)],
+                    (
+                        lines[1:]
+                        + [transform(LineString([(100, 0), (100, 100)]), scale, offset)]
+                    )
+                    if binary
+                    else None,
+                    tolerance * scale,
+                )
+                crossings = [
+                    v
+                    for v in t.validate().violations
+                    if v.error_type.value == "crossing"
+                ]
+                assert crossings
+                for v in crossings:
+                    assert v.geometry.distance(expected) <= max(
+                        tolerance * scale, rounding
                     )
                     assert v.origin is not None and v.destination is not None
                     assert (v.origin.fid, v.destination.fid) == (

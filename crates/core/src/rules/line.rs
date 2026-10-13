@@ -6,7 +6,7 @@ use geo::{
     Coord, Geometry, Kernel, MultiLineString, Point,
     kernels::{Orientation, RobustKernel},
 };
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 type Feature = (LayerId, i64);
 struct Overlap {
@@ -116,7 +116,11 @@ pub(super) fn run(t: &Topology, spec: RuleSpec, check: LineCheck) -> Result<Vec<
         }
         LineCheck::Intersect { touch } => {
             let mut violations = overlaps(&graph, spec, false, t.selected_feature());
-            violations.extend(meetings(&graph, spec, touch, t.selected_feature()));
+            let shared = violations
+                .iter()
+                .filter_map(|v| Some((v.origin?.feature(), v.destination?.feature())))
+                .collect();
+            violations.extend(meetings(&graph, spec, touch, t.selected_feature(), &shared));
             violations
         }
     })
@@ -328,6 +332,7 @@ fn meetings(
     spec: RuleSpec,
     touch: bool,
     selected_feature: Option<Feature>,
+    shared: &BTreeSet<(Feature, Feature)>,
 ) -> Vec<Violation> {
     let mut out = Vec::new();
     let nodes: Box<dyn Iterator<Item = (usize, &[crate::engine::line_graph::Incident])> + '_> =
@@ -379,33 +384,39 @@ fn meetings(
             if !(a.interior && b.interior || touch && (a.interior || b.interior)) {
                 continue;
             }
-            if g.matched_pair(a.reference.feature(), b.reference.feature())
-                .iter()
-                .any(|&id| {
-                    let m = &g.matches()[id];
-                    m.sources.iter().zip(m.spans).any(|(&s, span)| {
-                        let (t, projected) =
-                            crate::engine::line_graph::projection(g.source(s), g.coords[node]);
-                        t >= span[0]
-                            && t <= span[1]
-                            && crate::engine::cluster::distance(projected, g.coords[node])
-                                <= g.tolerance
+            // Only emitted overlap geometry subsumes a contact. Short matched
+            // ranges below its length threshold can still contain a crossing.
+            let shared = shared.contains(&(origin.feature(), destination.feature()));
+            if shared
+                && g.matched_pair(a.reference.feature(), b.reference.feature())
+                    .iter()
+                    .any(|&id| {
+                        let m = &g.matches()[id];
+                        m.sources.iter().zip(m.spans).any(|(&s, span)| {
+                            let (t, projected) =
+                                crate::engine::line_graph::projection(g.source(s), g.coords[node]);
+                            t >= span[0]
+                                && t <= span[1]
+                                && crate::engine::cluster::distance(projected, g.coords[node])
+                                    <= g.tolerance
+                        })
                     })
-                })
             {
                 continue;
             }
             // A shared edge is already an overlap, not an extra crossing at every vertex.
-            if uses.iter().any(|usage| {
-                let edge = &g.edges[usage.edge];
-                edge.uses(g)
-                    .iter()
-                    .any(|u| g.parts[u.part].reference.feature() == a.reference.feature())
-                    && edge
-                        .uses(g)
+            if shared
+                && uses.iter().any(|usage| {
+                    let edge = &g.edges[usage.edge];
+                    edge.uses(g)
                         .iter()
-                        .any(|u| g.parts[u.part].reference.feature() == b.reference.feature())
-            }) {
+                        .any(|u| g.parts[u.part].reference.feature() == a.reference.feature())
+                        && edge
+                            .uses(g)
+                            .iter()
+                            .any(|u| g.parts[u.part].reference.feature() == b.reference.feature())
+                })
+            {
                 continue;
             }
             out.push(point(
