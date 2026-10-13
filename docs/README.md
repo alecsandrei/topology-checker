@@ -1,3 +1,6 @@
+![topology-checker](images/banner-light.svg#only-light)
+![topology-checker](images/banner-dark.svg#only-dark)
+
 # Documentation
 
 - [Install](install.md)
