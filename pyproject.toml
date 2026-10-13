@@ -49,6 +49,10 @@ dev = [
     "types-geopandas>=1.1.4.20261006",
 ]
 
+[tool.uv]
+# verspec 0.2.0 only re-exports inversion, a package first published 2026-10-12; keep the established release mike was built on.
+constraint-dependencies = ["verspec==0.1.0"]
+
 [tool.maturin]
 manifest-path = "crates/python/Cargo.toml"
 python-source = "python"
