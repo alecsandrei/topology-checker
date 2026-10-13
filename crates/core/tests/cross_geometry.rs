@@ -1142,6 +1142,55 @@ fn tfl_original_crossing_survives_tolerance() {
 }
 
 #[test]
+fn short_interval_evidence_does_not_suppress_shallow_crossings() {
+    let shapes = fixture("shallow_crossings");
+    for (start, positive) in [(0, 0.001), (2, 1.)] {
+        for tolerance in [0., positive] {
+            for rule in [
+                Rule::LineMustNotIntersect,
+                Rule::LineMustNotIntersectWith,
+                Rule::LineMustNotIntersectOrTouchInterior,
+                Rule::LineMustNotIntersectOrTouchInteriorWith,
+            ] {
+                let t = topology(
+                    rule,
+                    shapes[start..start + 2].to_vec(),
+                    rule.inputs().1.is_some(),
+                    tolerance,
+                );
+                let report = t.validate().unwrap();
+                assert!(report.violation_count() > 0, "{rule}");
+                assert!(
+                    report
+                        .violations()
+                        .any(|v| v.kind == ViolationKind::Crossing)
+                );
+                let mut streamed = Vec::new();
+                t.validate_into(|_, v| {
+                    streamed.push(v);
+                    Ok::<_, ()>(())
+                })
+                .unwrap();
+                assert_eq!(streamed, report.rules[0].violations);
+            }
+        }
+    }
+    for rule in [
+        Rule::LineMustNotIntersectWith,
+        Rule::LineMustNotIntersectOrTouchInteriorWith,
+    ] {
+        let errors = run(
+            rule,
+            vec![line(&[(0., 0.), (10., 0.)])],
+            vec![line(&[(5., 0.), (15., 0.)])],
+            1.,
+        );
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].kind, ViolationKind::Overlap);
+    }
+}
+
+#[test]
 fn crossings_connect_original_passages_across_boundary_runs() {
     let shapes = fixture("boundary_run_crossings");
     for tolerance in [0., 0.01, 1.] {
