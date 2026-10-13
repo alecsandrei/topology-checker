@@ -1,1 +1,1 @@
-{"source_revision": "b41d99d382a0ff1eeffeead758551cb693f32c86", "rules": ["point/must-be-inside", "polygon/must-contain-point"], "size": 1000}
+{"source_revision": "42732292e5e64cdb6bc1e50024834aa2af43aa57", "rules": ["point/must-be-inside", "polygon/must-contain-point", "point/must-not-overlap", "line/must-not-have-dangles", "polygon/must-not-overlap", "polygon/must-not-have-gaps"], "size": 1000}
