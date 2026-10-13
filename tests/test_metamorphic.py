@@ -571,3 +571,50 @@ def test_original_junctions_and_short_bends_have_no_shared_linework(
             )
             assert t.validate().is_valid
             assert_equivalent(t)
+
+
+@pytest.mark.parametrize("tolerance", [0.001, 0.01, 1.0])
+@pytest.mark.parametrize("scale,offset", [(1.0, 0.0), (1.0, 2**20), (2**-3, 2**20)])
+def test_original_endpoint_contacts_retain_incidence_under_translation(
+    tolerance: float, scale: float, offset: float
+) -> None:
+    """Nearby original endpoint/interior contact cannot become a tiny overlap."""
+    for alley, road in [(500, 5839), (293, 10972)]:
+        a = case_geometry("dc_junction_contacts", f"ALLEY_{alley}")
+        b = case_geometry("dc_junction_contacts", f"ROAD_BLOCK_{road}")
+        assert isinstance(a, LineString) and isinstance(b, LineString)
+        endpoint = Point(a.coords[-1 if alley == 500 else 0])
+        assert endpoint.distance(b) < 1e-8
+        for reverse, binary, permute in itertools.product([False, True], repeat=3):
+            lines = [
+                transform(shapely.reverse(g) if reverse else g, scale, offset)
+                for g in [a, b]
+            ]
+            if permute:
+                lines.reverse()
+            for rule in [
+                Rule.MUST_NOT_OVERLAP,
+                Rule.MUST_NOT_INTERSECT,
+                Rule.MUST_NOT_INTERSECT_OR_TOUCH_INTERIOR,
+            ]:
+                t = case_topology(
+                    rule,
+                    lines[:1] if binary else lines,
+                    lines[1:] if binary else None,
+                    tolerance * scale,
+                )
+                report = t.validate()
+                assert report.error_count == int(
+                    rule == Rule.MUST_NOT_INTERSECT_OR_TOUCH_INTERIOR
+                )
+                for v in report.violations:
+                    assert v.error_type.value == "touch-interior"
+                    assert (
+                        v.geometry.distance(transform(endpoint, scale, offset))
+                        <= tolerance * scale
+                    )
+                    assert v.origin is not None and v.destination is not None
+                    assert (v.origin.fid, v.destination.fid) == (
+                        (-91, 872) if binary else (-91, -90)
+                    )
+                assert_equivalent(t)
