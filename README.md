@@ -4,7 +4,7 @@ topology-checker checks map data for duplicate points, gaps, overlaps, and disco
 
 ![Validation time for topology-checker, QGIS 4.2, GRASS GIS, PostGIS and gvSIG](benchmarks/gis/results/comparison.png)
 
-Six representative topology checks at 1,000 features per input layer, measured together on one native Linux runner and one logical CPU. Bars show median validation time on a logarithmic scale. See the [measurements](benchmarks/gis/results/README.md) and [benchmark methodology](benchmarks/gis/README.md).
+See the [measurements](benchmarks/gis/results/README.md) and [benchmark methodology](benchmarks/gis/README.md).
 
 ## Python API
 
