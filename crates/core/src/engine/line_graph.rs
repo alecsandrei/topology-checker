@@ -36,6 +36,57 @@ mod tests {
     use crate::{Layer, Rule};
 
     #[test]
+    fn source_junction_incidence_is_stable_under_translation() {
+        let data: serde_json::Value =
+            serde_json::from_str(include_str!("../../tests/fixtures/geometry_cases.json")).unwrap();
+        let shapes = data["dc_junction_contacts"]["geometries"]
+            .as_array()
+            .unwrap();
+        for start in [0, 2] {
+            for shift in [false, true] {
+                let mut t = Topology::new(0.001).unwrap();
+                let layers = [start, start + 1].map(|index| {
+                    let coords = shapes[index]["coordinates"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|p| {
+                            let x = p[0].as_f64().unwrap() + if shift { 1048576. } else { 0. };
+                            let y = p[1].as_f64().unwrap() - if shift { 524288. } else { 0. };
+                            (x, y)
+                        })
+                        .collect::<Vec<_>>();
+                    t.add_layer(Layer::from_geometries(
+                        "source",
+                        [LineString::from(coords).into()],
+                    ))
+                });
+                let g = t.graph(layers.to_vec()).unwrap();
+                assert!(g.matched_pair((layers[0], 0), (layers[1], 0)).is_empty());
+                t.add_rule(
+                    Rule::LineMustNotIntersectOrTouchInteriorWith,
+                    layers[0],
+                    Some(layers[1]),
+                )
+                .unwrap();
+                let report = t.validate().unwrap();
+                assert_eq!(report.violation_count(), 1);
+                assert_eq!(
+                    report.rules[0].violations[0].kind,
+                    crate::ViolationKind::TouchInterior
+                );
+                let mut streamed = Vec::new();
+                t.validate_into(|_, v| {
+                    streamed.push(v);
+                    Ok::<_, ()>(())
+                })
+                .unwrap();
+                assert_eq!(streamed, report.rules[0].violations);
+            }
+        }
+    }
+
+    #[test]
     fn feature_streaming_visits_sparse_matches_and_canonical_directions_once() {
         for tolerance in [0., 0.001] {
             for rule in [

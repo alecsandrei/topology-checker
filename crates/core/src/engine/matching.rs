@@ -83,7 +83,11 @@ pub(crate) fn interval(a: Line, b: Line, tolerance: f64) -> Option<[[f64; 2]; 2]
     if distance(a0, b0) > tolerance || distance(a1, b1) > tolerance {
         return None;
     }
-    let drift = ((a1.x - b1.x) - (a0.x - b0.x)).hypot((a1.y - b1.y) - (a0.y - b0.y));
+    // Compute change from original vectors. Rounded projected coordinates can
+    // coincide at a short junction span and falsely erase transverse drift.
+    let drift = (hi - lo)
+        * (ax / (av[1] - av[0]) - bx / (bv[1] - bv[0]))
+            .hypot(ay / (av[1] - av[0]) - by / (bv[1] - bv[0]));
     if drift >= hi - lo {
         return None;
     }
