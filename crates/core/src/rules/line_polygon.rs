@@ -77,7 +77,7 @@ pub(super) fn run(
     Ok(aggregate(violations, Merge::AllDimensions))
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 struct Cut {
     position: f64,
     point: Coord,
@@ -278,46 +278,60 @@ fn pair(
     if mode == LinePolygon::Cross {
         crossing_contacts.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
         let mut violations = Vec::new();
-        let open = line.geometry.0.first() != line.geometry.0.last();
+        let coords = &line.geometry.0;
+        let open = coords.first() != coords.last();
+        // Passages leave the boundary band. Band parameters are rounded relative
+        // to each segment start, so an original vertex just beyond the tolerance
+        // can lose its window. Such a vertex is still a passage.
+        let mut windows = cuts
+            .windows(2)
+            .zip(&states)
+            .filter(|(_, state)| **state != 0)
+            .map(|(pair, &state)| (pair[0], pair[1], state))
+            .peekable();
+        let mut passages = Vec::new();
+        if t.tolerance() > 0. {
+            let vertices = &coords[..coords.len() - usize::from(!open)];
+            for (k, &point) in vertices.iter().enumerate() {
+                let position = k as f64;
+                while let Some(window) = windows.next_if(|w| w.1.position <= position) {
+                    passages.push(window);
+                }
+                if !views.near(point, t.tolerance()) {
+                    let cut = Cut { position, point };
+                    passages.push((cut, cut, views.position(point)));
+                }
+            }
+        }
+        passages.extend(windows);
         // Boundary intervals join the two original passages on their sides.
         // A change between inside and outside is still a crossing when the
         // connecting passage follows the boundary. Closed paths also join at
         // their traversal seam, including a boundary run across that seam.
-        let mut previous = (!open)
-            .then(|| {
-                states
-                    .iter()
-                    .enumerate()
-                    .rev()
-                    .find(|(_, state)| **state != 0)
-                    .map(|(i, &state)| (i, state))
-            })
-            .flatten();
-        for (i, &state) in states.iter().enumerate() {
-            if state == 0 {
-                continue;
-            }
-            let Some((before, prior)) = previous.replace((i, state)) else {
+        let mut previous = (!open).then(|| passages.len().checked_sub(1)).flatten();
+        for (i, &(entry, _, state)) in passages.iter().enumerate() {
+            let Some(before) = previous.replace(i) else {
                 continue;
             };
+            let (_, exit, prior) = passages[before];
             if prior * state != -1 {
                 continue;
             }
             // A boundary run has two possible transition endpoints. Select by
             // original coordinate order so reversal and ring rotation agree.
-            let a = cuts[before + 1].point;
-            let b = cuts[i].point;
+            let a = exit.point;
+            let b = entry.point;
             let coordinate_order =
                 |a: &Coord, b: &Coord| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y));
             let start = crossing_contacts.partition_point(|&(position, _)| {
                 #[cfg(test)]
                 CROSSING_CONTACT_VISITS.with(|n| n.set(n.get() + 1));
-                position < cuts[before + 1].position
+                position < exit.position
             });
             let end = crossing_contacts.partition_point(|&(position, _)| {
                 #[cfg(test)]
                 CROSSING_CONTACT_VISITS.with(|n| n.set(n.get() + 1));
-                position <= cuts[i].position
+                position <= entry.position
             });
             let (first, seam) = if before < i {
                 (&crossing_contacts[start..end], &[][..])
