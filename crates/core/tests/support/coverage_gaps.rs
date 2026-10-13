@@ -422,7 +422,9 @@ fn endpoint_crossings(rule: Rule, out: &mut Vec<Case>) {
                 }
                 l(&points)
             };
-            let expected = if closed || d > 0.25 {
+            // A closed source dipping out by at most the tolerance stays in the
+            // boundary band, so it touches the polygon boundary without crossing.
+            let expected = if (closed && !polygon) || d > 0.25 {
                 vec![if polygon {
                     pair(
                         K::Crossing,

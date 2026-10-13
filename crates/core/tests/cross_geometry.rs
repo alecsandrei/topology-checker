@@ -1289,3 +1289,39 @@ fn boundary_proximity_requires_passages_on_both_sides() {
         }
     }
 }
+
+#[test]
+fn vertices_just_beyond_the_boundary_band_remain_passages() {
+    use topology_checker_core::geo::CoordsIter;
+    let d = 0.25_f64.next_up();
+    let square =
+        Geometry::from(Rect::new(coord! {x: 0., y: 0.}, coord! {x: 8., y: 8.}).to_polygon());
+    // The outside vertex lies on a later segment, where rounded band parameters
+    // reach it in either direction.
+    for (coords, crossings) in [
+        (vec![(4., 2.), (4., 4.), (-d, 4.)], 1),
+        (vec![(4., 2.), (-d, 4.), (4., 6.)], 2),
+    ] {
+        for reverse in [false, true] {
+            let mut line = LineString::from(coords.clone());
+            if reverse {
+                line.0.reverse();
+            }
+            let report = topology(
+                Rule::LineMustNotCrossPolygonBoundaries,
+                vec![line.into(), square.clone()],
+                true,
+                0.25,
+            )
+            .validate()
+            .unwrap();
+            assert!(
+                report
+                    .violations()
+                    .all(|v| v.kind == ViolationKind::Crossing)
+            );
+            let points: usize = report.violations().map(|v| v.geometry.coords_count()).sum();
+            assert_eq!(points, crossings, "{coords:?}, reversed: {reverse}");
+        }
+    }
+}
