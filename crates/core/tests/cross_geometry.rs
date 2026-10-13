@@ -1327,6 +1327,398 @@ fn vertices_just_beyond_the_boundary_band_remain_passages() {
 }
 
 #[test]
+fn nearby_junction_support_is_not_extended_into_shared_linework() {
+    let shapes = fixture("junction_support");
+    for (case, pair) in shapes.as_chunks::<2>().0.iter().enumerate() {
+        for tolerance in [0., 1.] {
+            for rule in [Rule::LineMustNotOverlap, Rule::LineMustNotOverlapWith] {
+                let t = topology(rule, pair.to_vec(), rule.inputs().1.is_some(), tolerance);
+                assert_eq!(
+                    t.validate().unwrap().violation_count(),
+                    0,
+                    "{rule}, case {case}, tolerance {tolerance}"
+                );
+                assert_eq!(
+                    t.validate_into(|_, _| Ok::<_, ()>(()))
+                        .unwrap()
+                        .violation_count(),
+                    0
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn compact_bent_and_segmented_nearby_runs_keep_longitudinal_support() {
+    let cases = [
+        (
+            line(&[(-0.6, 0.), (-0.6, 0.6), (0.6, 0.6), (0.6, 0.), (0., 0.)]),
+            line(&[(0., 0.), (-0.5, 0.), (-0.5, 0.5), (0.5, 0.5), (0.5, 0.)]),
+        ),
+        (
+            line(&[
+                (0., 0.),
+                (0.5, 0.),
+                (1., 0.),
+                (1.5, 0.),
+                (2., 0.),
+                (2.5, 0.),
+                (3., 0.),
+                (3.5, 0.),
+                (4., 0.),
+            ]),
+            line(&[(0., 0.25), (4., 0.25)]),
+        ),
+        (
+            line(&[(0., 0.), (1.5, 0.)]),
+            line(&[(0., 0.25), (1.5, 0.25)]),
+        ),
+        (
+            line(&[(-0.75, -0.05), (0.75, 0.05)]),
+            line(&[(-0.75, 0.05), (0.75, -0.05)]),
+        ),
+        (
+            line(&[(0., 0.), (0.5, 0.), (1., 0.), (1.5, 0.)]),
+            line(&[(0., 0.), (0.5, 0.), (1., 0.), (1.5, 0.)]),
+        ),
+    ];
+    for (a, b) in cases {
+        for rule in [Rule::LineMustNotOverlap, Rule::LineMustNotOverlapWith] {
+            let t = topology(
+                rule,
+                vec![a.clone(), b.clone()],
+                rule.inputs().1.is_some(),
+                1.,
+            );
+            let report = t.validate().unwrap();
+            assert_eq!(report.violation_count(), 1, "{a:?}, {b:?}");
+            assert_eq!(
+                report.violations().next().unwrap().kind,
+                ViolationKind::Overlap
+            );
+        }
+    }
+}
+
+#[test]
+fn short_boundary_contributions_are_unioned_before_the_final_length_threshold() {
+    let polygons = (0..6)
+        .map(|i| {
+            geo::Rect::new(
+                coord! {x:i as f64 /2.,y:0.},
+                coord! {x:(i+1) as f64/2.,y:10.},
+            )
+            .to_polygon()
+            .into()
+        })
+        .collect();
+    assert!(
+        run(
+            Rule::LineMustBeCoveredByPolygonBoundaries,
+            vec![line(&[(0., 0.), (3., 0.)])],
+            polygons,
+            1.
+        )
+        .is_empty()
+    );
+    let mut lines = (0..6)
+        .map(|i| {
+            line(&[
+                (i as f64 / 2., 0.),
+                ((i + 1) as f64 / 2., 0.),
+                ((i + 1) as f64 / 2., -10.),
+            ])
+        })
+        .collect::<Vec<_>>();
+    lines.extend([
+        line(&[(0., 0.), (0., 10.)]),
+        line(&[(0., 10.), (3., 10.)]),
+        line(&[(3., 0.), (3., 10.)]),
+    ]);
+    assert!(
+        run(
+            Rule::PolygonBoundariesMustBeCoveredByLines,
+            vec![
+                geo::Rect::new(coord! {x:0.,y:0.}, coord! {x:3.,y:10.})
+                    .to_polygon()
+                    .into()
+            ],
+            lines,
+            1.
+        )
+        .is_empty()
+    );
+}
+
+#[test]
+fn closed_nearby_run_support_connects_across_rotated_source_seams() {
+    let a = [(0., 0.), (0.75, 0.), (0.75, 5.), (-0.75, 5.), (-0.75, 0.)];
+    let b = [
+        (0., 0.25),
+        (0.75, 0.25),
+        (0.75, -5.),
+        (-0.75, -5.),
+        (-0.75, 0.25),
+    ];
+    for rotate_a in 0..a.len() {
+        for rotate_b in 0..b.len() {
+            let ring = |coords: &[(f64, f64)], rotate: usize| {
+                let mut coords = coords[rotate..]
+                    .iter()
+                    .chain(&coords[..rotate])
+                    .copied()
+                    .collect::<Vec<_>>();
+                coords.push(coords[0]);
+                line(&coords)
+            };
+            let report = run(
+                Rule::LineMustNotOverlapWith,
+                vec![ring(&a, rotate_a)],
+                vec![ring(&b, rotate_b)],
+                1.,
+            );
+            assert_eq!(report.len(), 1, "rotations {rotate_a}, {rotate_b}");
+            assert_eq!(report[0].kind, ViolationKind::Overlap);
+        }
+    }
+}
+
+#[test]
+fn uncertain_path_prefixes_preserve_original_interval_evidence() {
+    for (a, b, tolerance) in [
+        (
+            line(&[(0., 0.), (9e307, 0.), (0., 0.), (9e307, 0.)]),
+            line(&[(0., 1e300), (9e307, 1e300), (0., 1e300), (9e307, 1e300)]),
+            1e301,
+        ),
+        (
+            line(&[(1e16, 1e16), (0., 1e16), (0., 0.), (2., 0.)]),
+            line(&[(0., 0.25), (1.5, 0.25)]),
+            1.,
+        ),
+    ] {
+        let errors = run(Rule::LineMustNotOverlapWith, vec![a], vec![b], tolerance);
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].kind, ViolationKind::Overlap);
+    }
+}
+
+#[test]
+fn connected_shared_support_combines_short_contributions_across_parts() {
+    for offset in [0., 0.25] {
+        let a = line(&[(0., 0.), (3., 0.)]);
+        let b: Geometry = MultiLineString(
+            (0..6)
+                .map(|i| {
+                    LineString::from(vec![
+                        (i as f64 / 2., offset),
+                        ((i + 1) as f64 / 2., offset),
+                        ((i + 1) as f64 / 2., -10.),
+                    ])
+                })
+                .collect(),
+        )
+        .into();
+        let errors = run(
+            Rule::LineMustNotOverlapWith,
+            vec![a.clone()],
+            vec![b.clone()],
+            1.,
+        );
+        assert_eq!(errors.len(), 1);
+        let Geometry::MultiLineString(mut combined) = b else {
+            unreachable!()
+        };
+        let Geometry::LineString(a) = a else {
+            unreachable!()
+        };
+        combined.0.push(a);
+        let t = topology(
+            Rule::LineMustNotSelfOverlap,
+            vec![combined.into()],
+            false,
+            1.,
+        );
+        let report = t.validate().unwrap();
+        assert_eq!(report.violation_count(), 1);
+        // Accepted vertical passages must not hide the connected horizontal run.
+        let geometry = &report.violations().next().unwrap().geometry;
+        let lines = match geometry {
+            Geometry::LineString(line) => vec![line],
+            Geometry::MultiLineString(lines) => lines.0.iter().collect(),
+            _ => unreachable!(),
+        };
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.0.iter().any(|p| p.x == 0. && p.y == 0.)
+                    && line.0.iter().any(|p| p.x == 3. && p.y == 0.)),
+            "{geometry:?}"
+        );
+    }
+}
+
+#[test]
+fn duplicate_and_disconnected_parts_cannot_restore_short_junction_support() {
+    let shapes = fixture("junction_support");
+    let parts = |geometry: &Geometry| match geometry {
+        Geometry::LineString(line) => vec![line.clone()],
+        Geometry::MultiLineString(lines) => lines.0.clone(),
+        _ => unreachable!(),
+    };
+    for pair in shapes.as_chunks::<2>().0 {
+        for duplicated in 0..2 {
+            let mut a = parts(&pair[0]);
+            let mut b = parts(&pair[1]);
+            if duplicated == 0 {
+                a.extend(a.clone());
+            } else {
+                b.extend(b.clone());
+            }
+            let errors = run(
+                Rule::LineMustNotOverlapWith,
+                vec![MultiLineString(a.clone()).into()],
+                vec![MultiLineString(b.clone()).into()],
+                1.,
+            );
+            assert!(errors.is_empty(), "duplicate side {duplicated}: {errors:?}");
+            a.extend(b);
+            // The distant three-way duplicate has ambiguous passage roles.
+            // Its legitimate overlap must not resurrect the rejected junction.
+            let distant = LineString::from(vec![(1e7, 0.), (1e7 + 10., 0.)]);
+            a.extend([distant.clone(), distant.clone(), distant]);
+            for reverse in [false, true] {
+                let mut a = a.clone();
+                if reverse {
+                    a.reverse();
+                    for part in &mut a {
+                        part.0.reverse();
+                    }
+                }
+                let t = topology(
+                    Rule::LineMustNotSelfOverlap,
+                    vec![MultiLineString(a).into()],
+                    false,
+                    1.,
+                );
+                let report = t.validate().unwrap();
+                assert_eq!(report.violation_count(), 1);
+                let error = report.violations().next().unwrap();
+                // Only original duplicate linework, never a capped junction approach.
+                use topology_checker_core::geo::Length;
+                let expected = geo_length(&pair[duplicated]) + 20.;
+                let actual = match &error.geometry {
+                    Geometry::LineString(line) => {
+                        topology_checker_core::geo::Euclidean.length(line)
+                    }
+                    Geometry::MultiLineString(lines) => {
+                        topology_checker_core::geo::Euclidean.length(lines)
+                    }
+                    _ => unreachable!(),
+                };
+                assert!(
+                    (actual - expected).abs() < 1e-6,
+                    "{actual} versus {expected}"
+                );
+            }
+        }
+    }
+}
+fn geo_length(geometry: &Geometry) -> f64 {
+    use topology_checker_core::geo::{Euclidean, Length};
+    match geometry {
+        Geometry::LineString(line) => Euclidean.length(line),
+        Geometry::MultiLineString(lines) => Euclidean.length(lines),
+        _ => unreachable!(),
+    }
+}
+
+#[test]
+fn each_multipart_passage_requires_its_own_connected_source_support() {
+    let a = LineString::from(vec![(0., 0.), (1.5, 0.)]);
+    let b = LineString::from(vec![(0.75, 0.5), (10., 0.5)]);
+    let c = LineString::from(vec![(0.75, 1.25), (10., 1.25)]);
+    for reverse in [false, true] {
+        let mut parts = vec![a.clone(), b.clone(), c.clone()];
+        if reverse {
+            parts.reverse();
+            for part in &mut parts {
+                part.0.reverse();
+            }
+        }
+        let t = topology(
+            Rule::LineMustNotSelfOverlap,
+            vec![MultiLineString(parts).into()],
+            false,
+            1.,
+        );
+        let report = t.validate().unwrap();
+        assert_eq!(report.violation_count(), 1);
+        let Geometry::LineString(line) = &report.violations().next().unwrap().geometry else {
+            panic!("single connected overlap");
+        };
+        assert!(line.0.iter().all(|p| p.y == 0.5), "{line:?}");
+        let errors = run(
+            Rule::LineMustNotOverlapWith,
+            vec![MultiLineString(vec![a.clone(), c.clone()]).into()],
+            vec![b.clone().into()],
+            1.,
+        );
+        assert_eq!(errors.len(), 1);
+        let Geometry::LineString(line) = &errors[0].geometry else {
+            panic!("single connected overlap");
+        };
+        assert!(line.0.iter().all(|p| p.y == 0.5), "{line:?}");
+    }
+}
+
+#[test]
+fn disconnected_short_support_is_not_joined_through_excluded_bridge_correspondences() {
+    let left = vec![vec![(0., 0.), (1.5, 0.)], vec![(10., 0.), (11.5, 0.)]];
+    let right = vec![
+        vec![(0.75, 0.5), (2.25, 0.5)],
+        vec![(10.75, 0.5), (12.25, 0.5)],
+    ];
+    let bridges = vec![
+        vec![(1.5, 0.), (2., 100.), (12., 100.), (11.5, 0.)],
+        vec![(0.75, 0.5), (-100., -101.), (-100., -201.), (10.75, 0.5)],
+    ];
+    for reverse in [false, true] {
+        let build = |mut pieces: Vec<Vec<(f64, f64)>>| {
+            pieces.extend(bridges.clone());
+            if reverse {
+                pieces.reverse();
+                for line in &mut pieces {
+                    line.reverse();
+                }
+            }
+            Geometry::from(MultiLineString(
+                pieces.into_iter().map(LineString::from).collect(),
+            ))
+        };
+        let errors = run(
+            Rule::LineMustNotOverlapWith,
+            vec![build(left.clone())],
+            vec![build(right.clone())],
+            1.,
+        );
+        assert_eq!(errors.len(), 1);
+        let lines = match &errors[0].geometry {
+            Geometry::LineString(line) => vec![line],
+            Geometry::MultiLineString(lines) => lines.0.iter().collect(),
+            _ => unreachable!(),
+        };
+        assert!(
+            lines
+                .iter()
+                .all(|line| !line.0.windows(2).any(|p| p[0].y == 0. && p[1].y == 0.)),
+            "{errors:?}"
+        );
+    }
+}
+
+#[test]
 fn source_endpoint_junctions_remain_endpoint_contacts_after_clustering() {
     use topology_checker_core::geo::MapCoords;
     let shapes = fixture("endpoint_junction_meetings");
