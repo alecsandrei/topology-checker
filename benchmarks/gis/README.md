@@ -114,6 +114,8 @@ Adapters expose `metadata`, `sample(rule, timeout)` and `close()`. Embedded
 workers exchange atomic JSON requests and responses with separate preparation,
 validation and extraction deadlines. Responses contain `seconds`, `raw_count`
 and materialized `errors`, with both source IDs for pairs and geometry for gaps.
+QGIS exports native WKB after timing to preserve coordinates exactly; decimal
+GeoJSON rounding can perturb large translated coordinates.
 
 ```sh
 uv run --project benchmarks/gis --group dev pytest benchmarks/gis/tests

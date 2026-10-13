@@ -33,6 +33,10 @@ jobs:
         run: |
           docker run --rm --entrypoint bash topology-gis-benchmark:ci -c \
             'uv run --project benchmarks/gis --frozen --no-sync pytest benchmarks/gis/tests -q && uv run --project benchmarks/gis --frozen --no-sync ruff check benchmarks/gis && uv run --project benchmarks/gis --frozen --no-sync pyright --project benchmarks/gis'
+      - name: Verify native QGIS gap extraction at the headline size
+        run: |
+          docker run --rm -e GIS_INTEGRATION=1 topology-gis-benchmark:ci \
+            pytest benchmarks/gis/tests/test_integration.py -k gap_wkb -q
       - name: Measure all engines on the same runner
         env:
           GIS_SOURCE_REVISION: ${{ github.sha }}

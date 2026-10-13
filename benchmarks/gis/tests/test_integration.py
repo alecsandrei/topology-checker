@@ -52,3 +52,25 @@ def test_native_engine_probes(engine: str, rule: str, tmp_path: Path) -> None:
             assert actual["rust"] == expected, case["name"]
         for key, value in case.get("identity", {}).items():
             assert actual["rust"][key] == value
+
+
+def test_qgis_gap_wkb_at_headline_size(tmp_path: Path) -> None:
+    """Translated gaps must retain exact geometry at the published feature count."""
+    from benchmarks.qgis.fixtures import workload
+
+    rule = "polygon/must-not-have-gaps"
+    primary, secondary, _ = workload(rule, 1000)
+    files = write_case(tmp_path, primary, secondary)
+    results = {}
+    for engine in ("rust", "qgis"):
+        session = create_session(engine, rule, files, tmp_path / engine, 180)
+        try:
+            for _ in range(2):
+                response = session.sample(rule, 60)
+                results[engine] = normalize(rule, response)
+                assert results[engine]["count"] == 10
+                if engine == "qgis":
+                    assert all("geometry_wkb" in error for error in response["errors"])
+                    assert results[engine] == results["rust"]
+        finally:
+            session.close()
