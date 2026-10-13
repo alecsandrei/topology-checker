@@ -1153,6 +1153,9 @@ impl LineGraph {
             let mut pending = connected(&ids);
             while let Some(component) = pending.pop() {
                 crate::cancel::check();
+                if !component.iter().any(|&id| rejected[id]) {
+                    continue;
+                }
                 // Connectivity must hold inside the accepted correspondence group.
                 // A bridge excluded by the opposite role cannot connect its support.
                 let subdivisions = connected(&component);
