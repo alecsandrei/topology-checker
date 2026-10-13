@@ -18,8 +18,19 @@ pub(crate) fn point(line: Line, t: f64) -> Coord {
 /// Linear separation then stays within tolerance everywhere on that span.
 /// Its length must exceed the transverse drift, excluding junction connectors.
 pub(crate) fn interval(a: Line, b: Line, tolerance: f64) -> Option<[[f64; 2]; 2]> {
+    evidence(a, b, tolerance).map(|e| e.spans)
+}
+
+pub(crate) struct Evidence {
+    pub spans: [[f64; 2]; 2],
+    pub support: [[f64; 2]; 2],
+    pub exact: bool,
+}
+
+pub(crate) fn evidence(a: Line, b: Line, tolerance: f64) -> Option<Evidence> {
+    let intersection = line_intersection(a, b);
     if tolerance == 0. {
-        return match line_intersection(a, b) {
+        return match intersection {
             Some(LineIntersection::Collinear { intersection })
                 if intersection.start != intersection.end =>
             {
@@ -28,13 +39,18 @@ pub(crate) fn interval(a: Line, b: Line, tolerance: f64) -> Option<[[f64; 2]; 2]
                     let y = projection(s, intersection.end).0;
                     [x.min(y), x.max(y)]
                 };
-                Some([span(a), span(b)])
+                let spans = [span(a), span(b)];
+                Some(Evidence {
+                    spans,
+                    support: spans,
+                    exact: true,
+                })
             }
             _ => None,
         };
     }
     let endpoint_contact = matches!(
-        line_intersection(a, b),
+        intersection,
         Some(LineIntersection::SinglePoint {
             is_proper: false,
             ..
@@ -78,6 +94,7 @@ pub(crate) fn interval(a: Line, b: Line, tolerance: f64) -> Option<[[f64; 2]; 2]
         [x.min(y), x.max(y)]
     };
     let (mut sa, mut sb) = (span(av), span(bv));
+    let support = [sa, sb];
     let at = |s: Line, v: [f64; 2], t: f64| point(s, ((t - v[0]) / (v[1] - v[0])).clamp(0., 1.));
     let (a0, a1, b0, b1) = (at(a, av, lo), at(a, av, hi), at(b, bv, lo), at(b, bv, hi));
     if distance(a0, b0) > tolerance || distance(a1, b1) > tolerance {
@@ -108,7 +125,11 @@ pub(crate) fn interval(a: Line, b: Line, tolerance: f64) -> Option<[[f64; 2]; 2]
             range[1] = 1.;
         }
     }
-    Some([sa, sb])
+    Some(Evidence {
+        spans: [sa, sb],
+        support,
+        exact: matches!(intersection, Some(LineIntersection::Collinear { intersection }) if intersection.start != intersection.end),
+    })
 }
 
 pub(crate) fn union(mut spans: Vec<[f64; 2]>) -> Vec<[f64; 2]> {
