@@ -13,8 +13,8 @@ from typing import Any
 
 import psycopg
 
-from benchmarks.qgis.fixtures import CATALOG, FIXTURES, ROOT, workload, write_case
-from benchmarks.qgis.run import EngineFailure, atomic_json
+from benchmarks.gis.fixtures import CATALOG, FIXTURES, ROOT, workload, write_case
+from benchmarks.gis.sessions import EngineFailure, atomic_json
 
 from .adapters import HERE, create_session
 from .catalog import CONTAINMENT_RULES, ENGINES, HEADLINE_RULES, NATIVE_RULES, SUPPORT
@@ -62,9 +62,6 @@ def metadata(args: argparse.Namespace) -> dict[str, Any]:
     paths = sorted(HERE.glob("*")) + [
         ROOT / "Cargo.lock",
         ROOT / "crates/io/examples/qgis_benchmark.rs",
-        ROOT / "benchmarks/qgis/fixtures.py",
-        ROOT / "benchmarks/qgis/fixtures.json",
-        ROOT / "benchmarks/qgis/qgis_startup.py",
     ]
     tooling = {
         str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest()

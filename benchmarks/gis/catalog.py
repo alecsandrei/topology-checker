@@ -1,6 +1,6 @@
 """Explicit native benchmark capabilities, separate from product metadata."""
 
-from benchmarks.qgis.fixtures import MAPPINGS
+from benchmarks.gis.fixtures import MAPPINGS
 
 ENGINES = ("qgis", "grass", "postgis", "gvsig")
 CONTAINMENT_RULES = ("point/must-be-inside", "polygon/must-contain-point")

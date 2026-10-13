@@ -8,13 +8,38 @@ import pytest
 from benchmarks.gis.adapters import create_session
 from benchmarks.gis.catalog import ENGINES, HEADLINE_RULES
 from benchmarks.gis.common import normalize
+from benchmarks.gis.fixtures import write_case
 from benchmarks.gis.run import probe_cases
-from benchmarks.qgis.fixtures import write_case
+from benchmarks.gis.sessions import RustSession
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("GIS_INTEGRATION") != "1",
     reason="Run in the benchmark container with GIS_INTEGRATION=1",
 )
+
+
+def test_rust_preloaded_protocol(tmp_path: Path) -> None:
+    """The production importer preserves IDs across fresh timed samples."""
+    from benchmarks.gis.fixtures import FIXTURES, ROOT
+
+    binary = Path(
+        os.environ.get(
+            "GIS_RUST_BINARY", str(ROOT / "target/release/examples/qgis_benchmark")
+        )
+    )
+    fixture = FIXTURES["point/must-not-overlap"]["violation"]
+    files = write_case(tmp_path, fixture["input"], None)
+    session = RustSession(binary, "point/must-not-overlap", files, tmp_path, 10)
+    try:
+        assert session.metadata["threads"] == "1"
+        for _ in range(2):
+            result = session.sample("point/must-not-overlap", 10)
+            assert result["status"] == "ok"
+            assert result["raw_count"] == 1
+            assert result["errors"][0]["id"] == 1
+            assert result["errors"][0]["destination"] == 2
+    finally:
+        session.close()
 
 
 @pytest.mark.parametrize("engine", ENGINES)
@@ -56,7 +81,7 @@ def test_native_engine_probes(engine: str, rule: str, tmp_path: Path) -> None:
 
 def test_qgis_gap_wkb_at_headline_size(tmp_path: Path) -> None:
     """Translated gaps must retain exact geometry at the published feature count."""
-    from benchmarks.qgis.fixtures import workload
+    from benchmarks.gis.fixtures import workload
 
     rule = "polygon/must-not-have-gaps"
     primary, secondary, _ = workload(rule, 1000)
