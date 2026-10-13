@@ -1263,7 +1263,7 @@ fn boundary_proximity_requires_passages_on_both_sides() {
     use topology_checker_core::geo::MapCoords;
     let shapes = fixture("boundary_proximity");
     for offset in [coord! {x: 0., y: 0.}, coord! {x: 1048576., y: -524288.}] {
-        for pair in shapes.chunks_exact(2) {
+        for pair in shapes.as_chunks::<2>().0 {
             let transformed = pair
                 .iter()
                 .map(|g| {
