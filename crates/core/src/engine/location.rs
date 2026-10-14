@@ -93,6 +93,23 @@ impl Location {
         }
         if inside { 1 } else { -1 }
     }
+    /// Segment `i` directed with the interior on its left, and the far end of
+    /// the segment that follows it in that direction.
+    pub fn edge(&self, i: usize) -> (Line, Coord) {
+        let (start, end) = self.anchors[self.anchors.partition_point(|&(s, _)| s <= i) - 1];
+        let s = self.segments[i];
+        if self.interior_left[i] {
+            (
+                s,
+                self.segments[if i + 1 == end { start } else { i + 1 }].end,
+            )
+        } else {
+            (
+                Line::new(s.end, s.start),
+                self.segments[if i == start { end - 1 } else { i - 1 }].start,
+            )
+        }
+    }
     pub fn near(&self, p: Coord, tolerance: f64) -> bool {
         self.tree
             .locate_in_envelope_intersecting(&index::at(p, tolerance))

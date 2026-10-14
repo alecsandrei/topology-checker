@@ -78,6 +78,53 @@ fn point_parts() -> impl Strategy<Value = MultiPoint> {
         )
     })
 }
+/// Four 10 by 10 tiles meeting at (10, 10), each side moved inward or outward
+/// by an amount around the tolerances tested.
+fn tiles() -> impl Strategy<Value = Vec<Polygon>> {
+    let shift = prop_oneof![
+        Just(-0.003),
+        Just(0.),
+        Just(0.002),
+        Just(0.004),
+        Just(0.006),
+        Just(0.012)
+    ];
+    prop::collection::vec(prop::array::uniform4(shift), 4).prop_map(|shifts| {
+        shifts
+            .into_iter()
+            .enumerate()
+            .map(|(i, [l, b, r, t])| {
+                let (x, y) = (10. * (i % 2) as f64, 10. * (i / 2) as f64);
+                Rect::new(
+                    coord! {x: x + l, y: y + b},
+                    coord! {x: x + 10. - r, y: y + 10. - t},
+                )
+                .to_polygon()
+            })
+            .collect()
+    })
+}
+/// Short paths with vertices on a half-unit grid, offset into nearby cracks.
+fn crack_path() -> impl Strategy<Value = LineString> {
+    let offset = prop_oneof![
+        Just(0.),
+        Just(0.001),
+        Just(0.003),
+        Just(0.0049),
+        Just(-0.002)
+    ];
+    let coordinate = (14i32..27, offset).prop_map(|(k, o)| f64::from(k) / 2. + o);
+    prop::collection::vec((coordinate.clone(), coordinate), 2..5).prop_filter_map(
+        "distinct vertices",
+        |mut c| {
+            c.dedup();
+            (c.len() >= 2).then(|| LineString::from(c))
+        },
+    )
+}
+fn origins(r: &Report) -> BTreeSet<i64> {
+    r.violations().map(|v| v.origin.unwrap().fid).collect()
+}
 fn pairs(r: &Report) -> BTreeSet<(i64, i64, K)> {
     r.violations()
         .map(|v| (v.origin.unwrap().fid, v.destination.unwrap().fid, v.kind))
@@ -324,6 +371,26 @@ proptest! {
                 .collect::<BTreeSet<_>>(),
             expected
         );
+    }
+    #[test]
+    fn lines_properly_inside_closed_coverage_are_inside_it(
+        tiles in tiles(),
+        lines in prop::collection::vec(crack_path(), 1..8),
+        degrees in prop_oneof![Just(0.), Just(17.)],
+        tolerance in prop_oneof![Just(0.), Just(0.005), Just(0.01)]){
+        use geo::Rotate;
+        let centre = Point::new(10., 10.);
+        let rotate = |g: Geometry| g.rotate_around_point(degrees, centre);
+        let tiles = tiles.into_iter().map(|p| rotate(p.into())).collect::<Vec<_>>();
+        let lines = lines.into_iter().map(|l| rotate(l.into())).collect::<Vec<_>>();
+        let strict = origins(&run(
+            Rule::LineMustBeProperlyInsidePolygons,
+            lines.clone(),
+            tiles.clone(),
+            tolerance,
+        ));
+        let outside = origins(&run(Rule::LineMustBeInside, lines, tiles, tolerance));
+        prop_assert!(outside.is_subset(&strict), "{:?} {:?}", outside, strict);
     }
     #[test]
     fn bent_line_pairs_match_de9im(lines in prop::collection::vec(bent_line(),0..8)){

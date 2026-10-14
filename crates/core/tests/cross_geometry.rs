@@ -417,6 +417,204 @@ fn strict_line_containment_uses_union_and_reports_whole_parts() {
         1
     );
 }
+fn rect(x0: f64, y0: f64, x1: f64, y1: f64) -> Polygon {
+    Rect::new(coord! {x:x0,y:y0}, coord! {x:x1,y:y1}).to_polygon()
+}
+/// Two 10 by 10 squares at `origin`, `d` apart: a gap when `d` is positive and
+/// an overlap when negative. Lines cross the crack at 90 and 11 degrees, and
+/// run along it, far from the outer boundary.
+fn crack(d: f64, (x, y): (f64, f64)) -> (Vec<Geometry>, [Geometry; 3]) {
+    let (left, right) = (x + 10., x + 10. + d);
+    let middle = (left + right) / 2.;
+    let (sin, cos) = 11_f64.to_radians().sin_cos();
+    (
+        vec![
+            rect(x, y, left, y + 10.).into(),
+            rect(right, y, x + 20., y + 10.).into(),
+        ],
+        [
+            line(&[(x + 5., y + 5.), (x + 15., y + 5.)]),
+            line(&[
+                (middle - 3. * sin, y + 5. - 3. * cos),
+                (middle + 3. * sin, y + 5. + 3. * cos),
+            ]),
+            line(&[(middle, y + 2.), (middle, y + 8.)]),
+        ],
+    )
+}
+#[test]
+fn inside_rules_close_gaps_narrower_than_tolerance_between_polygons() {
+    let along = 11_f64.to_radians().sin();
+    for origin in [(0., 0.), (5e5, 1.8e5)] {
+        for d in [1e-10, 1e-6, 0.005, 0.0099, 0.02] {
+            for d in [d, -d] {
+                let (squares, lines) = crack(d, origin);
+                for (crossing, (l, length)) in lines.into_iter().zip([d, d / along, 6.]).enumerate()
+                {
+                    for tolerance in [0.01, 0.] {
+                        // Overlaps always pass. At tolerance 0 every gap is outside.
+                        let outside = d > 0. && (tolerance == 0. || d >= tolerance);
+                        let name = format!("{origin:?} {d} {crossing} {tolerance}");
+                        let strict = run(
+                            Rule::LineMustBeProperlyInsidePolygons,
+                            vec![l.clone()],
+                            squares.clone(),
+                            tolerance,
+                        );
+                        assert_eq!(strict.is_empty(), !outside, "{name}: {strict:?}");
+                        let pieces = run(
+                            Rule::LineMustBeInside,
+                            vec![l.clone()],
+                            squares.clone(),
+                            tolerance,
+                        );
+                        if outside {
+                            assert_eq!(pieces.len(), 1, "{name}: {pieces:?}");
+                            let reported = geo_length(&pieces[0].geometry);
+                            assert!((reported - length).abs() < 1e-6, "{name}: {reported}");
+                        } else {
+                            assert!(pieces.is_empty(), "{name}: {pieces:?}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+#[test]
+fn crack_mouths_stay_boundary_while_enclosed_crack_ends_close() {
+    let (d, tolerance) = (0.005, 0.01);
+    let middle = 10. + d / 2.;
+    // Open at the top, in the outer boundary, or closed at both ends inside one polygon.
+    let open: Vec<Geometry> = vec![
+        rect(0., 0., 10., 10.).into(),
+        rect(10. + d, 0., 20., 10.).into(),
+    ];
+    let enclosed: Vec<Geometry> = vec![
+        Polygon::new(
+            rect(0., 0., 20., 10.).exterior().clone(),
+            vec![rect(10., 2., 10. + d, 8.).exterior().clone()],
+        )
+        .into(),
+    ];
+    let check = |target: &Vec<Geometry>, l: Geometry, strict: bool, outside: f64| {
+        let errors = run(
+            Rule::LineMustBeProperlyInsidePolygons,
+            vec![l.clone()],
+            target.clone(),
+            tolerance,
+        );
+        assert_eq!(errors.is_empty(), strict, "{l:?}: {errors:?}");
+        let pieces = run(
+            Rule::LineMustBeInside,
+            vec![l.clone()],
+            target.clone(),
+            tolerance,
+        );
+        let reported = pieces.iter().map(|v| geo_length(&v.geometry)).sum::<f64>();
+        assert!((reported - outside).abs() < 1e-9, "{l:?}: {pieces:?}");
+    };
+    for target in [&open, &enclosed] {
+        check(target, line(&[(5., 5.), (15., 5.)]), true, 0.);
+        check(target, line(&[(middle, 3.), (middle, 7.)]), true, 0.);
+    }
+    // Beside the enclosed crack's ends there is no remaining boundary.
+    check(&enclosed, line(&[(9., 2.004), (11., 2.004)]), true, 0.);
+    check(
+        &enclosed,
+        line(&[(middle, 2.001), (middle, 7.999)]),
+        true,
+        0.,
+    );
+    // Within tolerance of the outer edge at the mouth of the open crack.
+    check(&open, line(&[(9., 9.996), (11., 9.996)]), false, 0.);
+    check(&open, line(&[(middle, 5.), (middle, 9.995)]), false, 0.);
+    // Through the mouth, the coverage ends at the outer boundary.
+    check(&open, line(&[(middle, 5.), (middle, 12.)]), false, 2.);
+}
+#[test]
+fn single_polygon_notch_matches_a_crack_between_two_polygons() {
+    let d = 0.005;
+    let middle = 10. + d / 2.;
+    // The notch is open at the bottom and ends 1 below the top.
+    let notch: Vec<Geometry> = vec![
+        Polygon::new(
+            LineString::from(vec![
+                (0., 0.),
+                (10., 0.),
+                (10., 9.),
+                (10. + d, 9.),
+                (10. + d, 0.),
+                (20., 0.),
+                (20., 10.),
+                (0., 10.),
+                (0., 0.),
+            ]),
+            vec![],
+        )
+        .into(),
+    ];
+    let (squares, lines) = crack(d, (0., 0.));
+    let mut lines = lines.to_vec();
+    lines.extend([
+        line(&[(9., 8.996), (11., 8.996)]),
+        line(&[(9., 0.004), (11., 0.004)]),
+        line(&[(middle, 5.), (middle, -2.)]),
+        line(&[(middle, 2.), (middle, 8.995)]),
+    ]);
+    for tolerance in [0.01, 0.] {
+        for rule in [
+            Rule::LineMustBeInside,
+            Rule::LineMustBeProperlyInsidePolygons,
+        ] {
+            for l in &lines {
+                let results = [&notch, &squares].map(|target| {
+                    run(rule, vec![l.clone()], target.clone(), tolerance)
+                        .iter()
+                        .map(|v| (geo_length(&v.geometry) * 1e9).round())
+                        .collect::<Vec<_>>()
+                });
+                assert_eq!(results[0], results[1], "{rule} {tolerance} {l:?}");
+            }
+        }
+    }
+}
+#[test]
+fn gaps_turning_a_corner_close_at_the_corner() {
+    let tolerance = 0.01;
+    for (d, closed) in [(0.005, true), (0.02, false)] {
+        // An L-shaped polygon around a square, `d` away from two of its sides.
+        let target: Vec<Geometry> = vec![
+            rect(0., 0., 10., 10.).into(),
+            Polygon::new(
+                LineString::from(vec![
+                    (-5., -5.),
+                    (15., -5.),
+                    (15., -d),
+                    (-d, -d),
+                    (-d, 15.),
+                    (-5., 15.),
+                    (-5., -5.),
+                ]),
+                vec![],
+            )
+            .into(),
+        ];
+        for l in [
+            line(&[(2., 2.), (-2., -2.)]),
+            line(&[(-d / 2., 5.), (-d / 2., -d / 2.), (5., -d / 2.)]),
+            line(&[(-3., -3.), (-0.006, -0.006)]),
+        ] {
+            for rule in [
+                Rule::LineMustBeInside,
+                Rule::LineMustBeProperlyInsidePolygons,
+            ] {
+                let errors = run(rule, vec![l.clone()], target.clone(), tolerance);
+                assert_eq!(errors.is_empty(), closed, "{d} {rule} {l:?}: {errors:?}");
+            }
+        }
+    }
+}
 #[test]
 fn line_overlap_and_contact_have_distinct_geometries_and_length_thresholds() {
     let crossing = line(&[(-1., 5.), (11., 5.)]);

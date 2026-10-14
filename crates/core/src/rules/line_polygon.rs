@@ -9,7 +9,7 @@ use crate::{
         line_graph::{projection, proper_intersection},
         location::{self, Location},
         parameter::{self, Parameter},
-        polygons,
+        polygons, precision,
     },
     model::Part,
 };
@@ -37,14 +37,19 @@ pub(super) fn properly_inside(
     other: LayerId,
 ) -> Result<Vec<Violation>, Error> {
     let a = t.parts(spec.layer)?;
-    let union = polygons::union(t.parts(other)?);
+    let target = t.parts(other)?;
+    let union = polygons::union(target);
     let violations = a
         .lines
         .par_iter()
         .filter_map(|l| {
-            let inside = union
-                .geometry
-                .properly_contains(l.geometry.as_ref(), t.tolerance());
+            let inside = union.geometry.properly_contains(
+                l.geometry.as_ref(),
+                t.tolerance(),
+                &|segment, distance| {
+                    boundary(segment, target, location::locations(target), distance)
+                },
+            );
             (!inside).then(|| {
                 violation(
                     spec,
@@ -644,19 +649,24 @@ pub(super) fn inside(
         .lines
         .par_iter()
         .flat_map_iter(|line| {
-            outside_pieces(line.geometry.as_ref(), target, target_locations)
-                .into_iter()
-                .filter(|piece| Euclidean.length(piece) > t.tolerance())
-                .map(|piece| {
-                    violation(
-                        spec,
-                        ViolationKind::Outside,
-                        piece,
-                        Some(line.reference.at(spec.layer)),
-                        None,
-                    )
-                })
-                .collect::<Vec<_>>()
+            outside_pieces(
+                line.geometry.as_ref(),
+                target,
+                target_locations,
+                t.tolerance(),
+            )
+            .into_iter()
+            .filter(|piece| Euclidean.length(piece) > t.tolerance())
+            .map(|piece| {
+                violation(
+                    spec,
+                    ViolationKind::Outside,
+                    piece,
+                    Some(line.reference.at(spec.layer)),
+                    None,
+                )
+            })
+            .collect::<Vec<_>>()
         })
         .collect();
     Ok(aggregate(violations, Merge::AllDimensions))
@@ -667,10 +677,13 @@ thread_local! { static SEGMENT_POLYGONS: std::cell::Cell<usize> = const { std::c
 #[cfg(test)]
 thread_local! { static CROSSING_CONTACT_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
 
+/// Pieces outside every target polygon. At a positive tolerance, uncovered
+/// space narrower than the tolerance between polygons is covered.
 fn outside_pieces(
     line: &LineString,
     target: &crate::model::Parts,
     locations: &[Location],
+    tolerance: f64,
 ) -> Vec<LineString> {
     let mut coords = Vec::new();
     let mut outside = Vec::new();
@@ -733,8 +746,11 @@ fn outside_pieces(
         }
         cuts.sort_by(|a, b| a.position.total_cmp(&b.position));
         cuts.dedup_by(|a, b| a.position == b.position);
-        outside.extend(cuts.windows(2).map(|pair| {
-            !shared
+        if coords.is_empty() {
+            coords.push(cuts[0].point);
+        }
+        for pair in cuts.windows(2) {
+            let uncovered = !shared
                 .iter()
                 .any(|&(a, b)| pair[0].position >= a && pair[1].position <= b)
                 && !candidates.iter().any(|&i| {
@@ -743,14 +759,61 @@ fn outside_pieces(
                         pair[0].point,
                         pair[1].point,
                     )
-                })
-        }));
-        if coords.is_empty() {
-            coords.push(cuts[0].point);
+                });
+            let window = Line::new(pair[0].point, pair[1].point);
+            let edges = if uncovered && tolerance > 0. {
+                boundary(window, target, locations, tolerance)
+            } else {
+                Vec::new()
+            };
+            if edges.is_empty() {
+                coords.push(window.end);
+                outside.push(uncovered);
+                continue;
+            }
+            // Split the window where it enters and leaves channels.
+            let mut start = 0.;
+            for [lo, hi] in precision::covered(window, &precision::channels(&edges, tolerance)) {
+                for (t, flag) in [(lo, true), (hi, false)] {
+                    let point = crate::engine::matching::point(window, t);
+                    if t > start && coords.last() != Some(&point) {
+                        coords.push(point);
+                        outside.push(flag);
+                    }
+                }
+                start = hi;
+            }
+            if start < 1. {
+                coords.push(window.end);
+                outside.push(true);
+            }
         }
-        coords.extend(cuts[1..].iter().map(|c| c.point));
     }
     selected_pieces(&coords, &outside)
+}
+/// Target boundary segments within `distance` of `segment`, directed with the
+/// covered side on their left, each with the far end of the next segment.
+fn boundary(
+    segment: Line,
+    target: &crate::model::Parts,
+    locations: &[Location],
+    distance: f64,
+) -> Vec<(Line, Coord)> {
+    let query = index::expanded(segment.bounding_rect(), distance);
+    let mut edges = Vec::new();
+    for item in target
+        .polygon_index()
+        .locate_in_envelope_intersecting(&query)
+    {
+        let location = &locations[item.data];
+        for s in location.tree.locate_in_envelope_intersecting(&query) {
+            let (edge, next) = location.edge(s.data);
+            if precision::squared_gap(edge, segment) <= distance * distance {
+                edges.push((edge, next));
+            }
+        }
+    }
+    edges
 }
 
 #[cfg(test)]
@@ -825,7 +888,7 @@ mod tests {
                 .collect(),
         );
         SEGMENT_POLYGONS.with(|n| n.set(0));
-        let pieces = outside_pieces(&line, target, location::locations(target));
+        let pieces = outside_pieces(&line, target, location::locations(target), 0.001);
         assert_eq!(pieces.len(), 40);
         assert!(SEGMENT_POLYGONS.with(|n| n.get()) < 2000);
         assert!(pieces.iter().all(|p| p.0.len() > 2));
