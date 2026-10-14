@@ -165,3 +165,84 @@ fn precision_failure_propagates_after_prior_rows_without_a_summary() {
     topology.clear_rules();
     assert!(topology.validate().unwrap().is_valid());
 }
+
+#[test]
+fn line_meeting_sinks_match_eager_reports_on_nearby_linework() {
+    use topology_checker_core::geo::{Geometry, LineString, MultiLineString};
+    // Deterministic xorshift input: lines along, across and near one base line,
+    // with vertices on it, closed rings and multipart features.
+    let mut state = 0x2545_f491_4f6c_dd1d_u64;
+    let mut next = move || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        (state >> 11) as f64 / (1_u64 << 53) as f64
+    };
+    for case in 0..150 {
+        let tolerance = if case % 2 == 0 { 0.25 } else { 1. };
+        let angle = next() * std::f64::consts::PI;
+        let (ux, uy) = (angle.cos(), angle.sin());
+        let origin = ((next() - 0.5) * 2000., (next() - 0.5) * 2000.);
+        let at = |s: f64, d: f64| (origin.0 + s * ux - d * uy, origin.1 + s * uy + d * ux);
+        let length = 6. + next() * 10.;
+        let mut parts = vec![vec![at(0., 0.), at(length / 2., 0.), at(length, 0.)]];
+        for _ in 0..2 + (next() * 3.) as usize {
+            let mut s = next() * length - 2.;
+            let mut part = Vec::new();
+            for _ in 0..2 + (next() * 5.) as usize {
+                let d = match (next() * 4.) as usize {
+                    0 => 0.,
+                    1 => (next() - 0.5) * 2. * tolerance,
+                    2 => (next() - 0.5) * 4. * tolerance,
+                    _ => (next() - 0.5) * 10.,
+                };
+                part.push(at(s, d));
+                s += (next() - 0.25) * 4.;
+            }
+            if part.len() > 2 && next() < 0.25 {
+                part.push(part[0]);
+            }
+            parts.push(part);
+        }
+        let mut features: Vec<Geometry> = Vec::new();
+        let mut parts = parts.into_iter().map(LineString::from).peekable();
+        while let Some(part) = parts.next() {
+            features.push(match parts.peek() {
+                Some(_) if next() < 0.3 => {
+                    MultiLineString(vec![part, parts.next().expect("part")]).into()
+                }
+                _ => part.into(),
+            });
+        }
+        for rule in [
+            Rule::LineMustNotIntersect,
+            Rule::LineMustNotIntersectWith,
+            Rule::LineMustNotIntersectOrTouchInterior,
+            Rule::LineMustNotIntersectOrTouchInteriorWith,
+        ] {
+            let mut t = Topology::new(tolerance).unwrap();
+            let mut source = features
+                .iter()
+                .cloned()
+                .enumerate()
+                .map(|(i, g)| (7 - 3 * i as i64, g))
+                .collect::<Vec<_>>();
+            if rule.inputs().1.is_some() {
+                let target = t.add_layer(Layer::from_features("target", source.split_off(1)));
+                let source = t.add_layer(Layer::from_features("source", source));
+                t.add_rule(rule, source, Some(target)).unwrap();
+            } else {
+                let layer = t.add_layer(Layer::from_features("lines", source));
+                t.add_rule(rule, layer, None).unwrap();
+            }
+            let eager = t.validate().unwrap();
+            let mut streamed = Vec::new();
+            t.validate_into(|_, v| {
+                streamed.push(v);
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+            assert_eq!(streamed, eager.rules[0].violations, "case {case}, {rule}");
+        }
+    }
+}
