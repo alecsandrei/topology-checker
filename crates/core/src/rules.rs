@@ -117,31 +117,38 @@ fn violation(
 /// Extract connected selected pieces before applying the length threshold.
 /// A closed path's first and last runs form one piece across the traversal seam.
 fn selected_pieces(coords: &[Coord], selected: &[bool]) -> Vec<LineString> {
-    let mut pieces = Vec::new();
+    selected_runs(coords, selected)
+        .into_iter()
+        .map(|run| LineString(run.into_iter().map(|i| coords[i]).collect()))
+        .collect()
+}
+/// Coordinate indices of each piece of `selected_pieces`.
+fn selected_runs(coords: &[Coord], selected: &[bool]) -> Vec<Vec<usize>> {
+    let mut runs = Vec::new();
     let mut run = Vec::new();
     for (i, &keep) in selected.iter().enumerate() {
         if keep {
             if run.is_empty() {
-                run.push(coords[i]);
+                run.push(i);
             }
-            run.push(coords[i + 1]);
+            run.push(i + 1);
         } else if !run.is_empty() {
-            pieces.push(LineString(std::mem::take(&mut run)));
+            runs.push(std::mem::take(&mut run));
         }
     }
     if !run.is_empty() {
-        pieces.push(LineString(run));
+        runs.push(run);
     }
-    if pieces.len() > 1
+    if runs.len() > 1
         && coords.first() == coords.last()
         && selected.first() == Some(&true)
         && selected.last() == Some(&true)
     {
-        let first = pieces.remove(0);
-        let last = pieces.last_mut().expect("two pieces before joining");
-        last.0.extend(first.0.into_iter().skip(1));
+        let first = runs.remove(0);
+        let last = runs.last_mut().expect("two runs before joining");
+        last.extend(first.into_iter().skip(1));
     }
-    pieces
+    runs
 }
 
 /// Emit deterministic aggregated violations, with a bounded duplicate-pair path.

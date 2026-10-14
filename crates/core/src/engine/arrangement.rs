@@ -117,20 +117,8 @@ pub(super) fn intersects(a: &Exact, b: &Exact, c: &Exact, d: &Exact) -> bool {
             && !cd_b.is_zero()
 }
 fn crossing(a: Line, b: Line) -> Exact {
-    let (x, y) = Exact::input(a.start).xy();
-    let a0 = (x, y);
-    let (x, y) = Exact::input(a.end).xy();
-    let a1 = (x, y);
-    let (x, y) = Exact::input(b.start).xy();
-    let b0 = (x, y);
-    let (x, y) = Exact::input(b.end).xy();
-    let b1 = (x, y);
-    let rx = &a1.0 - &a0.0;
-    let ry = &a1.1 - &a0.1;
-    let sx = &b1.0 - &b0.0;
-    let sy = &b1.1 - &b0.1;
-    let t = ((&b0.0 - &a0.0) * &sy - (&b0.1 - &a0.1) * &sx) / (&rx * &sy - &ry * &sx);
-    Exact::rational(a0.0 + &t * rx, a0.1 + t * ry)
+    let (_, [x, y]) = super::line_graph::exact_crossing(a, b).expect("proper crossing");
+    Exact::rational(x, y)
 }
 #[derive(Debug)]
 struct Source {
@@ -270,7 +258,7 @@ fn witness(h: usize, edges: &[Edge], nodes: &[Exact], tree: &index::Index) -> Ex
 fn contains_exact(location: &Location, point: &Exact) -> bool {
     position_exact(location, point) == 1
 }
-fn position_exact(location: &Location, point: &Exact) -> i8 {
+pub(super) fn position_exact(location: &Location, point: &Exact) -> i8 {
     let p = point.output();
     let query = rstar::AABB::from_corners(
         [p.x.next_down(), p.y.next_down()],
@@ -637,6 +625,12 @@ fn certified_midpoint_position(location: &Location, a: Coord, b: Coord) -> Optio
         a[0].add(b[0]).mul(Interval(0.5, 0.5)),
         a[1].add(b[1]).mul(Interval(0.5, 0.5)),
     ];
+    certified_position(location, p)
+}
+
+/// Ray parity of every point in a coordinate box, or `None` when the box may
+/// touch the boundary or straddle a decision.
+pub(super) fn certified_position(location: &Location, p: [certified::Interval; 2]) -> Option<i8> {
     if p.iter().any(|i| !i.0.is_finite() || !i.1.is_finite()) {
         return None;
     }
