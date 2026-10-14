@@ -687,6 +687,8 @@ fn outside_pieces(
 ) -> Vec<LineString> {
     let mut coords = Vec::new();
     let mut states = Vec::new();
+    let (mut order, mut rank, mut representatives, mut along) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new());
     for segment in line.lines() {
         crate::cancel::check();
         // Polygon bounds restrict both boundary cuts and interval classification.
@@ -699,16 +701,7 @@ fn outside_pieces(
         candidates.sort_unstable();
         #[cfg(test)]
         SEGMENT_POLYGONS.with(|n| n.set(n.get() + candidates.len()));
-        let mut cuts = vec![
-            Cut {
-                position: 0.,
-                point: segment.start,
-            },
-            Cut {
-                position: 1.,
-                point: segment.end,
-            },
-        ];
+        let mut params = vec![Parameter::start(0, segment), Parameter::end(0, segment)];
         let mut shared = Vec::new();
         for &i in &candidates {
             let location = &locations[i];
@@ -718,49 +711,62 @@ fn outside_pieces(
             {
                 crate::cancel::check();
                 let boundary = location.segments[item.data];
-                if let Some(contact) = line_intersection(segment, boundary) {
-                    let points = match contact {
-                        LineIntersection::SinglePoint {
-                            intersection,
-                            is_proper,
-                        } => vec![if is_proper {
-                            proper_intersection(segment, boundary).unwrap_or(intersection)
-                        } else {
-                            intersection
-                        }],
-                        LineIntersection::Collinear { intersection } => {
-                            let a = projection(segment, intersection.start).0;
-                            let b = projection(segment, intersection.end).0;
-                            shared.push((a.min(b), a.max(b)));
-                            vec![intersection.start, intersection.end]
+                match line_intersection(segment, boundary) {
+                    None => {}
+                    Some(LineIntersection::SinglePoint {
+                        is_proper: true, ..
+                    }) => params
+                        .push(Parameter::crossing(0, segment, boundary).expect("proper crossing")),
+                    Some(LineIntersection::SinglePoint { intersection, .. }) => {
+                        params.push(Parameter::on(0, segment, intersection));
+                    }
+                    Some(LineIntersection::Collinear { intersection }) => {
+                        shared.push([params.len(), params.len() + 1]);
+                        for p in [intersection.start, intersection.end] {
+                            params.push(Parameter::on(0, segment, p));
                         }
-                    };
-                    for point in points {
-                        cuts.push(Cut {
-                            position: projection(segment, point).0,
-                            point,
-                        });
                     }
                 }
             }
         }
-        cuts.sort_by(|a, b| a.position.total_cmp(&b.position));
-        cuts.dedup_by(|a, b| a.position == b.position);
-        if coords.is_empty() {
-            coords.push(cuts[0].point);
+        // Order the cuts by exact parameter and classify each window at its
+        // exact midpoint, so rounded cut coordinates never decide a side.
+        order.clear();
+        order.extend(0..params.len());
+        order.sort_by(|&a, &b| params[a].cmp(&params[b]));
+        rank.clear();
+        rank.resize(params.len(), 0);
+        representatives.clear();
+        for (k, &id) in order.iter().enumerate() {
+            if k == 0 || params[order[k - 1]].cmp(&params[id]).is_ne() {
+                representatives.push(id);
+            }
+            rank[id] = representatives.len() - 1;
         }
-        for pair in cuts.windows(2) {
-            let uncovered = !shared
-                .iter()
-                .any(|&(a, b)| pair[0].position >= a && pair[1].position <= b)
-                && !candidates.iter().any(|&i| {
-                    crate::engine::arrangement::midpoint_inside(
-                        &locations[i],
-                        pair[0].point,
-                        pair[1].point,
-                    )
-                });
-            let window = Line::new(pair[0].point, pair[1].point);
+        // Windows between the ends of a collinear contact follow the boundary.
+        along.clear();
+        along.resize(representatives.len() + 1, 0i32);
+        for [a, b] in shared {
+            let (a, b) = (rank[a].min(rank[b]), rank[a].max(rank[b]));
+            along[a] += 1;
+            along[b] -= 1;
+        }
+        if coords.is_empty() {
+            coords.push(segment.start);
+        }
+        let mut depth = 0;
+        for (r, pair) in representatives.windows(2).enumerate() {
+            depth += along[r];
+            let (a, b) = (&params[pair[0]], &params[pair[1]]);
+            let window = Line::new(a.point, b.point);
+            // Cuts that round onto one coordinate enclose no length.
+            if window.start == window.end {
+                continue;
+            }
+            let uncovered = depth <= 0
+                && !candidates
+                    .iter()
+                    .any(|&i| parameter::window_position(&locations[i], a, b) >= 0);
             let edges = if uncovered && tolerance > 0. {
                 boundary(window, target, locations, tolerance)
             } else {
