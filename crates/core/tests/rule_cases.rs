@@ -1057,6 +1057,64 @@ fn graph_nodes(rule: Rule) -> Vec<Case> {
             if dangle { expected } else { vec![] },
         ));
     }
+    // A final bend turns back past a right angle, so the end lies within
+    // tolerance of the previous segment just before the bend. Up to the
+    // tolerance the bend vertex joins the end; just beyond it the bend is a
+    // real segment. Either way the line has not returned to itself.
+    for (name, bend) in [("final-bend-at", 0.25), ("final-bend-above", 0.2578125)] {
+        let hooked = l(&[(2., -8.), (-bend, 0.), (0., 0.)]);
+        out.push(case(
+            rule,
+            name,
+            vec![hooked.clone(), l(&[(0., 0.), (0., 8.)])],
+            vec![],
+            0.25,
+            if dangle {
+                vec![
+                    node(p(2., -8.)),
+                    e(K::Dangle, p(0., 8.), Some((0, B, Some(0))), None),
+                ]
+            } else {
+                vec![pair(K::PseudoNode, p(0., 0.), false)]
+            },
+        ));
+        out.push(case(
+            rule,
+            if bend == 0.25 {
+                "final-bend-at-alone"
+            } else {
+                "final-bend-above-alone"
+            },
+            vec![hooked],
+            vec![],
+            0.25,
+            if dangle {
+                vec![node(p(2., -8.)), node(p(0., 0.))]
+            } else {
+                vec![]
+            },
+        ));
+    }
+    // Here the last segment runs back along the line beyond the tolerance from
+    // the point it ends beside, so the end touches the line's own interior.
+    out.push(case(
+        rule,
+        "final-bend-returning",
+        vec![
+            l(&[(0., -8.), (0., 0.), (0.125, -1.)]),
+            l(&[(0.125, -1.), (4., -1.)]),
+        ],
+        vec![],
+        0.25,
+        if dangle {
+            vec![
+                node(p(0., -8.)),
+                e(K::Dangle, p(4., -1.), Some((0, B, Some(0))), None),
+            ]
+        } else {
+            vec![]
+        },
+    ));
     out
 }
 
