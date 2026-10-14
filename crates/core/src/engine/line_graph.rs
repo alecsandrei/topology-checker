@@ -1561,7 +1561,10 @@ impl LineGraph {
     /// along one passage can miss linework the other runs alongside after a turn.
     ///
     /// Lines meeting at angle `a` stay within tolerance for about `tolerance / sin a`
-    /// beyond the meeting point, wherever their vertices lie. Walking away from a
+    /// beyond the meeting point, wherever their vertices lie. A line end within
+    /// tolerance of the other passage meets it too, with separation measured from
+    /// the end's offset, so a line approaching at an angle and ending within
+    /// tolerance shares no linework, however it is segmented. Walking away from a
     /// meeting point along a passage, its near zone extends to where the passages
     /// leave tolerance of each other, plus one tolerance, if their separation grows
     /// steadily on the way. Lines diverging too slowly to leave tolerance within the
@@ -1598,8 +1601,51 @@ impl LineGraph {
                 })
                 .fold(f64::INFINITY, f64::min)
         };
+        // Coordinates within tolerance are coincident, so an open end within
+        // tolerance of the other part meets it at its nearest point. An end from
+        // which a further part of the same feature continues ends no linework.
+        let mut ends_met = Vec::new();
+        if parts[0] != parts[1] {
+            for side in (0..2).filter(|&side| !closed[side]) {
+                let coords = &self.original(parts[side]).0;
+                let feature = self.parts[parts[side]].reference.feature();
+                for (position, point) in [
+                    (0., coords[0]),
+                    (total[side], *coords.last().expect("source")),
+                ] {
+                    let mut closest = None;
+                    let mut continues = false;
+                    for item in tree.locate_in_envelope_intersecting(&index::at(point, tolerance)) {
+                        let segment = self.segment(item.data);
+                        let (parameter, projected) = projection(self.source(item.data), point);
+                        let offset = distance(point, projected);
+                        if offset > tolerance {
+                            continue;
+                        }
+                        if segment.part == parts[1 - side] {
+                            let p = &positions[segment.part];
+                            let at = p[segment.start]
+                                + parameter * (p[segment.start + 1] - p[segment.start]);
+                            if closest.is_none_or(|(best, _)| offset < best) {
+                                closest = Some((offset, at));
+                            }
+                        } else if segment.part != parts[side]
+                            && self.parts[segment.part].reference.feature() == feature
+                        {
+                            continues = true;
+                        }
+                    }
+                    if let Some((_, at)) = closest.filter(|_| !continues) {
+                        let mut meeting = Meeting { positions: [at; 2] };
+                        meeting.positions[side] = position;
+                        ends_met.push(meeting);
+                    }
+                }
+            }
+        }
         let relevant = meetings
             .iter()
+            .chain(&ends_met)
             .filter(|m| {
                 (0..2).all(|side| {
                     spans[side]
@@ -1752,14 +1798,38 @@ impl LineGraph {
                     });
                 let origin = self.point_at(part, p, start);
                 let separation = |point: Coord| nearest(&segments, point).0;
+                // Separation is measured from that at the meeting point, the offset
+                // of a line end meeting the other passage. It may wobble by the lesser
+                // of an eighth of the tolerance and a quarter of what remains beyond.
+                let gap0 = origin.map_or(0., separation);
+                let wobble = (tolerance / 8.).min((tolerance - gap0) / 4.);
                 for direction in [1., -1.] {
-                    let at = |offset: f64| self.point_at(part, p, start + direction * offset);
+                    // An open passage ends `room` from the meeting point. The walk
+                    // samples that end too, wherever it lies between two steps.
+                    let end = (!closed[side]).then(|| {
+                        let coords = &self.original(part).0;
+                        if direction > 0. {
+                            (total[side] - start, *coords.last().expect("source"))
+                        } else {
+                            (start, coords[0])
+                        }
+                    });
+                    let room = end.map_or(f64::INFINITY, |(room, _)| room);
+                    let at = |offset: f64| match end {
+                        Some((room, point)) if offset == room => Some(point),
+                        _ => self.point_at(part, p, start + direction * offset),
+                    };
                     let mut walk = Vec::new();
                     let mut peak = 0.;
                     // Where the other passage ends away from this meeting point,
                     // lines leaving tolerance there have not parted at an angle.
                     let mut ended = false;
-                    for offset in (1..).map(|k| k as f64 * step).take_while(|&o| o <= limit) {
+                    let offsets = (1..)
+                        .map(|k| k as f64 * step)
+                        .take_while(|&o| o < room)
+                        .chain((room > 0. && room.is_finite()).then_some(room))
+                        .take_while(|&o| o <= limit);
+                    for offset in offsets {
                         let Some(point) = at(offset) else {
                             break;
                         };
@@ -1781,10 +1851,13 @@ impl LineGraph {
                     let straight = |until: f64, rate: f64| {
                         walk.iter().take_while(|&&(offset, _)| offset < until).all(
                             |&(offset, gap)| {
-                                (gap - offset * rate).abs() <= offset * rate / 4. + tolerance / 8.
+                                (gap - gap0 - offset * rate).abs() <= offset * rate / 4. + wobble
                             },
                         )
                     };
+                    // The zone of lines diverging at `rate`, shrinking smoothly for
+                    // lines too close to parallel to leave tolerance before the cap.
+                    let vanishing = |rate: f64| limit * (2. * rate * limit / tolerance).min(1.);
                     // Separation grows steadily up to a peak, rather than stalling.
                     let grows = |until: f64, peak: f64, slack: f64| {
                         walk.iter()
@@ -1794,16 +1867,24 @@ impl LineGraph {
                     let reach_end = match walk.last() {
                         // The passages leave tolerance of each other.
                         Some(&(exit, gap)) if gap > tolerance => {
-                            (!ended && straight(exit, tolerance / exit)).then_some(exit + tolerance)
+                            let rate = (tolerance - gap0) / exit;
+                            (!ended && straight(exit, rate)).then(|| {
+                                if tolerance / rate <= limit {
+                                    exit + tolerance
+                                } else {
+                                    vanishing(rate)
+                                }
+                            })
                         }
                         // They diverge steadily without leaving tolerance before the
                         // cap, as lines meeting at a small angle do. The zone shrinks
                         // smoothly with that angle, so lines meeting at a vanishing
                         // angle keep their support.
-                        Some(&(last, gap)) if last + step > limit && gap > tolerance / 16. => {
-                            let rate = gap / last;
-                            straight(f64::INFINITY, rate)
-                                .then(|| limit * (2. * rate * limit / tolerance).min(1.))
+                        Some(&(last, gap))
+                            if last + step > limit && gap - gap0 > tolerance / 16. =>
+                        {
+                            let rate = (gap - gap0) / last;
+                            straight(f64::INFINITY, rate).then(|| vanishing(rate))
                         }
                         // A line leaves the other from its end and hooks back across
                         // it, meeting it again before leaving tolerance and parting
@@ -1821,7 +1902,7 @@ impl LineGraph {
                                     at(offset).is_none_or(|point| separation(point) > tolerance)
                                 });
                             (hooked
-                                && peak >= tolerance / 2.
+                                && peak - gap0 >= tolerance / 2.
                                 && grows(peak_at, peak, 0.)
                                 && parts_beyond)
                                 .then_some(rejoin.min(tolerance))
