@@ -391,12 +391,10 @@ fn meetings(
                 ),
             )
         }));
+    // Contacts are keyed by their own coordinate. Visit the same nodes in both paths,
+    // since that node need not belong to either noded part.
     let nodes: Box<dyn Iterator<Item = usize> + '_> = match selected_feature {
-        Some(key) => Box::new(
-            g.feature(key)
-                .into_iter()
-                .flat_map(|f| f.nodes.iter().copied()),
-        ),
+        Some(key) => Box::new(g.feature_contacts(key).iter().copied()),
         None => Box::new(g.contacts.keys().copied()),
     };
     for node in nodes {
@@ -434,9 +432,9 @@ fn meetings(
                             let b = g.source(contact_source);
                             // Adjacent passages can share a retained overlap endpoint.
                             // Clustering or nearby detached runs cannot supply this link.
-                            if ![a.start, a.end].contains(&point)
-                                || ![b.start, b.end].contains(&point)
-                            {
+                            let shared = [a.start, a.end].contains(&point)
+                                && [b.start, b.end].contains(&point);
+                            if !shared && !rounded_vertex(g, contact, contact_side, source) {
                                 return false;
                             }
                         }
@@ -484,6 +482,54 @@ fn meetings(
         }
     }
     out
+}
+/// Whether a contact on the source next to `source` in the same part is their shared
+/// vertex, displaced only by rounding of input coordinates. The error is measured
+/// backward: a projected endpoint must land on the vertex, and an intersection is the
+/// vertex when the vertex lies on the other segment. A shallow adjacent segment can
+/// move its intersection far from a vertex that is off the line by one rounding step.
+fn rounded_vertex(
+    g: &LineGraph,
+    contact: &crate::engine::line_graph::Contact,
+    side: usize,
+    source: usize,
+) -> bool {
+    use crate::engine::cluster::distance;
+    let [s, c] = [source, contact.sources[side]].map(|i| g.segment(i));
+    if s.part != c.part {
+        return false;
+    }
+    let coords = &g.original(s.part).0;
+    let vertex = if s.start.abs_diff(c.start) == 1 {
+        coords[s.start.max(c.start)]
+    } else if g.parts[s.part].closed()
+        && s.start.min(c.start) == 0
+        && s.start.max(c.start) == coords.len() - 2
+    {
+        coords[0]
+    } else {
+        return false;
+    };
+    let point = contact.points[side];
+    let other = g.source(contact.sources[1 - side]);
+    let own = g.source(contact.sources[side]);
+    let epsilon = crate::engine::line_graph::rounding(&[
+        point,
+        contact.points[1 - side],
+        own.start,
+        own.end,
+        other.start,
+        other.end,
+    ])
+    .min(g.tolerance);
+    let offset = distance(point, vertex);
+    offset <= epsilon
+        || contact.points[0] == contact.points[1]
+            && offset <= g.tolerance
+            && distance(
+                crate::engine::line_graph::projection(other, vertex).1,
+                vertex,
+            ) <= epsilon
 }
 
 fn crosses(origin: Coord, a: [Coord; 2], b: [Coord; 2]) -> bool {
