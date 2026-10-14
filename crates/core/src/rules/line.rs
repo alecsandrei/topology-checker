@@ -420,8 +420,13 @@ fn meetings(
                     let m = accepted_matches[item.data];
                     [0, 1].iter().all(|&side| {
                         let source = m.sources[side];
-                        let part = g.segment(source).part;
-                        let Some(contact_side) = contact.parts.iter().position(|&p| p == part)
+                        // A part of the same feature with a vertex at the contact
+                        // continues the passage, as another segment of one part does.
+                        let feature = g.parts[g.segment(source).part].reference.feature();
+                        let Some(contact_side) = contact
+                            .parts
+                            .iter()
+                            .position(|&p| g.parts[p].reference.feature() == feature)
                         else {
                             return false;
                         };

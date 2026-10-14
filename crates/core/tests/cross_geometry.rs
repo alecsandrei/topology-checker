@@ -4102,3 +4102,369 @@ fn parts_continuing_from_an_end_within_tolerance_keep_the_line_unbroken() {
         }
     }
 }
+
+fn multi_line(parts: &[&[(f64, f64)]]) -> Geometry {
+    MultiLineString(parts.iter().map(|p| LineString::from(p.to_vec())).collect()).into()
+}
+type LineContacts = Vec<(Rule, Vec<(ViolationKind, Geometry, i64, i64)>)>;
+/// Kinds, geometries and feature IDs of each line-intersect rule's violations, in
+/// a canonical order.
+fn line_contacts(lines: &[Geometry], tolerance: f64) -> LineContacts {
+    [
+        Rule::LineMustNotIntersect,
+        Rule::LineMustNotIntersectWith,
+        Rule::LineMustNotIntersectOrTouchInterior,
+        Rule::LineMustNotIntersectOrTouchInteriorWith,
+    ]
+    .into_iter()
+    .map(|rule| {
+        let t = topology(rule, lines.to_vec(), rule.inputs().1.is_some(), tolerance);
+        let report = t.validate().unwrap();
+        let mut streamed = Vec::new();
+        t.validate_into(|_, v| {
+            streamed.push(v);
+            Ok::<_, ()>(())
+        })
+        .unwrap();
+        assert_eq!(streamed, report.rules[0].violations, "{rule}");
+        let mut found = report
+            .violations()
+            .map(|v| {
+                (
+                    v.kind,
+                    v.geometry.clone(),
+                    v.origin.unwrap().fid,
+                    v.destination.unwrap().fid,
+                )
+            })
+            .collect::<Vec<_>>();
+        found.sort_by_cached_key(|v| (v.0, v.2, v.3, format!("{:?}", v.1)));
+        (rule, found)
+    })
+    .collect()
+}
+#[test]
+fn multipart_endpoints_follow_the_mod_2_boundary_rule() {
+    let end = line(&[(0., 0.), (10., 0.)]);
+    let one_end_and_passage = multi_line(&[&[(10., 0.), (10., 10.)], &[(5., -5.), (15., 5.)]]);
+    // A line and a multipart line meeting at (10 0), and whether a feature's
+    // interior is touched there.
+    let cases = [
+        // One part ends there and another passes through: a boundary point.
+        (end.clone(), one_end_and_passage.clone(), false),
+        // A closed part through the point adds no ends.
+        (
+            end.clone(),
+            multi_line(&[
+                &[(10., 0.), (10., 10.)],
+                &[(10., 0.), (15., -5.), (20., 0.), (15., 5.), (10., 0.)],
+            ]),
+            false,
+        ),
+        // Two part ends make an interior point, and a third a boundary point.
+        (
+            end.clone(),
+            multi_line(&[&[(10., 0.), (10., 10.)], &[(10., 0.), (15., -5.)]]),
+            true,
+        ),
+        (
+            end,
+            multi_line(&[
+                &[(10., 0.), (10., 10.)],
+                &[(10., 0.), (15., -5.)],
+                &[(10., 0.), (15., 5.)],
+            ]),
+            false,
+        ),
+        // A line passing through touches that boundary point with its interior.
+        // The passing part is not a crossing there.
+        (line(&[(5., 0.), (15., 0.)]), one_end_and_passage, true),
+    ];
+    for (single, multi, touch) in cases {
+        for tolerance in [0., 0.001, 1.] {
+            for (dx, dy) in [(0., 0.), (1e6, -3e5), (12345.678, 9876.54321)] {
+                let pair = [translated(&single, dx, dy), translated(&multi, dx, dy)];
+                for lines in [pair.clone(), [pair[1].clone(), pair[0].clone()]] {
+                    for (rule, found) in line_contacts(&lines, tolerance) {
+                        let expected = if touch
+                            && matches!(
+                                rule,
+                                Rule::LineMustNotIntersectOrTouchInterior
+                                    | Rule::LineMustNotIntersectOrTouchInteriorWith
+                            ) {
+                            let other = if rule.inputs().1.is_some() { 872 } else { -90 };
+                            vec![(
+                                ViolationKind::TouchInterior,
+                                point(10. + dx, dy),
+                                -91,
+                                other,
+                            )]
+                        } else {
+                            Vec::new()
+                        };
+                        assert_eq!(
+                            found, expected,
+                            "{rule}, tolerance {tolerance}, shift ({dx}, {dy}): {lines:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+}
+#[test]
+fn roads_meeting_at_a_part_end_and_a_closed_part_touch_only_boundaries() {
+    use topology_checker_core::geo::wkt;
+    // Two road-name lines (EPSG:2193). The second has a part starting at the end
+    // of the first and a closed loop starting and ending there.
+    let road: Geometry = wkt! {
+        LINESTRING (1753072.3547000885 5423851.298550129, 1753139.0756001472 5423832.08465004,
+        1753254.723400116 5423799.151100159, 1753372.5051498413 5423764.089799881,
+        1753486.5988001823 5423734.1395998, 1753587.6902999878 5423705.436600208,
+        1753591.081799984 5423703.9198999405, 1753594.1494002342 5423701.557400227,
+        1753596.5604000092 5423698.909100056)
+    }
+    .into();
+    let other: Geometry = wkt! {
+        MULTILINESTRING ((1753596.5604000092 5423698.909100056, 1753597.9349999428 5423695.866799831,
+        1753598.8586997986 5423693.32679987, 1753599.1181001663 5423690.242199898,
+        1753598.8428001404 5423687.09829998, 1753598.1543998718 5423683.465199947,
+        1753595.4738998413 5423673.687799931, 1753584.1305999756 5423627.994400024,
+        1753571.4484000206 5423587.900700092, 1753564.865099907 5423566.164150238,
+        1753541.7656998634 5423487.939149857, 1753519.6087498665 5423410.044099808,
+        1753508.9359002113 5423369.78000021, 1753467.7582001686 5423220.289299965),
+        (1753596.5604000092 5423698.909100056, 1753608.8129000664 5423744.040699959,
+        1753611.278600216 5423753.123000145, 1753612.8832998276 5423755.0907998085,
+        1753614.892300129 5423755.395100117, 1753617.5250000954 5423754.830900192,
+        1753631.303100109 5423749.425899982, 1753632.5682001114 5423748.467899799,
+        1753633.0947999954 5423747.018700123, 1753633.2571997643 5423745.185900211,
+        1753629.4956002235 5423732.835800171, 1753626.1684999466 5423724.396399975,
+        1753622.243400097 5423717.421500206, 1753617.702700138 5423711.764800072,
+        1753612.9562997818 5423707.508900166, 1753607.3773999214 5423704.723499775,
+        1753596.5604000092 5423698.909100056))
+    }
+    .into();
+    for tolerance in [0., 0.001] {
+        for lines in [[road.clone(), other.clone()], [other.clone(), road.clone()]] {
+            for (rule, found) in line_contacts(&lines, tolerance) {
+                assert!(found.is_empty(), "{rule}, tolerance {tolerance}: {found:?}");
+            }
+        }
+    }
+}
+#[test]
+fn line_ends_at_overlap_ends_are_covered_where_the_other_line_continues_in_another_part() {
+    // The second line runs along the first and turns away at its end, in one part
+    // or in two parts joined there.
+    let a = line(&[(2., -1.), (2., 1.)]);
+    for b in [
+        line(&[(-3., 2.), (2., 1.), (2., -2.)]),
+        multi_line(&[&[(-3., 2.), (2., 1.)], &[(2., 1.), (2., -2.)]]),
+        multi_line(&[&[(2., 1.), (-3., 2.)], &[(2., -2.), (2., 1.)]]),
+    ] {
+        for tolerance in [0., 0.001, 0.25] {
+            for (rule, found) in line_contacts(&[a.clone(), b.clone()], tolerance) {
+                let kinds = found.iter().map(|v| v.0).collect::<Vec<_>>();
+                assert_eq!(
+                    kinds,
+                    [ViolationKind::Overlap],
+                    "{rule}, {tolerance}: {b:?}"
+                );
+            }
+        }
+    }
+}
+#[test]
+fn another_part_with_a_vertex_at_an_overlap_end_continues_the_overlap() {
+    // Deliberate: the second line's parts both have a vertex at (2 0), where its
+    // first part leaves the overlap. The other part crossing the first line there
+    // is not reported separately, as when the same vertex joins two segments of one
+    // part.
+    let g = line(&[(0., 0.), (4., 0.)]);
+    let f = multi_line(&[
+        &[(1., 0.), (2., 0.), (3., 1.)],
+        &[(3., -2.), (2., 0.), (1., 2.)],
+    ]);
+    for (rule, found) in line_contacts(&[g, f], 0.) {
+        let kinds = found.iter().map(|v| v.0).collect::<Vec<_>>();
+        assert_eq!(kinds, [ViolationKind::Overlap], "{rule}");
+    }
+}
+#[test]
+fn mod_2_endpoints_do_not_depend_on_where_the_data_sits() {
+    // The second part of B ends on A. The first part crosses A 9e-16 from that end,
+    // which is within rounding of coordinates around 10 but not of the contact's own.
+    let a = line(&[
+        (-0.12631385150761787, -3.274881774990469),
+        (-0.12631385150761787, 1.3642220540370489),
+    ]);
+    let b = multi_line(&[
+        &[
+            (9.151893806547417, 9.096061769082912),
+            (-1.6726817945167909, -1.7285138319812958),
+        ],
+        &[
+            (7.605525863538245, 4.4569579400553945),
+            (-0.12631385150761787, -0.1821458889721237),
+        ],
+    ]);
+    for (dx, dy) in [(0., 0.), (1000., 1000.)] {
+        for lines in [
+            [translated(&a, dx, dy), translated(&b, dx, dy)],
+            [translated(&b, dx, dy), translated(&a, dx, dy)],
+        ] {
+            for (rule, found) in line_contacts(&lines, 0.001) {
+                let kinds = found.iter().map(|v| v.0).collect::<Vec<_>>();
+                let touch = matches!(
+                    rule,
+                    Rule::LineMustNotIntersectOrTouchInterior
+                        | Rule::LineMustNotIntersectOrTouchInteriorWith
+                );
+                let expected: &[ViolationKind] = if touch {
+                    &[ViolationKind::TouchInterior]
+                } else {
+                    &[]
+                };
+                assert_eq!(kinds, expected, "{rule}, shift ({dx}, {dy}): {found:?}");
+            }
+        }
+    }
+}
+#[test]
+fn mod_2_endpoints_near_zero_use_the_coordinates_of_the_contact_segments() {
+    // The ends of F are a few units in the last place of subnormals apart, far
+    // below the rounding of the contact segments' other coordinates. They are one
+    // point, as they are once the data is translated and the difference rounds away.
+    let g = line(&[(-1., 0.), (1.1125369292536007e-308, 0.)]);
+    let f = multi_line(&[
+        &[
+            (1.1125369292536007e-308, -1.),
+            (1.1125369292536007e-308, 1.),
+        ],
+        &[(1.112536929253601e-308, 0.), (1., 1.)],
+    ]);
+    for (dx, dy) in [(0., 0.), (1000., -1000.)] {
+        let lines = [translated(&g, dx, dy), translated(&f, dx, dy)];
+        for (rule, found) in line_contacts(&lines, 0.001) {
+            assert!(found.is_empty(), "{rule}, shift ({dx}, {dy}): {found:?}");
+        }
+    }
+}
+/// Deterministic polylines on a small integer grid.
+struct Grid(u64);
+impl Grid {
+    fn next(&mut self, n: u64) -> u64 {
+        self.0 = self
+            .0
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        (self.0 >> 33) % n
+    }
+    fn coord(&mut self) -> (f64, f64) {
+        let mut c = || self.next(7) as f64 - 3.;
+        (c(), c())
+    }
+    /// Between two and five vertices without repeats, sometimes closed.
+    fn chain(&mut self) -> Vec<(f64, f64)> {
+        let mut chain = vec![self.coord()];
+        for _ in 0..1 + self.next(4) {
+            let c = self.coord();
+            if chain.last() != Some(&c) {
+                chain.push(c);
+            }
+        }
+        if chain.len() > 2 && self.next(4) == 0 {
+            chain.push(chain[0]);
+        }
+        chain
+    }
+}
+/// Whether two of the segments share more than a point.
+fn retraced(chains: &[Vec<(f64, f64)>]) -> bool {
+    use topology_checker_core::geo::{
+        Line, Relate, coordinate_position::CoordPos, dimensions::Dimensions,
+    };
+    let segments = chains
+        .iter()
+        .flat_map(|c| c.windows(2).map(|w| Line::new(w[0], w[1])))
+        .collect::<Vec<_>>();
+    segments.iter().enumerate().any(|(i, a)| {
+        segments[i + 1..].iter().any(|b| {
+            a.relate(b).get(CoordPos::Inside, CoordPos::Inside) == Dimensions::OneDimensional
+        })
+    })
+}
+#[test]
+fn splitting_parts_at_vertices_or_merging_them_end_to_end_keeps_line_contacts() {
+    let mut grid = Grid(0x5eed);
+    let mut cases = 0;
+    while cases < 500 {
+        // Each feature is one or two chains of parts joined end to end.
+        let features = (0..2 + grid.next(2))
+            .map(|_| {
+                (0..1 + grid.next(2))
+                    .map(|_| grid.chain())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>();
+        if features.iter().any(|chains| retraced(chains)) {
+            continue;
+        }
+        cases += 1;
+        let merged = features
+            .iter()
+            .map(|chains| multi_line(&chains.iter().map(Vec::as_slice).collect::<Vec<_>>()))
+            .collect::<Vec<_>>();
+        // Split each chain at a random subset of its interior vertices, reversing
+        // some of the parts.
+        let split = features
+            .iter()
+            .map(|chains| {
+                let mut parts = Vec::new();
+                for chain in chains {
+                    let mut start = 0;
+                    for end in 1..chain.len() {
+                        if end == chain.len() - 1 || grid.next(2) == 0 {
+                            let mut part = chain[start..=end].to_vec();
+                            if grid.next(2) == 0 {
+                                part.reverse();
+                            }
+                            parts.push(part);
+                            start = end;
+                        }
+                    }
+                }
+                multi_line(&parts.iter().map(Vec::as_slice).collect::<Vec<_>>())
+            })
+            .collect::<Vec<_>>();
+        // Shared linework may keep either line's vertices, so compare its length.
+        let contacts = |lines: &[Geometry], tolerance| {
+            line_contacts(lines, tolerance)
+                .into_iter()
+                .map(|(rule, found)| {
+                    let mut found = found
+                        .into_iter()
+                        .map(|(kind, geometry, a, b)| {
+                            let shape = match geometry {
+                                Geometry::Point(p) => format!("{p:?}"),
+                                _ => format!("{:.9}", geo_length(&geometry)),
+                            };
+                            (kind, shape, a, b)
+                        })
+                        .collect::<Vec<_>>();
+                    found.sort();
+                    (rule, found)
+                })
+                .collect::<Vec<_>>()
+        };
+        // Vertices lie at least 1/sqrt(72) from lines they are not on, so these
+        // tolerances join no ends to other lines.
+        for tolerance in [0., 0.001, 0.1] {
+            assert_eq!(
+                contacts(&split, tolerance),
+                contacts(&merged, tolerance),
+                "tolerance {tolerance}: {split:?} and {merged:?}"
+            );
+        }
+    }
+}
