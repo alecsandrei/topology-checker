@@ -1921,8 +1921,14 @@ impl LineGraph {
                         walk.push((offset, gap));
                         peak = gap.max(peak);
                         // Stop where the passages leave tolerance, or where they meet
-                        // again after diverging.
-                        if gap > tolerance || peak >= tolerance / 2. && gap <= tolerance / 16. {
+                        // again after diverging. A line end meets the other passage
+                        // beyond a sixteenth of the tolerance, so coming back within
+                        // that is meeting it again, however little the lines parted:
+                        // the stretch up to it lies between two meetings.
+                        if gap > tolerance
+                            || (peak >= tolerance / 2. || meeting.end.is_some())
+                                && gap <= tolerance / 16.
+                        {
                             break;
                         }
                     }
