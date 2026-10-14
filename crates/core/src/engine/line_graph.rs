@@ -15,6 +15,14 @@ use num_rational::BigRational;
 use num_traits::ToPrimitive;
 use std::collections::{BTreeMap, HashMap};
 type FeatureKey = (LayerId, i64);
+/// A point where two passages meet, by its traversal position on each part.
+#[derive(Debug, Clone, Copy)]
+struct Meeting {
+    positions: [f64; 2],
+}
+/// Lines meeting at a smaller angle are treated as one shared course beyond this
+/// many tolerances, so long nearly parallel runs keep their support.
+const NEAR_ZONE_TOLERANCES: f64 = 20.;
 #[cfg(test)]
 type MatchPairs = BTreeMap<(FeatureKey, FeatureKey), Vec<usize>>;
 
@@ -743,7 +751,8 @@ impl LineGraph {
                     * distance(line.start, line.end)
                     <= self.tolerance
             });
-            if parts[0] != parts[1] && (!evidence[i].exact || short) {
+            // Passages of one part that meet through a loop are judged as runs too.
+            if !self.consecutive(m.sources[0], m.sources[1]) && (!evidence[i].exact || short) {
                 groups.entry(parts).or_default();
             }
         }
@@ -753,7 +762,9 @@ impl LineGraph {
         for (i, m) in matches.iter().enumerate() {
             crate::cancel::check();
             let parts = m.sources.map(|s| self.segment(s).part);
-            if let Some(ids) = groups.get_mut(&parts) {
+            if !self.consecutive(m.sources[0], m.sources[1])
+                && let Some(ids) = groups.get_mut(&parts)
+            {
                 ids.push(i);
             }
         }
@@ -804,19 +815,46 @@ impl LineGraph {
             p[segment.start] + parameter * (p[segment.start + 1] - p[segment.start])
         };
         let mut junctions = BTreeMap::<_, Vec<[f64; 2]>>::new();
+        let mut meetings = BTreeMap::<_, Vec<Meeting>>::new();
         for (a, b) in index::pairs(tree, tree, self.tolerance, true) {
             crate::cancel::check();
             #[cfg(test)]
             JUNCTION_SUPPORT_WORK.with(|n| n.set(n.get() + 1));
             let parts = [self.segment(a).part, self.segment(b).part];
-            if !groups.contains_key(&parts) {
+            if !groups.contains_key(&parts) || self.consecutive(a, b) {
                 continue;
             }
             let lines = [self.source(a), self.source(b)];
+            let intersection = line_intersection(lines[0], lines[1]);
+            // Points where the lines meet: they intersect or touch, or come within
+            // a small fraction of the tolerance at a vertex, as a junction vertex
+            // stored with rounding differences or a small digitizing gap does.
+            let mut points = match intersection {
+                Some(LineIntersection::SinglePoint { intersection, .. }) => vec![intersection],
+                Some(LineIntersection::Collinear { intersection }) => {
+                    vec![intersection.start, intersection.end]
+                }
+                None => Vec::new(),
+            };
+            for side in 0..2 {
+                for p in [lines[side].start, lines[side].end] {
+                    if distance(p, projection(lines[1 - side], p).1) <= self.tolerance / 16. {
+                        points.push(p);
+                    }
+                }
+            }
+            for p in points {
+                meetings.entry(parts).or_default().push(Meeting {
+                    positions: [
+                        along(a, projection(lines[0], p).0),
+                        along(b, projection(lines[1], p).0),
+                    ],
+                });
+            }
             if let Some(LineIntersection::SinglePoint {
                 intersection,
                 is_proper: false,
-            }) = line_intersection(lines[0], lines[1])
+            }) = intersection
             {
                 junctions.entry(parts).or_default().push([
                     along(a, projection(lines[0], intersection).0),
@@ -846,7 +884,16 @@ impl LineGraph {
                 }
             }
         }
+        // Several segment pairs report the same meeting point.
+        for list in meetings.values_mut() {
+            list.sort_by(|a, b| {
+                (a.positions[0].total_cmp(&b.positions[0]))
+                    .then(a.positions[1].total_cmp(&b.positions[1]))
+            });
+            list.dedup_by(|a, b| a.positions == b.positions);
+        }
         let mut rejected = vec![false; matches.len()];
+        let mut explained = vec![false; matches.len()];
         fn root(parent: &mut [usize], mut i: usize) -> usize {
             while parent[i] != i {
                 parent[i] = parent[parent[i]];
@@ -1028,14 +1075,31 @@ impl LineGraph {
                         }
                     }
                 }
-                if short || confined {
+                // Lines that meet at an angle stay within tolerance near the
+                // meeting point. Only support beyond those near zones can make a
+                // run shared linework. Without a meeting point nothing changes.
+                let near = !short
+                    && !exact
+                    && self.near_zones_explain(
+                        tree,
+                        parts,
+                        &positions,
+                        &uncertainty,
+                        &spans,
+                        meetings.get(&parts).map_or(&[][..], Vec::as_slice),
+                    );
+                // Within one part, only a meeting point can bound a run.
+                let judged = parts[0] != parts[1] && (short || confined);
+                if judged || near {
                     for &id in &component {
                         rejected[id] = true;
+                        // Other parts cannot restore what a meeting point explains.
+                        explained[id] = near;
                     }
                 }
             }
         }
-        self.retain_connected_part_support(matches, evidence, &mut rejected);
+        self.retain_connected_part_support(matches, evidence, &mut rejected, &explained);
         for (m, rejected) in matches.iter_mut().zip(rejected) {
             m.overlap = !rejected;
         }
@@ -1048,6 +1112,7 @@ impl LineGraph {
         matches: &[Matched],
         evidence: &[super::matching::Evidence],
         rejected: &mut [bool],
+        explained: &[bool],
     ) {
         if !rejected.iter().any(|&r| r) {
             return;
@@ -1059,13 +1124,15 @@ impl LineGraph {
         let mut groups = BTreeMap::<_, Vec<_>>::new();
         for (i, m) in matches.iter().enumerate() {
             crate::cancel::check();
-            if rejected[i] {
+            if rejected[i] && !explained[i] {
                 groups.entry(key(m)).or_default();
             }
         }
         for (i, m) in matches.iter().enumerate() {
             crate::cancel::check();
-            if let Some(ids) = groups.get_mut(&key(m)) {
+            if !explained[i]
+                && let Some(ids) = groups.get_mut(&key(m))
+            {
                 ids.push(i);
             }
         }
@@ -1485,6 +1552,290 @@ impl LineGraph {
     }
     pub fn source(&self, index: usize) -> Line {
         self.sources[index].line(&self.parts)
+    }
+    /// Whether a run's support lies within the near zones of points where its
+    /// passages meet, except for at most one tolerance on either passage.
+    ///
+    /// Lines meeting at angle `a` stay within tolerance for about `tolerance / sin a`
+    /// beyond the meeting point, wherever their vertices lie. Walking away from a
+    /// meeting point along a passage, its near zone extends to where the passages
+    /// leave tolerance of each other, plus one tolerance, if their separation grows
+    /// steadily on the way. Lines diverging too slowly to leave tolerance within the
+    /// cap get a zone that shrinks with their angle, and a line hooking back from
+    /// its end across the other gets the tolerance next to the meeting point. A
+    /// passage ending within tolerance of the other, or running alongside it before
+    /// turning away, has no near zone, so lines that merely touch or cross while
+    /// running alongside each other keep their support.
+    fn near_zones_explain(
+        &self,
+        tree: &index::Index,
+        parts: [usize; 2],
+        positions: &[Vec<f64>],
+        uncertainty: &[f64],
+        spans: &[Vec<[f64; 2]>; 2],
+        meetings: &[Meeting],
+    ) -> bool {
+        let tolerance = self.tolerance;
+        let cap = NEAR_ZONE_TOLERANCES * tolerance;
+        let reach = cap + 2. * tolerance;
+        let total = parts.map(|part| *positions[part].last().expect("source"));
+        let closed = parts.map(|part| self.parts[part].is_closed);
+        // Circular distance along a part between a position and a span.
+        let gap = |side: usize, v: f64, span: [f64; 2]| {
+            let wraps: &[f64] = if closed[side] { &[-1., 0., 1.] } else { &[0.] };
+            wraps
+                .iter()
+                .map(|&k| {
+                    (span[0] - (v + k * total[side]))
+                        .max(v + k * total[side] - span[1])
+                        .max(0.)
+                })
+                .fold(f64::INFINITY, f64::min)
+        };
+        let relevant = meetings
+            .iter()
+            .filter(|m| {
+                (0..2).all(|side| {
+                    spans[side]
+                        .iter()
+                        .any(|&span| gap(side, m.positions[side], span) <= reach)
+                })
+            })
+            .collect::<Vec<_>>();
+        if relevant.is_empty() {
+            return false;
+        }
+        // Segments of the other passage within `radius` of a point, keeping only
+        // those closer, along a single part, to `there` than to `here`.
+        let nearby = |side: usize, point: Coord, radius: f64, here: f64, there: f64| {
+            use rstar::RTreeObject;
+            tree.locate_in_envelope_intersecting(&index::at(point, radius))
+                .filter(|item| {
+                    let segment = self.segment(item.data);
+                    segment.part == parts[1 - side]
+                        && (parts[0] != parts[1] || {
+                            let p = &positions[segment.part];
+                            let span = [p[segment.start], p[segment.start + 1]];
+                            gap(side, there, span) < gap(side, here, span)
+                        })
+                })
+                .map(|item| (item.geom().envelope(), self.source(item.data)))
+                .collect::<Vec<_>>()
+        };
+        // Distance from a point to the nearest of those segments within tolerance.
+        let nearest = |segments: &[(rstar::AABB<[f64; 2]>, Line)], point: Coord| {
+            use rstar::Envelope;
+            let bounds = index::at(point, tolerance);
+            segments
+                .iter()
+                .filter(|(envelope, _)| envelope.intersects(&bounds))
+                .map(|&(_, line)| distance(point, projection(line, point).1))
+                .fold(f64::INFINITY, f64::min)
+        };
+        let separation = |side: usize, point: Coord, here: f64, there: f64| {
+            nearest(&nearby(side, point, tolerance, here, there), point)
+        };
+        // A passage ending within tolerance of the other bounds the run as an arm.
+        let arm = (0..2).any(|side| {
+            let part = parts[side];
+            if closed[side] {
+                return false;
+            }
+            let coords = &self.original(part).0;
+            let ends = [
+                (0., coords[0]),
+                (total[side], *coords.last().expect("source")),
+            ];
+            ends.into_iter().any(|(position, point)| {
+                spans[side]
+                    .iter()
+                    .any(|&span| gap(side, position, span) <= tolerance)
+                    && {
+                        let d = relevant
+                            .iter()
+                            .map(|m| separation(side, point, position, m.positions[1 - side]))
+                            .fold(f64::INFINITY, f64::min);
+                        d > tolerance / 16. && d <= tolerance
+                    }
+            })
+        });
+        if arm {
+            return false;
+        }
+        let ends = (0..2)
+            .filter(|&side| !closed[side])
+            .flat_map(|side| {
+                let coords = &self.original(parts[side]).0;
+                [coords[0], *coords.last().expect("source")]
+            })
+            .collect::<Vec<_>>();
+        // Whether zones along one passage leave at most one tolerance of its
+        // support unexplained.
+        let explained = |side: usize, zones: Vec<[f64; 2]>| {
+            let zones = super::matching::union(zones);
+            let wraps: &[f64] = if closed[side] { &[-1., 0., 1.] } else { &[0.] };
+            let remainder = spans[side]
+                .iter()
+                .map(|&span| {
+                    let covered = zones
+                        .iter()
+                        .flat_map(|zone| {
+                            wraps.iter().map(move |&k| {
+                                (span[1].min(zone[1] + k * total[side])
+                                    - span[0].max(zone[0] + k * total[side]))
+                                .max(0.)
+                            })
+                        })
+                        .sum::<f64>();
+                    (span[1] - span[0] - covered).max(0.)
+                })
+                .sum::<f64>();
+            remainder + 4. * uncertainty[parts[side]] * spans[side].len() as f64 <= tolerance
+        };
+        let step = tolerance / 8.;
+        let limit = cap + tolerance;
+        (0..2).any(|side| {
+            let part = parts[side];
+            let p = &positions[part];
+            let mut zones = Vec::new();
+            for (index, meeting) in relevant.iter().enumerate() {
+                // No zone reaches further than `reach` from its meeting point, so
+                // stop once the zones still possible cannot explain the run.
+                let possible = zones
+                    .iter()
+                    .copied()
+                    .chain(
+                        relevant[index..]
+                            .iter()
+                            .map(|m| [m.positions[side] - reach, m.positions[side] + reach]),
+                    )
+                    .collect();
+                if !explained(side, possible) {
+                    return false;
+                }
+                let start = meeting.positions[side];
+                let there = meeting.positions[1 - side];
+                // Every point a walk visits lies within this distance of its start.
+                let segments = self
+                    .point_at(part, p, start)
+                    .map_or_else(Vec::new, |point| {
+                        nearby(side, point, limit + 3. * tolerance, start, there)
+                    });
+                let separation = |point: Coord| nearest(&segments, point);
+                for direction in [1., -1.] {
+                    let at = |offset: f64| self.point_at(part, p, start + direction * offset);
+                    let mut walk = Vec::new();
+                    let mut peak = 0.;
+                    for offset in (1..).map(|k| k as f64 * step).take_while(|&o| o <= limit) {
+                        let Some(point) = at(offset) else {
+                            break;
+                        };
+                        let gap = separation(point);
+                        walk.push((offset, gap));
+                        peak = gap.max(peak);
+                        // Stop where the passages leave tolerance, or where they meet
+                        // again after diverging.
+                        if gap > tolerance || peak >= tolerance / 2. && gap <= tolerance / 16. {
+                            break;
+                        }
+                    }
+                    // Separation follows one divergence rate from the meeting point,
+                    // as for lines meeting at an angle, rather than running alongside
+                    // the other passage at any offset and then turning away.
+                    let straight = |until: f64, rate: f64| {
+                        walk.iter().take_while(|&&(offset, _)| offset < until).all(
+                            |&(offset, gap)| {
+                                (gap - offset * rate).abs() <= offset * rate / 4. + tolerance / 8.
+                            },
+                        )
+                    };
+                    // Separation grows steadily up to a peak, rather than stalling.
+                    let grows = |until: f64, peak: f64, slack: f64| {
+                        walk.iter()
+                            .take_while(|&&(offset, _)| offset < until)
+                            .all(|&(offset, gap)| gap >= 0.75 * offset / until * peak - slack)
+                    };
+                    let reach_end = match walk.last() {
+                        // The passages leave tolerance of each other.
+                        Some(&(exit, gap)) if gap > tolerance => {
+                            straight(exit, tolerance / exit).then_some(exit + tolerance)
+                        }
+                        // They diverge steadily without leaving tolerance before the
+                        // cap, as lines meeting at a small angle do. The zone shrinks
+                        // smoothly with that angle, so lines meeting at a vanishing
+                        // angle keep their support.
+                        Some(&(last, gap)) if last + step > limit && gap > tolerance / 16. => {
+                            let rate = gap / last;
+                            straight(f64::INFINITY, rate)
+                                .then(|| limit * (2. * rate * limit / tolerance).min(1.))
+                        }
+                        // A line leaves the other from its end and hooks back across
+                        // it, meeting it again before leaving tolerance and parting
+                        // beyond. Only the tolerance next to this meeting point is
+                        // explained; elsewhere lines that meet again ran together.
+                        Some(&(rejoin, gap)) if gap <= tolerance / 16. => {
+                            let peak_at = walk.iter().find(|w| w.1 == peak).map_or(0., |w| w.0);
+                            let hooked = [0., rejoin].into_iter().any(|offset| {
+                                at(offset).is_some_and(|point| {
+                                    ends.iter().any(|&end| distance(point, end) <= 2. * step)
+                                })
+                            });
+                            let parts_beyond =
+                                (1..=16).map(|k| rejoin + k as f64 * step).any(|offset| {
+                                    at(offset).is_none_or(|point| separation(point) > tolerance)
+                                });
+                            (hooked
+                                && peak >= tolerance / 2.
+                                && grows(peak_at, peak, 0.)
+                                && parts_beyond)
+                                .then_some(rejoin.min(tolerance))
+                        }
+                        _ => None,
+                    };
+                    if let Some(exit) = reach_end {
+                        let end = start + direction * exit;
+                        zones.push([start.min(end), start.max(end)]);
+                    }
+                }
+            }
+            explained(side, zones)
+        })
+    }
+    /// The original point at a traversal distance along an open or closed part.
+    fn point_at(&self, part: usize, positions: &[f64], position: f64) -> Option<Coord> {
+        let total = *positions.last()?;
+        let position = if self.parts[part].is_closed && total > 0. {
+            position.rem_euclid(total)
+        } else if (0. ..=total).contains(&position) {
+            position
+        } else {
+            return None;
+        };
+        let i = positions
+            .partition_point(|&v| v <= position)
+            .clamp(1, positions.len() - 1)
+            - 1;
+        let coords = &self.original(part).0;
+        let width = positions[i + 1] - positions[i];
+        let t = if width > 0. {
+            ((position - positions[i]) / width).clamp(0., 1.)
+        } else {
+            0.
+        };
+        Some(super::matching::point(
+            Line::new(coords[i], coords[i + 1]),
+            t,
+        ))
+    }
+    /// Neighbouring segments of one part, which share a vertex by construction.
+    fn consecutive(&self, a: usize, b: usize) -> bool {
+        let (a, b) = (self.segment(a), self.segment(b));
+        let last = self.original(a.part).0.len() - 2;
+        a.part == b.part
+            && (a.start.abs_diff(b.start) == 1
+                || self.parts[a.part].is_closed
+                    && a.start.min(b.start) == 0
+                    && a.start.max(b.start) == last)
     }
     /// Nodes holding original contacts of one feature, in node order. A contact is
     /// keyed by its own coordinate, which need not be a node of either noded part:

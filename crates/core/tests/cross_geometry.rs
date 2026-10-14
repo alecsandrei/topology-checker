@@ -2791,3 +2791,644 @@ mod zero_tolerance_contacts {
         }
     }
 }
+
+/// Exact translations of all coordinates: (+2^20, -2^19) and its opposite where
+/// exact, and the shift to the binade below the first coordinate.
+fn exact_shifts(lines: &[&LineString]) -> Vec<Coord> {
+    let exact = |v: f64, d: f64| {
+        let s = v + d;
+        let r = s - v;
+        (v - (s - r)) + (d - r) == 0.
+    };
+    let binade = |v: f64| -v.signum() * 2_f64.powi(v.abs().log2().floor() as i32);
+    let first = lines[0].0[0];
+    let mut shifts = Vec::new();
+    for d in [
+        Coord {
+            x: 1048576.,
+            y: -524288.,
+        },
+        Coord {
+            x: -1048576.,
+            y: 524288.,
+        },
+        Coord {
+            x: binade(first.x),
+            y: binade(first.y),
+        },
+    ] {
+        if lines
+            .iter()
+            .flat_map(|l| &l.0)
+            .all(|p| exact(p.x, d.x) && exact(p.y, d.y))
+        {
+            shifts.push(d);
+        }
+    }
+    shifts
+}
+
+#[test]
+fn diverging_point_junctions_share_no_linework() {
+    let shapes = fixture("diverging_junctions");
+    let line = |g: &Geometry| match g {
+        Geometry::MultiLineString(lines) => lines.0[0].clone(),
+        Geometry::LineString(line) => line.clone(),
+        _ => unreachable!(),
+    };
+    for pair in shapes.as_chunks::<2>().0 {
+        let (a, b) = (line(&pair[0]), line(&pair[1]));
+        // The junction is the first vertex of B and an original vertex of A.
+        assert!(a.0.contains(&b.0[0]));
+        let mut variants = vec![(a.clone(), b.clone()), (b.clone(), a.clone())];
+        let mut reversed = a.clone();
+        reversed.0.reverse();
+        variants.push((reversed, b.clone()));
+        let shifts = exact_shifts(&[&a, &b]);
+        assert!(!shifts.is_empty());
+        for d in shifts {
+            let shift = |l: &LineString| {
+                LineString(
+                    l.0.iter()
+                        .map(|p| Coord {
+                            x: p.x + d.x,
+                            y: p.y + d.y,
+                        })
+                        .collect(),
+                )
+            };
+            variants.push((shift(&a), shift(&b)));
+        }
+        // A junction missed by one ulp is still the same point junction.
+        for step in [f64::next_up, f64::next_down] {
+            for axis in 0..2 {
+                let mut nudged = b.clone();
+                let p = &mut nudged.0[0];
+                if axis == 0 {
+                    p.x = step(p.x);
+                } else {
+                    p.y = step(p.y);
+                }
+                variants.push((a.clone(), nudged));
+            }
+        }
+        for (a, b) in variants {
+            for rule in [
+                Rule::LineMustNotOverlap,
+                Rule::LineMustNotOverlapWith,
+                Rule::LineMustNotIntersect,
+                Rule::LineMustNotIntersectWith,
+            ] {
+                let t = topology(
+                    rule,
+                    vec![a.clone().into(), b.clone().into()],
+                    rule.inputs().1.is_some(),
+                    1.,
+                );
+                let report = t.validate().unwrap();
+                assert_eq!(report.violation_count(), 0, "{rule}: {:?}", report.rules);
+                assert_eq!(
+                    t.validate_into(|_, _| Ok::<_, ()>(()))
+                        .unwrap()
+                        .violation_count(),
+                    0
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn nearly_parallel_runs_from_point_junctions_remain_overlaps() {
+    let slope = 2_f64.to_radians().tan();
+    for (a, b, length) in [
+        // Shared node, then 5 m within 0.2 m before splitting.
+        (
+            line(&[(-10., -10.), (0., 0.), (5., 0.2), (10., 10.)]),
+            line(&[(-10., 10.), (0., 0.), (5., 0.), (10., -10.)]),
+            5.,
+        ),
+        // Diverging at 2 degrees for 20 m.
+        (
+            line(&[(0., 0.), (20., 0.)]),
+            line(&[(0., 0.), (20., 20. * slope)]),
+            20.,
+        ),
+        // A short junction connector before a nearly parallel 5 m run.
+        (
+            line(&[(0., 0.), (5., 0.), (5., 10.)]),
+            line(&[(0., 0.), (0.3, 0.3), (5., 0.3), (5., -10.)]),
+            5.,
+        ),
+    ] {
+        for rule in [Rule::LineMustNotOverlap, Rule::LineMustNotOverlapWith] {
+            let t = topology(
+                rule,
+                vec![a.clone(), b.clone()],
+                rule.inputs().1.is_some(),
+                1.,
+            );
+            let report = t.validate().unwrap();
+            assert_eq!(report.violation_count(), 1, "{rule}: {a:?}, {b:?}");
+            let error = report.violations().next().unwrap();
+            assert_eq!(error.kind, ViolationKind::Overlap);
+            assert!(geo_length(&error.geometry) > length - 1., "{error:?}");
+        }
+    }
+}
+
+fn translated(geometry: &Geometry, dx: f64, dy: f64) -> Geometry {
+    use topology_checker_core::geo::MapCoords;
+    geometry.map_coords(|p| Coord {
+        x: p.x + dx,
+        y: p.y + dy,
+    })
+}
+
+#[test]
+fn angled_excursions_between_meeting_points_share_no_linework() {
+    let a = line(&[(-5., 0.), (0., 0.), (2., 0.), (7., 0.)]);
+    for (a, b) in [
+        // A tent between two vertices where the lines meet.
+        (a.clone(), line(&[(2., 0.), (1., 0.9), (0., 0.)])),
+        (
+            a,
+            line(&[(2., -10.), (2., 0.), (1., 0.9), (0., 0.), (0., -10.)]),
+        ),
+        // A hook that crosses the other line and returns to meet it.
+        (
+            line(&[(-5., 0.), (0., 0.), (5., 0.)]),
+            line(&[(1.5, -10.), (1.5, -0.2), (0.7, 0.4), (0., 0.)]),
+        ),
+    ] {
+        for (dx, dy) in [(0., 0.), (-256., -512.), (1024., 2048.)] {
+            let pair = vec![translated(&a, dx, dy), translated(&b, dx, dy)];
+            for rule in [
+                Rule::LineMustNotOverlap,
+                Rule::LineMustNotOverlapWith,
+                Rule::LineMustNotIntersect,
+                Rule::LineMustNotIntersectWith,
+            ] {
+                let t = topology(rule, pair.clone(), rule.inputs().1.is_some(), 1.);
+                let report = t.validate().unwrap();
+                assert!(
+                    report
+                        .violations()
+                        .all(|v| v.kind != ViolationKind::Overlap),
+                    "{rule}: {:?}",
+                    report.rules
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn arms_and_stubs_ending_within_tolerance_keep_their_overlaps() {
+    let parts: Geometry = MultiLineString(
+        (0..4)
+            .map(|i| {
+                let x = 1.5 * i as f64;
+                LineString::from(vec![(x, 0.1), (x + 1.5, 0.7)])
+            })
+            .collect(),
+    )
+    .into();
+    for (a, b, length) in [
+        // An approach to within half a tolerance that turns away again.
+        (
+            line(&[(0., 0.), (10., 0.)]),
+            line(&[(0., 3.), (2., 0.99), (3.4, 0.5), (5., 3.)]),
+            1.4,
+        ),
+        // A near duplicate turning a corner, where one line ends.
+        (
+            line(&[(2.103, -0.185), (3.519, -0.233), (3.976, 0.269)]),
+            line(&[
+                (2.302, -0.192),
+                (3.471, -0.466),
+                (3.82, 0.085),
+                (6.82, -2.915),
+            ]),
+            1.4168,
+        ),
+        // Parts rising at about 22 degrees and ending within tolerance.
+        (line(&[(0., 0.), (6., 0.)]), parts, 6.),
+        // An arm of short segments ending within tolerance of the other line.
+        (
+            line(&[
+                (-3.578, 0.215),
+                (-3.545, 0.231),
+                (-1.15, 0.196),
+                (0.215, -0.086),
+            ]),
+            line(&[
+                (-3.545, 0.231),
+                (-2.76, 0.263),
+                (-1.886, 0.294),
+                (-1.634, 0.065),
+            ]),
+            2.3953,
+        ),
+    ] {
+        for rule in [Rule::LineMustNotOverlap, Rule::LineMustNotOverlapWith] {
+            let t = topology(
+                rule,
+                vec![a.clone(), b.clone()],
+                rule.inputs().1.is_some(),
+                1.,
+            );
+            let report = t.validate().unwrap();
+            assert_eq!(report.violation_count(), 1, "{rule}: {a:?}, {b:?}");
+            let error = report.violations().next().unwrap();
+            assert_eq!(error.kind, ViolationKind::Overlap);
+            assert!(
+                (geo_length(&error.geometry) - length).abs() < 1e-3,
+                "{error:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn crossings_and_branches_leaving_tolerance_share_no_linework() {
+    let a = line(&[(-10., 0.), (0., 0.), (10., 0.)]);
+    // Long enough on both sides to leave tolerance of a crossing at 5 degrees.
+    let long = line(&[(-12., 0.), (0., 0.), (12., 0.)]);
+    let crossing = |degrees: f64| {
+        let (sin, cos) = degrees.to_radians().sin_cos();
+        line(&[-12., -1.2, -0.3, 0., 0.3, 1.2, 12.].map(|d| (d * cos, d * sin)))
+    };
+    for (a, b, name) in [
+        (long.clone(), crossing(5.), "crossing at 5 degrees"),
+        (long.clone(), crossing(20.), "crossing at 20 degrees"),
+        // A branch leaving a gap smaller than one sixteenth of the tolerance.
+        (
+            a.clone(),
+            line(&[
+                (0., 1e-6),
+                (0.16, 0.277129),
+                (1.188601, 0.895175),
+                (2.925083, 10.743252),
+            ]),
+            "branch across a micro gap",
+        ),
+        (
+            a.clone(),
+            line(&[
+                (0., 0.05),
+                (0.16, 0.277129),
+                (1.188601, 0.895175),
+                (2.925083, 10.743252),
+            ]),
+            "branch across a 0.05 gap",
+        ),
+        // A branch turning back across the other line as it leaves tolerance.
+        (
+            a.clone(),
+            line(&[
+                (0., 0.),
+                (0.16, 0.277128),
+                (1.188601, 0.895174),
+                (1.688601, 0.029148),
+                (6.688601, -8.631106),
+            ]),
+            "branch hooking back",
+        ),
+    ] {
+        for rule in [
+            Rule::LineMustNotOverlap,
+            Rule::LineMustNotOverlapWith,
+            Rule::LineMustNotIntersect,
+            Rule::LineMustNotIntersectWith,
+        ] {
+            let t = topology(
+                rule,
+                vec![a.clone(), b.clone()],
+                rule.inputs().1.is_some(),
+                1.,
+            );
+            let report = t.validate().unwrap();
+            assert!(
+                report
+                    .violations()
+                    .all(|v| v.kind != ViolationKind::Overlap),
+                "{name}, {rule}: {:?}",
+                report.rules
+            );
+        }
+    }
+}
+
+#[test]
+fn angled_meetings_share_no_linework_wherever_vertices_lie() {
+    let o = (515067.5256, 438859.8034);
+    let ray = |degrees: f64, distances: &[f64]| -> Vec<(f64, f64)> {
+        let (sin, cos) = degrees.to_radians().sin_cos();
+        distances
+            .iter()
+            .map(|d| (o.0 + d * cos, o.1 + d * sin))
+            .collect()
+    };
+    for degrees in [3_f64, 3.5, 5., 10., 20., 30., 40., 55., 90.] {
+        // A vertex inside the length over which the lines stay within tolerance.
+        let edge = 1. / degrees.to_radians().sin();
+        for (near_a, near_b) in [
+            (vec![], vec![]),
+            (vec![0.5 * edge], vec![]),
+            (vec![0.95 * edge], vec![]),
+            (vec![0.6 * edge], vec![0.3 * edge]),
+        ] {
+            let mut a = vec![0.];
+            a.extend(&near_a);
+            a.push(50.);
+            let mut b = vec![0.];
+            b.extend(&near_b);
+            b.push(50.);
+            let mirrored = |d: &[f64]| {
+                d.iter()
+                    .rev()
+                    .map(|x| -x)
+                    .chain(d.iter().copied().skip(1))
+                    .collect::<Vec<_>>()
+            };
+            for (name, a, b) in [
+                ("vee", ray(0., &a), ray(degrees, &b)),
+                ("tee", ray(0., &mirrored(&a)), ray(degrees, &b)),
+                ("cross", ray(0., &mirrored(&a)), ray(degrees, &mirrored(&b))),
+            ] {
+                for (dx, dy) in [(0., 0.), (-262144., -262144.)] {
+                    let pair = vec![translated(&line(&a), dx, dy), translated(&line(&b), dx, dy)];
+                    let t = topology(Rule::LineMustNotOverlap, pair, false, 1.);
+                    assert_eq!(
+                        t.validate().unwrap().violation_count(),
+                        0,
+                        "{name} at {degrees} degrees, vertices {near_a:?} {near_b:?}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn collinear_overshoots_are_overlaps_beyond_the_tolerance() {
+    for offset in [0., 0.5] {
+        for overshoot in [0.5, 0.9, 1., 1.1, 1.5, 2., 4.] {
+            let t = topology(
+                Rule::LineMustNotOverlap,
+                vec![
+                    line(&[(-50., 0.), (50., 0.)]),
+                    line(&[(0., 50.), (0., offset), (overshoot, offset)]),
+                ],
+                false,
+                1.,
+            );
+            let report = t.validate().unwrap();
+            if overshoot > 1. {
+                assert_eq!(report.violation_count(), 1, "{offset}, {overshoot}");
+                let length = geo_length(&report.violations().next().unwrap().geometry);
+                assert!((length - overshoot).abs() < 1e-9, "{length}");
+            } else {
+                assert_eq!(report.violation_count(), 0, "{offset}, {overshoot}");
+            }
+        }
+    }
+}
+
+#[test]
+fn short_arms_beside_other_parts_are_judged_alike_in_every_frame() {
+    // The second line starts on the first part of the other feature and ends
+    // within tolerance of it, at about 22 degrees. A second part passes nearby.
+    let first: Geometry = MultiLineString(vec![
+        LineString::from(vec![
+            (278.2273285251933, 603.8939346969543),
+            (278.0687644786701, 609.3166935500648),
+            (277.91020043214695, 614.7394524031753),
+        ]),
+        LineString::from(vec![
+            (278.1037316278949, 608.120846053837),
+            (277.95168902830767, 608.2062260920956),
+            (278.0824848649056, 608.8474677226592),
+            (278.0509241665339, 609.926817425561),
+        ]),
+    ])
+    .into();
+    let second = line(&[
+        (278.07031191758216, 609.263772422962),
+        (277.6367427523491, 610.2530399322869),
+    ]);
+    for rule in [
+        Rule::LineMustNotOverlap,
+        Rule::LineMustNotOverlapWith,
+        Rule::LineMustNotIntersect,
+        Rule::LineMustNotIntersectWith,
+    ] {
+        let results = [(0., 0.), (-256., -512.), (-256., 0.), (-128., -256.)].map(|(dx, dy)| {
+            let pair = vec![translated(&first, dx, dy), translated(&second, dx, dy)];
+            let t = topology(rule, pair, rule.inputs().1.is_some(), 1.);
+            t.validate()
+                .unwrap()
+                .violations()
+                .map(|v| (v.kind, (geo_length(&v.geometry) * 1e6).round()))
+                .collect::<Vec<_>>()
+        });
+        assert!(
+            results.iter().all(|r| r == &results[0]),
+            "{rule}: {results:?}"
+        );
+    }
+}
+
+#[test]
+fn passages_of_one_part_meeting_at_a_vertex_are_judged_as_runs() {
+    let path = [
+        (-10., 0.),
+        (0., 0.),
+        (10., 0.),
+        (10., 10.),
+        (-3., 10.),
+        (-3., 3.),
+        (0., 0.),
+        (0.16, 0.277),
+        (1.189, 0.895),
+        (1.189, 6.),
+    ];
+    let parts: Geometry = MultiLineString(vec![
+        LineString::from(path[..7].to_vec()),
+        LineString::from(path[6..].to_vec()),
+    ])
+    .into();
+    for geometry in [line(&path), parts] {
+        for (dx, dy) in [(0., 0.), (-256., -512.), (1024., 2048.)] {
+            for rule in [Rule::LineMustNotSelfOverlap, Rule::LineMustNotSelfIntersect] {
+                let t = topology(rule, vec![translated(&geometry, dx, dy)], false, 1.);
+                assert_eq!(t.validate().unwrap().violation_count(), 0, "{rule}");
+            }
+        }
+    }
+    // A passage retracing the same part remains a self-overlap.
+    let t = topology(
+        Rule::LineMustNotSelfOverlap,
+        vec![line(&[
+            (-10., 0.),
+            (0., 0.),
+            (10., 0.),
+            (10., 10.),
+            (-3., 10.),
+            (-3., 0.3),
+            (8., 0.3),
+        ])],
+        false,
+        1.,
+    );
+    let report = t.validate().unwrap();
+    assert_eq!(report.violation_count(), 1);
+    assert!(geo_length(&report.violations().next().unwrap().geometry) > 10.);
+}
+
+#[test]
+fn lines_meeting_and_running_alongside_keep_their_overlaps() {
+    // A line through vertices one metre apart along x, at the given heights.
+    let heights = |ys: &[f64]| {
+        line(
+            &ys.iter()
+                .enumerate()
+                .map(|(i, &y)| (i as f64, y))
+                .collect::<Vec<_>>(),
+        )
+    };
+    for (a, b, length, name) in [
+        (
+            heights(&[
+                -0.008, 0.003, -0.05, -0.046, -0.009, -0.039, 0.022, -0.026, -0.04, -0.032, -0.027,
+                -0.028, 0.002, -0.004, -0.019, 0.014, -0.029, 0.041, 0.046, 0.023, -0.007,
+            ]),
+            heights(&[
+                0.801, 0.808, 0.755, 0.792, 0.803, 0.768, 0.759, 0.83, 0.787, 0.802, 0.842, 0.811,
+                0.779, 0.848, 0.787, 0.752, 0.819, 0.76, 0.781, 0.834, 0.817,
+            ]),
+            19.011,
+            "noisy parallels",
+        ),
+        (
+            line(&[(-50., 0.), (0., 0.), (5., 0.), (55., 0.)]),
+            line(&[(-17.3205, 10.), (0., 0.4), (5., 0.05), (22.3205, 10.)]),
+            5.,
+            "touch, then a turn away just past the run",
+        ),
+        (
+            line(&[(-50., 0.), (70., 0.)]),
+            line(&[
+                (-17.3205, -10.),
+                (0., 0.05),
+                (10., 0.75),
+                (20., 0.05),
+                (21., 0.32),
+                (38.32, 10.32),
+            ]),
+            21.,
+            "lens between a crossing and a touch",
+        ),
+        (
+            line(&[(-50., 0.), (0., 0.), (20., 0.), (70., 0.)]),
+            line(&[
+                (-17.3205, -10.),
+                (0., 0.2773),
+                (5.894, 0.2773),
+                (10.2195, 0.2773),
+                (14.2551, 0.2773),
+                (20., 0.2773),
+                (37.3205, 10.),
+            ]),
+            20.,
+            "crossing, then alongside",
+        ),
+        (
+            line(&[(-50., 0.), (0., 0.), (5., 0.), (55., 0.)]),
+            line(&[
+                (-17.3205, 10.),
+                (0., -0.5908),
+                (5., -0.5958),
+                (22.3205, 10.),
+            ]),
+            5.,
+            "crossing into a step alongside",
+        ),
+    ] {
+        for (dx, dy) in [(0., 0.), (-256., -512.)] {
+            let pair = vec![translated(&a, dx, dy), translated(&b, dx, dy)];
+            for rule in [Rule::LineMustNotOverlap, Rule::LineMustNotOverlapWith] {
+                let t = topology(rule, pair.clone(), rule.inputs().1.is_some(), 1.);
+                let report = t.validate().unwrap();
+                let overlaps = report
+                    .violations()
+                    .filter(|v| v.kind == ViolationKind::Overlap)
+                    .map(|v| geo_length(&v.geometry))
+                    .collect::<Vec<_>>();
+                assert!(
+                    overlaps.len() == 1 && (overlaps[0] - length).abs() < 1e-3,
+                    "{name}, {rule}: {overlaps:?}"
+                );
+            }
+        }
+    }
+    // A hairpin of one line returning alongside itself.
+    let out = [
+        -0.037, 0.035, 0.026, -0.024, 0., -0.005, 0.015, 0.029, -0.041, -0.047, 0.034, -0.007,
+        0.026,
+    ];
+    let back = [
+        0.75, 0.795, 0.822, 0.773, 0.845, 0.84, 0.753, 0.753, 0.804, 0.844, 0.788, 0.772, 0.792,
+    ];
+    let hairpin = out
+        .iter()
+        .enumerate()
+        .map(|(i, &y)| (i as f64, y))
+        .chain(back.iter().enumerate().map(|(i, &y)| (12. - i as f64, y)))
+        .collect::<Vec<_>>();
+    let t = topology(
+        Rule::LineMustNotSelfOverlap,
+        vec![line(&hairpin)],
+        false,
+        1.,
+    );
+    let report = t.validate().unwrap();
+    assert_eq!(report.violation_count(), 1);
+    let length = geo_length(&report.violations().next().unwrap().geometry);
+    assert!((length - 12.0116).abs() < 1e-3, "{length}");
+}
+#[test]
+fn parallel_runs_beside_meeting_points_keep_their_overlaps() {
+    // The second line meets the first, steps out to a fixed offset within
+    // tolerance, runs parallel for 10, then turns away. Only the stretches near
+    // the meeting and the turn are explained by them.
+    let a = line(&[(-60., 0.), (0., 0.), (60., 0.)]);
+    for offset in [0.6, 0.7, 0.9] {
+        for b in [
+            line(&[
+                (0., 0.),
+                (offset, offset),
+                (10. + offset, offset),
+                (28.0205, 10.7),
+            ]),
+            line(&[
+                (-1., -1.732),
+                (offset / 1.732, offset),
+                (10. + offset, offset),
+                (28.0205, 10.7),
+            ]),
+        ] {
+            for rule in [Rule::LineMustNotOverlap, Rule::LineMustNotIntersect] {
+                let t = topology(rule, vec![a.clone(), b.clone()], false, 1.);
+                let report = t.validate().unwrap();
+                let shared = report
+                    .violations()
+                    .filter(|v| v.kind == ViolationKind::Overlap)
+                    .map(|v| geo_length(&v.geometry))
+                    .sum::<f64>();
+                assert!(shared >= 10., "{rule} offset {offset}: {report:?}");
+            }
+        }
+    }
+}
