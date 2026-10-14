@@ -5,6 +5,8 @@ use topology_checker_core::{
         Polygon, Rect, coord,
     },
 };
+#[path = "support/exact_line_polygon.rs"]
+mod exact_line_polygon;
 fn point(x: f64, y: f64) -> Geometry {
     Point::new(x, y).into()
 }
@@ -2215,6 +2217,579 @@ fn crossings_beside_rounded_vertices_are_counted_once_in_every_frame() {
         1.,
         &[ViolationKind::Crossing, ViolationKind::Crossing],
     );
+}
+
+mod zero_tolerance_contacts {
+    //! Decimal data that touches in decimal can, in binary, cross, touch or
+    //! miss a polygon by less than one floating-point step. At zero tolerance
+    //! the line/polygon rules must follow the exact binary geometry in every
+    //! exact frame, and emit each overlap run as a non-degenerate piece within
+    //! its line segments.
+    use super::exact_line_polygon::{Reference, Run, bits, brackets, exact, reference};
+    use topology_checker_core::{
+        Layer, Rule, Topology, Violation, ViolationKind,
+        geo::{Coord, Geometry, LineString, Polygon},
+    };
+
+    const RULES: [Rule; 3] = [
+        Rule::LineMustNotOverlapWithPolygons,
+        Rule::LineMustNotIntersectPolygons,
+        Rule::LineMustNotCrossPolygonBoundaries,
+    ];
+    type Case = (Vec<Coord>, Vec<Vec<Coord>>);
+    type Family = (&'static str, fn(&mut Generator) -> Case);
+
+    /// Violations of the three pair rules, or `None` for a rejected polygon.
+    fn validate(line: &[Coord], rings: &[Vec<Coord>]) -> Option<Vec<Vec<Violation>>> {
+        let mut t = Topology::new(0.).unwrap();
+        let a = t.add_layer(Layer::from_geometries(
+            "lines",
+            [Geometry::LineString(LineString(line.to_vec()))],
+        ));
+        let polygon = Polygon::new(
+            LineString(rings[0].clone()),
+            rings[1..].iter().cloned().map(LineString).collect(),
+        );
+        let b = t.add_layer(Layer::from_geometries("polygons", [polygon.into()]));
+        let invalid = |e| match e {
+            topology_checker_core::Error::InvalidPolygon { .. } => None,
+            e => panic!("{e}"),
+        };
+        for rule in RULES {
+            if let Err(e) = t.add_rule(rule, a, Some(b)) {
+                return invalid(e);
+            }
+        }
+        match t.validate() {
+            Ok(report) => Some(report.rules.into_iter().map(|r| r.violations).collect()),
+            Err(e) => invalid(e),
+        }
+    }
+    fn parts(g: &Geometry, lines: &mut Vec<LineString>, points: &mut Vec<Coord>) {
+        match g {
+            Geometry::LineString(l) => lines.push(l.clone()),
+            Geometry::MultiLineString(m) => lines.extend(m.0.iter().cloned()),
+            Geometry::Point(p) => points.push(p.0),
+            Geometry::MultiPoint(m) => points.extend(m.0.iter().map(|p| p.0)),
+            Geometry::GeometryCollection(c) => c.iter().for_each(|g| parts(g, lines, points)),
+            g => panic!("unexpected geometry {g:?}"),
+        }
+    }
+    /// Interior coordinates are exact; each end is one of the two binary
+    /// values adjacent to the exact run end and lies within its segment.
+    fn matches(piece: &LineString, run: &Run, line: &[Coord]) -> bool {
+        let n = piece.0.len();
+        let within = |c: Coord, s: usize| {
+            let (a, b) = (line[s], line[s + 1]);
+            a.x.min(b.x) <= c.x && c.x <= a.x.max(b.x) && a.y.min(b.y) <= c.y && c.y <= a.y.max(b.y)
+        };
+        n == run.points.len()
+            && piece.0.windows(2).all(|w| w[0] != w[1])
+            && (1..n - 1).all(|k| exact(piece.0[k]) == run.points[k])
+            && [(0, run.segments[0]), (n - 1, run.segments[1])]
+                .into_iter()
+                .all(|(k, s)| {
+                    brackets(piece.0[k].x, &run.points[k].0)
+                        && brackets(piece.0[k].y, &run.points[k].1)
+                        && within(piece.0[k], s)
+                })
+    }
+    fn problems(case: &Case, expected: &Reference) -> Option<Vec<&'static str>> {
+        let (line, rings) = case;
+        let found = validate(line, rings)?;
+        let mut out = Vec::new();
+        let pieces = |v: &[Violation], kind| {
+            let (mut lines, mut points) = (Vec::new(), Vec::new());
+            for v in v {
+                assert_eq!(v.kind, kind);
+                parts(&v.geometry, &mut lines, &mut points);
+            }
+            (lines, points)
+        };
+        let runs_match = |lines: &[LineString]| {
+            let mut unused = lines.iter().collect::<Vec<_>>();
+            lines.len() == expected.runs.len()
+                && expected.runs.iter().all(|run| {
+                    unused
+                        .iter()
+                        .position(|l| matches(l, run, line))
+                        .map(|i| unused.remove(i))
+                        .is_some()
+                })
+        };
+        let (lines, points) = pieces(&found[0], ViolationKind::Overlap);
+        if found[0].len() > 1 || !points.is_empty() || !runs_match(&lines) {
+            out.push("overlap");
+        }
+        let (lines, points) = pieces(&found[1], ViolationKind::Intersection);
+        let points = points.into_iter().map(bits).collect();
+        if found[1].len() > 1 || !runs_match(&lines) || expected.isolated != points {
+            out.push("intersect");
+        }
+        let (_, points) = pieces(&found[2], ViolationKind::Crossing);
+        if expected.crossings != points.into_iter().map(bits).collect() {
+            out.push("cross");
+        }
+        Some(out)
+    }
+
+    /// Deterministic decimal coordinates at projected-CRS magnitudes.
+    struct Generator(u64);
+    impl Generator {
+        fn next(&mut self, n: i64) -> i64 {
+            self.0 = self
+                .0
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            ((self.0 >> 33) % n as u64) as i64
+        }
+        fn sign(&mut self) -> i64 {
+            if self.next(2) == 0 { 1 } else { -1 }
+        }
+        fn chance(&mut self, percent: i64) -> bool {
+            self.next(100) < percent
+        }
+        /// A cents-based coordinate frame and a direction with its left normal.
+        fn frame(&mut self) -> (impl Fn(i64, i64) -> Coord + use<>, [i64; 4]) {
+            const MAGNITUDES: [i64; 5] = [310_000, 620_000, 1_250_000, 2_500_000, 4_900_000];
+            let mut origin = || MAGNITUDES[self.next(5) as usize] * 100 + self.next(1_000_000);
+            let (x0, y0) = (origin(), origin());
+            let scale = [2, 4, 8][self.next(3) as usize];
+            let dx = scale * (50 + self.next(450)) * self.sign();
+            let dy = scale * (50 + self.next(450)) * self.sign();
+            let decimal = |c: i64| {
+                format!("{}.{:02}", c / 100, c % 100)
+                    .parse::<f64>()
+                    .unwrap()
+            };
+            let at = move |u: i64, w: i64| Coord {
+                x: decimal(x0 + u),
+                y: decimal(y0 + w),
+            };
+            (at, [dx, dy, -dy, dx])
+        }
+        /// A polygon edge from `at(0, 0)` to `at(dx, dy)`, with the square on
+        /// one side of it.
+        fn square(
+            &mut self,
+            at: &impl Fn(i64, i64) -> Coord,
+            [dx, dy, nx, ny]: [i64; 4],
+        ) -> Vec<Coord> {
+            let side = self.sign();
+            vec![
+                at(0, 0),
+                at(dx, dy),
+                at(dx + side * nx / 2, dy + side * ny / 2),
+                at(side * nx / 2, side * ny / 2),
+                at(0, 0),
+            ]
+        }
+        fn through_vertex(&mut self) -> Case {
+            let (at, [dx, dy, nx, ny]) = self.frame();
+            let k = [2, 4][self.next(2) as usize];
+            let (vx, vy) = (dx / k, dy / k);
+            let mut corner = || {
+                let (s, f, g) = (self.sign(), 1 + self.next(6), self.next(9) - 4);
+                at(
+                    vx + s * f * nx / 10 + g * dx / 10,
+                    vy + s * f * ny / 10 + g * dy / 10,
+                )
+            };
+            let (p, q) = (corner(), corner());
+            let v = at(vx, vy);
+            let mut ring = vec![v, p, q, v];
+            if self.chance(30) {
+                // An edge along the line in decimal.
+                ring.insert(1, at(vx + dx / 8, vy + dy / 8));
+            }
+            let mut line = vec![at(0, 0), at(dx, dy)];
+            if self.chance(30) {
+                line.push(at(dx + 3 * nx / 10, dy + 3 * ny / 10));
+            }
+            (line, vec![ring])
+        }
+        fn vertex_on_edge(&mut self) -> Case {
+            let (at, d) = self.frame();
+            let [dx, dy, nx, ny] = d;
+            let ring = self.square(&at, d);
+            let k = [2, 4][self.next(2) as usize];
+            let (s1, s2) = (self.sign(), self.sign());
+            let first = at(dx / k + s1 * nx / 4 - dx / 4, dy / k + s1 * ny / 4 - dy / 4);
+            let last = at(dx / k + s2 * nx / 4 + dx / 4, dy / k + s2 * ny / 4 + dy / 4);
+            let v = at(dx / k, dy / k);
+            let line = if self.chance(30) {
+                // A second touch at another decimal point of the edge.
+                let w = at(dx / 2 + s2 * nx / 8, dy / 2 + s2 * ny / 8);
+                vec![first, v, w, at(3 * dx / 4, 3 * dy / 4), last]
+            } else {
+                vec![first, v, last]
+            };
+            (line, vec![ring])
+        }
+        fn collinear_run(&mut self) -> Case {
+            let (at, d) = self.frame();
+            let [dx, dy, nx, ny] = d;
+            let ring = self.square(&at, d);
+            // Eighths along the edge, possibly beyond its ends.
+            const STOPS: [i64; 12] = [-2, -1, 0, 1, 2, 3, 4, 5, 6, 8, 9, 10];
+            let (a, b) = (self.next(12) as usize, self.next(11) as usize);
+            let b = if b >= a { b + 1 } else { b };
+            let (u0, u1) = (STOPS[a.min(b)], STOPS[a.max(b)]);
+            let mut line = vec![at(dx * u0 / 8, dy * u0 / 8), at(dx * u1 / 8, dy * u1 / 8)];
+            if self.chance(70) {
+                let s = self.sign();
+                line.insert(
+                    0,
+                    at(
+                        dx * u0 / 8 + s * nx / 4 - dx / 8,
+                        dy * u0 / 8 + s * ny / 4 - dy / 8,
+                    ),
+                );
+            }
+            if self.chance(70) {
+                let s = self.sign();
+                line.push(at(
+                    dx * u1 / 8 + s * nx / 4 + dx / 8,
+                    dy * u1 / 8 + s * ny / 4 + dy / 8,
+                ));
+            }
+            if self.chance(30) {
+                line.reverse();
+            }
+            (line, vec![ring])
+        }
+        fn hole(&mut self) -> Case {
+            let (at, d) = self.frame();
+            let [dx, dy, nx, ny] = d;
+            let shell = vec![
+                at(-dx - nx, -dy - ny),
+                at(2 * dx - nx, 2 * dy - ny),
+                at(2 * dx + nx, 2 * dy + ny),
+                at(-dx + nx, -dy + ny),
+                at(-dx - nx, -dy - ny),
+            ];
+            let hole = self.square(&at, d);
+            let (s1, s2) = (self.sign(), self.sign());
+            let line = match self.next(3) {
+                // Along the hole edge, then turning to either side.
+                0 => vec![
+                    at(-dx / 4, -dy / 4),
+                    at(dx / 2, dy / 2),
+                    at(dx / 2 + s1 * nx / 4, dy / 2 + s1 * ny / 4),
+                ],
+                // Bending at a decimal point of the hole edge.
+                1 => vec![
+                    at(dx / 4 + s1 * nx / 4, dy / 4 + s1 * ny / 4),
+                    at(dx / 2, dy / 2),
+                    at(3 * dx / 4 + s2 * nx / 4, 3 * dy / 4 + s2 * ny / 4),
+                ],
+                // Through a hole vertex.
+                _ => vec![
+                    at(2 * dx / 3 - nx / 3, 2 * dy / 3 - ny / 3),
+                    at(dx, dy),
+                    at(4 * dx / 3 + nx / 3, 4 * dy / 3 + ny / 3),
+                ],
+            };
+            (line, vec![shell, hole])
+        }
+        /// Teeth whose tips lie on the line in decimal: many sub-ulp contacts
+        /// on one segment.
+        fn comb(&mut self) -> Case {
+            let (at, _) = self.frame();
+            let teeth = 2 + self.next(7);
+            let n = 4 * teeth + 4;
+            let dx = n * (20 + self.next(180)) * self.sign();
+            let dy = n * (20 + self.next(180)) * self.sign();
+            let (nx, ny) = (self.sign() * -dy / 4, self.sign() * dx / 4);
+            let along = |u: i64| (dx * u / n, dy * u / n);
+            let base =
+                |u: i64, depth: i64| at(dx * u / n + depth * nx / 2, dy * u / n + depth * ny / 2);
+            let mut ring = vec![base(-1, 3), base(-1, 1)];
+            for j in 0..teeth {
+                let u = 4 * j + 2;
+                ring.push(base(u, 1));
+                let (x, y) = along(u + 1);
+                ring.push(at(x, y));
+                if self.chance(30) {
+                    let (x, y) = along(u + 2);
+                    ring.push(at(x, y));
+                }
+                ring.push(base(u + 3, 1));
+            }
+            ring.extend([base(n + 1, 1), base(n + 1, 3), ring[0]]);
+            let mut line = vec![at(0, 0), at(dx, dy)];
+            if self.chance(30) {
+                // Bend the line at a tooth tip.
+                let (x, y) = along(4 * self.next(teeth) + 3);
+                line = vec![at(0, 0), at(x, y), at(dx - nx / 4, dy - ny / 4)];
+            }
+            (line, vec![ring])
+        }
+        fn endpoint_on_edge(&mut self) -> Case {
+            let (at, d) = self.frame();
+            let [dx, dy, nx, ny] = d;
+            let ring = self.square(&at, d);
+            let k = [2, 4][self.next(2) as usize];
+            let (s, g) = (self.sign(), self.next(9) - 4);
+            let v = at(dx / k, dy / k);
+            let other = at(
+                dx / k + s * nx / 4 + g * dx / 10,
+                dy / k + s * ny / 4 + g * dy / 10,
+            );
+            let line = if self.chance(50) {
+                vec![v, other]
+            } else {
+                vec![other, v]
+            };
+            (line, vec![ring])
+        }
+        /// Close a line of another family, starting at any of its vertices.
+        fn closed(&mut self) -> Case {
+            let (mut line, rings) = match self.next(3) {
+                0 => self.through_vertex(),
+                1 => self.vertex_on_edge(),
+                _ => self.collinear_run(),
+            };
+            if line.len() == 2 {
+                let (a, b) = (line[0], line[1]);
+                let cents = |v: f64| (v * 100.).round() / 100.;
+                line.push(Coord {
+                    x: cents((a.x + b.x) / 2. + (b.y - a.y) * 0.7),
+                    y: cents((a.y + b.y) / 2. - (b.x - a.x) * 0.7),
+                });
+            }
+            let k = self.next(line.len() as i64) as usize;
+            line.rotate_left(k);
+            line.push(line[0]);
+            (line, rings)
+        }
+    }
+
+    /// Exact transforms of a case: Sterbenz translations, power-of-two
+    /// scalings, axis swaps and reflections, line reversal and ring rotation.
+    fn frames(case: &Case) -> Vec<(&'static str, Case)> {
+        let (line, rings) = case;
+        let map = |f: &dyn Fn(Coord) -> Option<Coord>| -> Option<Case> {
+            Some((
+                line.iter().map(|&c| f(c)).collect::<Option<_>>()?,
+                rings
+                    .iter()
+                    .map(|r| r.iter().map(|&c| f(c)).collect::<Option<_>>())
+                    .collect::<Option<_>>()?,
+            ))
+        };
+        let affine = |o: Coord, s: f64| {
+            move |c: Coord| {
+                let p = Coord {
+                    x: (c.x - o.x) * s,
+                    y: (c.y - o.y) * s,
+                };
+                (p.x / s + o.x == c.x && p.y / s + o.y == c.y).then_some(p)
+            }
+        };
+        let first = line[0];
+        let floor = Coord {
+            x: first.x.floor(),
+            y: first.y.floor(),
+        };
+        let zero = Coord { x: 0., y: 0. };
+        let mut out = vec![("original", case.clone())];
+        for (name, f) in [
+            (
+                "sterbenz",
+                &affine(first, 1.) as &dyn Fn(Coord) -> Option<Coord>,
+            ),
+            ("floor", &affine(floor, 1.)),
+            ("scale-2", &affine(zero, 2.)),
+            ("scale-1/1024", &affine(zero, 1. / 1024.)),
+            ("swap-xy", &|c: Coord| Some(Coord { x: c.y, y: c.x })),
+            ("negate-x", &|c: Coord| Some(Coord { x: -c.x, y: c.y })),
+        ] {
+            if let Some(mapped) = map(f) {
+                out.push((name, mapped));
+            }
+        }
+        out.push((
+            "reversed",
+            (line.iter().rev().copied().collect(), rings.clone()),
+        ));
+        let rotated = rings
+            .iter()
+            .map(|r| {
+                let mut r = r[1..].to_vec();
+                let half = r.len() / 2;
+                r.rotate_left(half);
+                r.reverse();
+                r.push(r[0]);
+                r
+            })
+            .collect();
+        out.push(("ring-rotation", (line.clone(), rotated)));
+        out
+    }
+
+    #[test]
+    fn sub_ulp_contacts_match_the_exact_reference_in_every_frame() {
+        let mut generator = Generator(20261014);
+        let families: [Family; 7] = [
+            ("through-vertex", Generator::through_vertex),
+            ("vertex-on-edge", Generator::vertex_on_edge),
+            ("collinear-run", Generator::collinear_run),
+            ("hole", Generator::hole),
+            ("comb", Generator::comb),
+            ("endpoint-on-edge", Generator::endpoint_on_edge),
+            ("closed", Generator::closed),
+        ];
+        let mut failures = std::collections::BTreeMap::<String, usize>::new();
+        let (mut runs, mut ends_moved, mut checked, mut invalid) = (0, 0, 0, 0);
+        // The exact reference is slow without optimizations.
+        let cases = if cfg!(debug_assertions) { 35 } else { 140 };
+        for k in 0..cases {
+            let (family, make) = families[k % families.len()];
+            let case = make(&mut generator);
+            if validate(&case.0, &case.1).is_none() {
+                invalid += 1;
+                continue;
+            }
+            for (frame, case) in frames(&case) {
+                let expected = reference(&case.0, &case.1);
+                runs += expected.runs.len();
+                ends_moved += expected
+                    .runs
+                    .iter()
+                    .filter(|r| {
+                        super::exact_line_polygon::rounded(&r.points[0])
+                            == super::exact_line_polygon::rounded(&r.points[r.points.len() - 1])
+                    })
+                    .count();
+                checked += 1;
+                let found = problems(&case, &expected).expect("exact frames keep polygons valid");
+                for rule in found {
+                    *failures
+                        .entry(format!("{family} {frame} {rule}"))
+                        .or_default() += 1;
+                }
+            }
+        }
+        println!(
+            "{checked} frames, {invalid} invalid cases skipped, {runs} overlap runs, \
+             {ends_moved} with coincident nearest ends"
+        );
+        assert!(
+            invalid * 10 < cases,
+            "at most a tenth of the generated polygons are invalid"
+        );
+        assert!(
+            ends_moved > 0,
+            "the generator must exercise collapsing runs"
+        );
+        assert!(failures.is_empty(), "{failures:#?}");
+    }
+
+    #[test]
+    fn run_ends_round_away_from_the_run_within_the_line() {
+        let ring = |c: &[(f64, f64)]| c.iter().map(|&(x, y)| Coord { x, y }).collect::<Vec<_>>();
+        // The line ends inside the polygon by less than one step, and its entry
+        // crossing rounds onto that end vertex.
+        let line = ring(&[(623757.34, 319630.01), (623757.44, 319621.11)]);
+        let polygon = ring(&[
+            (623766.22, 319622.19),
+            (623731.1, 319617.87),
+            (623733.26, 319600.31),
+            (623768.38, 319604.63),
+            (623766.22, 319622.19),
+        ]);
+        let entry = Coord {
+            x: 623757.4399999998,
+            y: 319621.11000000004,
+        };
+        for reversed in [false, true] {
+            let mut line = line.clone();
+            let mut piece = vec![entry, line[1]];
+            if reversed {
+                line.reverse();
+                piece.reverse();
+            }
+            let found = validate(&line, std::slice::from_ref(&polygon)).unwrap();
+            for v in &found[..2] {
+                assert_eq!(v.len(), 1);
+                assert_eq!(
+                    v[0].geometry,
+                    Geometry::LineString(LineString(piece.clone()))
+                );
+            }
+            assert!(found[2].is_empty());
+        }
+        // A line vertex lies inside a polygon edge by less than one step, and
+        // both of its crossings round onto it. The vertex stays, and each end
+        // rounds away from it along its own segment.
+        let line = ring(&[
+            (4906031.44, 317778.98),
+            (4906036.98, 317783.42),
+            (4906041.42, 317777.88),
+        ]);
+        let polygon = ring(&[
+            (4906031.99, 317783.97),
+            (4906051.95, 317781.77),
+            (4906053.05, 317791.75),
+            (4906033.09, 317793.95),
+            (4906031.99, 317783.97),
+        ]);
+        let rings = [polygon];
+        let expected = reference(&line, &rings);
+        assert_eq!(expected.runs.len(), 1);
+        let found = validate(&line, &rings).unwrap();
+        let Geometry::LineString(piece) = &found[0][0].geometry else {
+            panic!("one overlap piece");
+        };
+        assert_eq!(piece.0.len(), 3);
+        assert_eq!(piece.0[1], line[1]);
+        assert!(matches(piece, &expected.runs[0], &line));
+        assert!(piece.0[0].x < line[1].x && piece.0[0].y < line[1].y);
+        assert!(piece.0[2].x > line[1].x && piece.0[2].y < line[1].y);
+    }
+
+    #[test]
+    fn adjacent_pieces_share_their_rounded_crossing() {
+        // The crossing at x = 1 is not representable. Both pieces and both
+        // crossing points must use the same nearest coordinate.
+        let line = Geometry::LineString(LineString::from(vec![(0.25, 0.5), (1.75, 0.6)]));
+        let square = |x: f64| {
+            Geometry::Polygon(Polygon::new(
+                LineString::from(vec![(x, 0.), (x + 1., 0.), (x + 1., 1.), (x, 1.), (x, 0.)]),
+                vec![],
+            ))
+        };
+        let shared = Coord {
+            x: 1.,
+            y: 0.5 + 0.1 * (0.75 / 1.5),
+        };
+        for rule in [
+            Rule::LineMustNotOverlapWithPolygons,
+            Rule::LineMustNotCrossPolygonBoundaries,
+        ] {
+            let mut t = Topology::new(0.).unwrap();
+            let a = t.add_layer(Layer::from_geometries("lines", [line.clone()]));
+            let b = t.add_layer(Layer::from_geometries("polygons", [square(0.), square(1.)]));
+            t.add_rule(rule, a, Some(b)).unwrap();
+            let report = t.validate().unwrap();
+            let mut ends = Vec::new();
+            for v in report.violations() {
+                match &v.geometry {
+                    Geometry::LineString(l) => ends.extend([l.0[0], l.0[l.0.len() - 1]]),
+                    Geometry::Point(p) => ends.push(p.0),
+                    g => panic!("{g:?}"),
+                }
+            }
+            let at_shared = ends.iter().filter(|c| c.x == 1.).collect::<Vec<_>>();
+            assert_eq!(at_shared.len(), 2, "{rule}: {ends:?}");
+            assert!(
+                at_shared
+                    .iter()
+                    .all(|&&c| c == *at_shared[0] && (c.y - shared.y).abs() < 1e-15)
+            );
+        }
+    }
 }
 
 /// Exact translations of all coordinates: (+2^20, -2^19) and its opposite where

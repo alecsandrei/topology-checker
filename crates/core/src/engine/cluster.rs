@@ -29,6 +29,10 @@ impl Cluster {
     pub fn finish(self) -> Vec<Coord> {
         self.coords
     }
+    /// Look up the node of an already inserted coordinate.
+    pub(crate) fn get(&self, p: Coord) -> Option<usize> {
+        self.exact.get(&(bits(p.x), bits(p.y))).copied()
+    }
     fn cell(&self, p: Coord) -> (i64, i64) {
         (
             (p.x / self.tolerance).floor() as i64,

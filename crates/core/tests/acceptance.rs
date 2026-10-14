@@ -364,6 +364,272 @@ fn pseudo_nodes_require_distinct_features() {
         .is_valid()
     );
 }
+// Open Data DC alleys (ln_dc_alleys, EPSG:32618, CC BY 4.0), FIDs 7552 and
+// 8983. 8983 ends exactly at the start of 7552. Its last segment is a
+// 1.0000016 mm bend, just over a 1 mm tolerance, turning slightly more than a
+// right angle. No other alley comes within 1 m of the shared node.
+const DC_ALLEY_7552: &[(f64, f64)] = &[
+    (331434.0956944006, 4307888.253122057),
+    (331434.28908729664, 4307894.198311851),
+    (331435.25813373365, 4307942.673724342),
+];
+const DC_ALLEY_8983: &[(f64, f64)] = &[
+    (331434.37577908125, 4307852.221315392),
+    (331434.2442669176, 4307870.352559431),
+    (331434.0946946393, 4307888.25314398),
+    (331434.0956944006, 4307888.253122057),
+];
+fn line_violations(
+    rule: Rule,
+    lines: &[(i64, &[(f64, f64)])],
+    tolerance: f64,
+) -> Vec<topology_checker_core::Violation> {
+    let mut t = Topology::new(tolerance).unwrap();
+    let layer = t.add_layer(Layer::from_features(
+        "lines",
+        lines
+            .iter()
+            .map(|&(fid, c)| (fid, geo::LineString::from(c.to_vec()).into())),
+    ));
+    t.add_rule(rule, layer, None).unwrap();
+    t.validate().unwrap().rules.remove(0).violations
+}
+fn sorted_points(mut points: Vec<(f64, f64)>) -> Vec<(f64, f64)> {
+    points.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1)));
+    points
+}
+fn points(violations: &[topology_checker_core::Violation]) -> Vec<(f64, f64)> {
+    sorted_points(
+        violations
+            .iter()
+            .map(|v| {
+                let Geometry::Point(p) = v.geometry else {
+                    panic!("point violation {v:?}");
+                };
+                (p.x(), p.y())
+            })
+            .collect(),
+    )
+}
+#[test]
+fn final_bend_just_over_tolerance_keeps_end_to_end_pseudo_node() {
+    let mut frames = Vec::new();
+    // Exact translations, including one to the origin and one that keeps every
+    // coordinate in its binade.
+    for (dx, dy) in [
+        (0., 0.),
+        (331434., 4307888.),
+        (-65536., -1048576.),
+        (200000., 4000000.),
+    ] {
+        let shift = |c: &[(f64, f64)]| {
+            c.iter()
+                .map(|&(x, y)| {
+                    let p = (x - dx, y - dy);
+                    assert_eq!((p.0 + dx, p.1 + dy), (x, y), "exact translation");
+                    p
+                })
+                .collect::<Vec<_>>()
+        };
+        frames.push((shift(DC_ALLEY_7552), shift(DC_ALLEY_8983)));
+    }
+    // One-ulp moves of the bend vertex.
+    for axis in 0..2 {
+        for step in [f64::next_up, f64::next_down] {
+            let mut bent = DC_ALLEY_8983.to_vec();
+            if axis == 0 {
+                bent[2].0 = step(bent[2].0);
+            } else {
+                bent[2].1 = step(bent[2].1);
+            }
+            frames.push((DC_ALLEY_7552.to_vec(), bent));
+        }
+    }
+    for (a, b) in frames {
+        let node = a[0];
+        assert_eq!(b[3], node);
+        let bend = (b[3].0 - b[2].0).hypot(b[3].1 - b[2].1);
+        assert!(bend > 0.001 && bend < 0.0010001, "{bend}");
+        let far = sorted_points(vec![a[2], b[0]]);
+        let ends = sorted_points(vec![b[0], node]);
+        for reverse in [false, true] {
+            let orient = |c: &[(f64, f64)]| {
+                let mut c = c.to_vec();
+                if reverse {
+                    c.reverse();
+                }
+                c
+            };
+            let (a, b) = (orient(&a), orient(&b));
+            for lines in [
+                [(7552, &a[..]), (8983, &b[..])],
+                [(8983, &b[..]), (7552, &a[..])],
+            ] {
+                let pseudo = line_violations(Rule::LineMustNotHavePseudoNodes, &lines, 0.001);
+                assert_eq!(points(&pseudo), [node], "{pseudo:?}");
+                assert_eq!(pseudo[0].kind, ViolationKind::PseudoNode);
+                assert_eq!(pseudo[0].origin.unwrap().fid, 7552);
+                assert_eq!(pseudo[0].destination.unwrap().fid, 8983);
+                let dangles = line_violations(Rule::LineMustNotHaveDangles, &lines, 0.001);
+                assert_eq!(points(&dangles), far, "{dangles:?}");
+                for rule in [
+                    Rule::LineMustNotSelfOverlap,
+                    Rule::LineMustNotSelfIntersect,
+                    Rule::LineMustNotOverlap,
+                    Rule::LineMustNotIntersect,
+                    Rule::LineMustNotIntersectOrTouchInterior,
+                ] {
+                    let errors = line_violations(rule, &lines, 0.001);
+                    assert!(errors.is_empty(), "{rule}: {errors:?}");
+                }
+            }
+            // Alone, the bent line ends freely at the node.
+            let dangles = line_violations(Rule::LineMustNotHaveDangles, &[(8983, &b[..])], 0.001);
+            assert_eq!(points(&dangles), ends, "{dangles:?}");
+        }
+    }
+}
+#[test]
+fn final_bends_touch_their_own_line_only_after_leaving_the_tolerance() {
+    let tolerance = 0.001;
+    let a = [(0., 0.), (0.19, 5.95), (1.16, 54.4)];
+    // As in the DC alleys: the last segment, of length s, turns about 90.5
+    // degrees, so its end is within s * 0.99997 of the previous segment.
+    let alley = |s: f64| vec![(0.28, -36.), (0.15, -18.), (-s, 0.), (0., 0.)];
+    // The previous segment heads north and the last one turns `turn` degrees.
+    let turned = |turn: f64, s: f64| {
+        let (x, y) = (turn.to_radians().sin() * s, turn.to_radians().cos() * s);
+        vec![(-x, -y - 36.), (-x, -y - 18.), (-x, -y), (0., 0.)]
+    };
+    let mut free = Vec::new();
+    for f in [
+        0.5, 0.9, 1., 1.00000001, 1.0000001, 1.0000016, 1.00001, 1.0001, 1.001, 1.01, 1.1, 1.5, 2.,
+        3.,
+    ] {
+        free.push((90.5, alley(f * tolerance)));
+        for turn in [30., 60., 90., 91., 95., 120., 135.] {
+            free.push((turn, turned(turn, f * tolerance)));
+        }
+    }
+    // Sharper bends still end freely while the bend vertex stays within the
+    // tolerance of the point the end lies beside.
+    for (turn, f) in [
+        (150., 1.00000001),
+        (150., 1.1),
+        (170., 1.00000001),
+        (170., 1.01),
+        (179., 1.00000001),
+        (179., 1.0001),
+    ] {
+        free.push((turn, turned(turn, f * tolerance)));
+    }
+    for (turn, b) in &free {
+        let lines = [(1, &a[..]), (2, &b[..])];
+        let pseudo = line_violations(Rule::LineMustNotHavePseudoNodes, &lines, tolerance);
+        assert_eq!(
+            points(&pseudo),
+            [(0., 0.)],
+            "turn {turn}, {b:?}: {pseudo:?}"
+        );
+        let dangles = line_violations(Rule::LineMustNotHaveDangles, &[(2, &b[..])], tolerance);
+        assert_eq!(dangles.len(), 2, "turn {turn}, {b:?}: {dangles:?}");
+    }
+    // The other line may start just off the end. Its own projection onto the
+    // previous segment then lies farther from the bend than the end does.
+    for (turn, f, start) in [
+        (179.25, 0.974, (-0.000134, -0.000067)),
+        (160.4, 0.952, (-0.000263, -0.000131)),
+    ] {
+        let b = turned(turn, f * tolerance);
+        let mut a = a.to_vec();
+        a[0] = start;
+        let lines = [(1, &a[..]), (2, &b[..])];
+        let pseudo = line_violations(Rule::LineMustNotHavePseudoNodes, &lines, tolerance);
+        assert_eq!(pseudo.len(), 1, "turn {turn}, {b:?}: {pseudo:?}");
+        let dangles = line_violations(Rule::LineMustNotHaveDangles, &lines, tolerance);
+        assert_eq!(points(&dangles), sorted_points(vec![a[2], b[0]]));
+    }
+    // A last segment retracing the line beyond the tolerance ends on the
+    // line's own interior.
+    for f in [1.5, 2., 3.] {
+        let b = turned(179., f * tolerance);
+        let lines = [(1, &a[..]), (2, &b[..])];
+        let pseudo = line_violations(Rule::LineMustNotHavePseudoNodes, &lines, tolerance);
+        assert!(pseudo.is_empty(), "{b:?}: {pseudo:?}");
+        let dangles = line_violations(Rule::LineMustNotHaveDangles, &[(2, &b[..])], tolerance);
+        assert_eq!(points(&dangles), [b[0]], "{b:?}: {dangles:?}");
+        let retrace = line_violations(Rule::LineMustNotSelfOverlap, &[(2, &b[..])], tolerance);
+        assert_eq!(retrace.len(), 1, "{b:?}: {retrace:?}");
+    }
+}
+#[test]
+fn final_bends_after_a_vertex_near_the_end_keep_end_to_end_pseudo_nodes() {
+    let a = [(0., 0.), (0.19, 5.95), (1.16, 54.4)];
+    // A vertex just before the bend lies within tolerance of the end and
+    // joins its node, while the bend vertex does not.
+    let mut lines = vec![
+        (1., vec![(-0.98, -36.), (-0.98, 0.36), (0., 0.)]),
+        (
+            1.,
+            vec![(-0.98, -36.), (-0.98, 0.01), (-0.98, 0.36), (0., 0.)],
+        ),
+        (
+            0.001,
+            vec![
+                (-0.00098, -0.036),
+                (-0.00098, 0.00001),
+                (-0.00098, 0.00036),
+                (0., 0.),
+            ],
+        ),
+    ];
+    // The previous segment heads north, the last one of length `s` turns
+    // `turn` degrees, and a further vertex lies `d` before the bend.
+    for (turn, s, d) in [(110., 1.05, 0.35), (135., 1.2, 0.5), (150., 1.1, 0.3)] {
+        let r = f64::to_radians(turn);
+        let (x, y) = (-s * r.sin(), -s * r.cos());
+        lines.push((
+            1.,
+            vec![(x, y - 36.), (x, y - 18.), (x, y - d), (x, y), (0., 0.)],
+        ));
+    }
+    for (tolerance, b) in lines {
+        let a = a.map(|(x, y)| (x * tolerance, y * tolerance));
+        let pseudo = line_violations(
+            Rule::LineMustNotHavePseudoNodes,
+            &[(1, &a[..]), (2, &b[..])],
+            tolerance,
+        );
+        assert_eq!(points(&pseudo), [(0., 0.)], "{b:?}: {pseudo:?}");
+        let dangles = line_violations(Rule::LineMustNotHaveDangles, &[(2, &b[..])], tolerance);
+        assert_eq!(
+            points(&dangles),
+            sorted_points(vec![b[0], (0., 0.)]),
+            "{b:?}: {dangles:?}"
+        );
+    }
+}
+#[test]
+fn nearby_ends_without_final_bends_keep_their_nodes() {
+    // The first line starts 0.30 from the end of the second, and the third
+    // 0.80 from it, but 1.1 from the first. No line returns to itself, so the
+    // noding is unaffected: the first start joins the second line's interior,
+    // and the second end and third start form a pseudo-node.
+    let lines: [(i64, &[(f64, f64)]); 3] = [
+        (1, &[(0.14, -0.27), (-9.6, -17.25)]),
+        (2, &[(14.86, 21.77), (0., 0.)]),
+        (3, &[(-0.45, 0.66), (-30.3, -9.5)]),
+    ];
+    let dangles = line_violations(Rule::LineMustNotHaveDangles, &lines, 1.);
+    assert_eq!(
+        points(&dangles),
+        sorted_points(vec![(-30.3, -9.5), (-9.6, -17.25), (14.86, 21.77)])
+    );
+    let pseudo = line_violations(Rule::LineMustNotHavePseudoNodes, &lines, 1.);
+    assert_eq!(points(&pseudo), [(-0.45, 0.66)]);
+    assert_eq!(pseudo[0].origin.unwrap().fid, 2);
+    assert_eq!(pseudo[0].destination.unwrap().fid, 3);
+}
 #[test]
 fn unrelated_layers_do_not_change_single_layer_graph_results() {
     use geo::line_string;
@@ -588,4 +854,53 @@ fn sub_ulp_binary_gap_is_exact_at_zero_tolerance() {
             .count()
     };
     assert_eq!((gaps(0.), gaps(1e-9)), (1, 0));
+}
+
+#[test]
+fn crossings_beside_trimmed_final_bends_are_streamed() {
+    // Each first line ends with a bend that folds back within tolerance, and
+    // the other line crosses it near that bend. Streaming validation must find
+    // the crossing like a full report does.
+    let line = |c: &[(f64, f64)]| Geometry::from(geo::LineString::from(c.to_vec()));
+    let cases = [
+        [
+            line(&[(0., -20.), (0., 0.), (0.996, -0.836)]),
+            line(&[(-3.06, -3.96), (3.37, 3.70)]),
+        ],
+        [
+            line(&[
+                (-34.721737743146846, -6.753819932292435),
+                (-34.991816149611964, -7.789329059999547),
+                (-19.508694995156848, -5.735933515375656),
+            ]),
+            line(&[
+                (-36.86541861946715, -55.610091149695386),
+                (-34.721737743146846, -6.753819932292435),
+            ]),
+        ],
+    ];
+    for pair in cases {
+        for rule in [
+            Rule::LineMustNotIntersect,
+            Rule::LineMustNotIntersectOrTouchInterior,
+        ] {
+            let mut t = Topology::new(1.).unwrap();
+            let a = t.add_layer(Layer::from_geometries("lines", pair.clone()));
+            t.add_rule(rule, a, None).unwrap();
+            let report = t.validate().unwrap();
+            assert!(
+                report
+                    .violations()
+                    .any(|v| v.kind == ViolationKind::Crossing),
+                "{rule}: {report:?}"
+            );
+            let mut streamed = Vec::new();
+            t.validate_into(|_, v| {
+                streamed.push(v);
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+            assert_eq!(streamed, report.rules[0].violations, "{rule}");
+        }
+    }
 }

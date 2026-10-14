@@ -1,5 +1,5 @@
 //! Line parts against individual polygon areas and their boundaries.
-use super::{selected_pieces, violation};
+use super::{selected_pieces, selected_runs, violation};
 use crate::{
     Error, LayerId, RuleSpec, Topology, Violation, ViolationKind,
     aggregate::{Merge, aggregate},
@@ -8,6 +8,7 @@ use crate::{
         index,
         line_graph::{projection, proper_intersection},
         location::{self, Location},
+        parameter::{self, Parameter},
         polygons,
     },
     model::Part,
@@ -138,22 +139,27 @@ fn boundary_band(segment: Line, boundary: Line, tolerance: f64) -> Vec<[f64; 2]>
     }
     crate::engine::matching::union(spans)
 }
-fn pair(
-    t: &Topology,
-    spec: RuleSpec,
-    other: LayerId,
-    mode: LinePolygon,
-    line: &Part<crate::engine::storage::Shared<LineString>>,
-    polygon: &Part<crate::engine::storage::Shared<Polygon>>,
-    views: &Location,
-) -> Vec<Violation> {
-    let origin = Some(line.reference.at(spec.layer));
-    let destination = Some(polygon.reference.at(other));
+/// Cuts and window states for a line part against one polygon part.
+struct Cuts {
+    cuts: Vec<Cut>,
+    states: Vec<i8>,
+    contacts: Vec<Point>,
+    crossing_contacts: Vec<(f64, Coord)>,
+    exact: Option<ExactCuts>,
+}
+/// Zero-tolerance cut data: positions are exact ranks.
+struct ExactCuts {
+    /// The representative parameter of each cut rank.
+    params: Vec<Parameter>,
+    /// Cut rank of each contact.
+    contact_ranks: Vec<usize>,
+}
+fn float_cuts(t: &Topology, mode: LinePolygon, line: &LineString, views: &Location) -> Cuts {
     let mut cuts = Vec::new();
     let mut contacts = Vec::new();
     let mut crossing_contacts = Vec::new();
     let mut boundary_intervals = Vec::new();
-    for (i, segment) in line.geometry.lines().enumerate() {
+    for (i, segment) in line.lines().enumerate() {
         crate::cancel::check();
         cuts.push(Cut {
             position: i as f64,
@@ -275,6 +281,193 @@ fn pair(
             }
         })
         .collect::<Vec<_>>();
+    Cuts {
+        cuts,
+        states,
+        contacts,
+        crossing_contacts,
+        exact: None,
+    }
+}
+/// Zero tolerance: order cuts by exact segment parameters, deduplicate equal
+/// parameters, and classify each window at its exact midpoint. Contacts are
+/// identified by rank, so no decision uses a rounded coordinate. Line parts
+/// have no repeated consecutive coordinates, so every segment, and every
+/// window between distinct parameters, has positive length.
+fn exact_cuts(mode: LinePolygon, line: &LineString, views: &Location) -> Cuts {
+    let lines = line.lines().collect::<Vec<_>>();
+    let mut params = Vec::with_capacity(lines.len() + 1);
+    let mut contact_ids = Vec::new();
+    let mut shared = Vec::new();
+    let contact = |params: &mut Vec<Parameter>, ids: &mut Vec<usize>, p: Parameter| {
+        ids.push(params.len());
+        params.push(p.normalized(&lines));
+    };
+    for (i, &segment) in lines.iter().enumerate() {
+        crate::cancel::check();
+        params.push(Parameter::start(i, segment));
+        if i + 1 == lines.len() {
+            params.push(Parameter::end(i, segment));
+        }
+        let mut candidates = views
+            .tree
+            .locate_in_envelope_intersecting(&index::envelope(segment.bounding_rect()))
+            .map(|i| i.data)
+            .collect::<Vec<_>>();
+        candidates.sort_unstable();
+        for j in candidates {
+            let boundary = views.segments[j];
+            match line_intersection(segment, boundary) {
+                None => {}
+                Some(LineIntersection::SinglePoint {
+                    is_proper: true, ..
+                }) => {
+                    let p = Parameter::crossing(i, segment, boundary).expect("proper crossing");
+                    contact(&mut params, &mut contact_ids, p);
+                }
+                Some(LineIntersection::SinglePoint { intersection, .. }) => {
+                    let p = Parameter::on(i, segment, intersection);
+                    contact(&mut params, &mut contact_ids, p);
+                }
+                Some(LineIntersection::Collinear { intersection }) => {
+                    shared.push([params.len(), params.len() + 1]);
+                    for p in [intersection.start, intersection.end] {
+                        contact(&mut params, &mut contact_ids, Parameter::on(i, segment, p));
+                    }
+                }
+            }
+        }
+    }
+    let mut order = (0..params.len()).collect::<Vec<_>>();
+    order.sort_by(|&a, &b| params[a].cmp(&params[b]));
+    let mut rank = vec![0; params.len()];
+    let mut representatives: Vec<usize> = Vec::new();
+    for (k, &id) in order.iter().enumerate() {
+        if k == 0 || params[order[k - 1]].cmp(&params[id]).is_ne() {
+            representatives.push(id);
+        }
+        rank[id] = representatives.len() - 1;
+    }
+    // Windows between the ends of a collinear contact follow the boundary.
+    let mut along = vec![0i32; representatives.len() + 1];
+    for [a, b] in shared {
+        let (a, b) = (rank[a].min(rank[b]), rank[a].max(rank[b]));
+        along[a] += 1;
+        along[b] -= 1;
+    }
+    let mut depth = 0;
+    let states = representatives
+        .windows(2)
+        .enumerate()
+        .map(|(r, pair)| {
+            depth += along[r];
+            if depth > 0 {
+                0
+            } else {
+                parameter::window_position(views, &params[pair[0]], &params[pair[1]])
+            }
+        })
+        .collect();
+    let cuts = representatives
+        .iter()
+        .enumerate()
+        .map(|(r, &id)| Cut {
+            position: r as f64,
+            point: params[id].point,
+        })
+        .collect::<Vec<_>>();
+    let contact_ranks = contact_ids.iter().map(|&id| rank[id]).collect::<Vec<_>>();
+    // Crossing mode reads only the ranked crossing contacts.
+    let (contacts, crossing_contacts) = if mode == LinePolygon::Cross {
+        (
+            Vec::new(),
+            contact_ranks
+                .iter()
+                .map(|&r| (r as f64, cuts[r].point))
+                .collect(),
+        )
+    } else {
+        (
+            contact_ranks
+                .iter()
+                .map(|&r| Point(cuts[r].point))
+                .collect(),
+            Vec::new(),
+        )
+    };
+    let mut slots = params.into_iter().map(Some).collect::<Vec<_>>();
+    let params = representatives
+        .iter()
+        .map(|&id| slots[id].take().expect("one representative per parameter"))
+        .collect();
+    Cuts {
+        cuts,
+        states,
+        contacts,
+        crossing_contacts,
+        exact: Some(ExactCuts {
+            params,
+            contact_ranks,
+        }),
+    }
+}
+impl ExactCuts {
+    /// Emit one selected run of cut ranks. A crossing that is not
+    /// representable lies inside a single boundary edge and changes sides, so
+    /// it can only end a run; interior cuts are input coordinates. Run ends
+    /// keep their nearest rounding, so a crossing shared by adjacent pieces
+    /// has one coordinate. Only an end that rounds onto its neighbour is
+    /// rounded away from the run instead (`Parameter::outward`), which keeps
+    /// the piece within its segments and never zero-length.
+    fn emit(&self, run: &[usize]) -> LineString {
+        let last = run.len() - 1;
+        let mut coords = run
+            .iter()
+            .map(|&c| self.params[c].point)
+            .collect::<Vec<_>>();
+        if coords[0] == coords[1] {
+            coords[0] = self.params[run[0]].outward(false);
+        }
+        if coords[last] == coords[last - 1] {
+            coords[last] = self.params[run[last]].outward(true);
+        }
+        // In a two-point run the end may have moved onto the start.
+        if coords[0] == coords[1] {
+            coords[0] = self.params[run[0]].outward(false);
+        }
+        // Exact parameters along a segment are monotone on each axis, input
+        // coordinates at distinct parameters differ, and an outward rounding
+        // moves away from its neighbour on an axis along which the segment
+        // advances.
+        debug_assert!(
+            coords.windows(2).all(|w| w[0] != w[1]),
+            "collapsed run {coords:?}"
+        );
+        LineString(coords)
+    }
+}
+fn pair(
+    t: &Topology,
+    spec: RuleSpec,
+    other: LayerId,
+    mode: LinePolygon,
+    line: &Part<crate::engine::storage::Shared<LineString>>,
+    polygon: &Part<crate::engine::storage::Shared<Polygon>>,
+    views: &Location,
+) -> Vec<Violation> {
+    let origin = Some(line.reference.at(spec.layer));
+    let destination = Some(polygon.reference.at(other));
+    let Cuts {
+        cuts,
+        states,
+        mut contacts,
+        mut crossing_contacts,
+        exact,
+    } = if t.tolerance() == 0. {
+        exact_cuts(mode, line.geometry.as_ref(), views)
+    } else {
+        float_cuts(t, mode, line.geometry.as_ref(), views)
+    };
     if mode == LinePolygon::Cross {
         crossing_contacts.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
         let mut violations = Vec::new();
@@ -377,17 +570,35 @@ fn pair(
     let mut pieces = Vec::new();
     let coords = cuts.iter().map(|cut| cut.point).collect::<Vec<_>>();
     let selected = states.iter().map(|&state| state >= 0).collect::<Vec<_>>();
-    for piece in selected_pieces(&coords, &selected) {
-        if Euclidean.length(&piece) > t.tolerance() {
-            pieces.push(piece);
-        } else if any && piece.0.len() >= 2 {
-            // Select by original coordinate order so reversal agrees.
-            let first = piece
-                .0
-                .iter()
-                .min_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)))
-                .expect("piece has coordinates");
-            contacts.push(Point(*first));
+    if let Some(exact) = &exact {
+        // Each window joins two exactly distinct parameters, so every selected
+        // run has positive length. Contacts on a run are covered by rank.
+        let mut covered = vec![false; cuts.len()];
+        for run in selected_runs(&coords, &selected) {
+            for &c in &run {
+                covered[c] = true;
+            }
+            pieces.push(exact.emit(&run));
+        }
+        contacts = contacts
+            .into_iter()
+            .zip(&exact.contact_ranks)
+            .filter(|(_, rank)| !covered[**rank])
+            .map(|(p, _)| p)
+            .collect();
+    } else {
+        for piece in selected_pieces(&coords, &selected) {
+            if Euclidean.length(&piece) > t.tolerance() {
+                pieces.push(piece);
+            } else if any && piece.0.len() >= 2 {
+                // Select by original coordinate order so reversal agrees.
+                let first = piece
+                    .0
+                    .iter()
+                    .min_by(|a, b| a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y)))
+                    .expect("piece has coordinates");
+                contacts.push(Point(*first));
+            }
         }
     }
     let mut geometries = pieces

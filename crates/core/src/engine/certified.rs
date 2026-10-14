@@ -25,6 +25,19 @@ impl Interval {
                 .next_up(),
         )
     }
+    pub fn div(self, b: Self) -> Self {
+        let v = [self.0 / b.0, self.0 / b.1, self.1 / b.0, self.1 / b.1];
+        if b.0 <= 0. && b.1 >= 0. || v.iter().any(|x| !x.is_finite()) {
+            return Self(f64::NEG_INFINITY, f64::INFINITY);
+        }
+        Self(
+            v.iter().copied().fold(f64::INFINITY, f64::min).next_down(),
+            v.iter()
+                .copied()
+                .fold(f64::NEG_INFINITY, f64::max)
+                .next_up(),
+        )
+    }
     pub fn abs(self) -> Self {
         if self.0 >= 0. {
             self
