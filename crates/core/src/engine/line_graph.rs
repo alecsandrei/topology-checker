@@ -19,6 +19,9 @@ type FeatureKey = (LayerId, i64);
 #[derive(Debug, Clone, Copy)]
 struct Meeting {
     positions: [f64; 2],
+    /// The open line end lying within tolerance of the other passage here, where
+    /// the passages meet without touching.
+    end: Option<Coord>,
 }
 /// Lines meeting at a smaller angle are treated as one shared course beyond this
 /// many tolerances, so long nearly parallel runs keep their support.
@@ -852,6 +855,7 @@ impl LineGraph {
                         along(a, projection(lines[0], p).0),
                         along(b, projection(lines[1], p).0),
                     ],
+                    end: None,
                 });
             }
             if let Some(LineIntersection::SinglePoint {
@@ -963,6 +967,7 @@ impl LineGraph {
                 let c = Coord { x: p[0], y: p[1] };
                 (i, geo::Rect::new(c, c))
             }));
+            let mut ends_met = false;
             for component in components.into_values() {
                 crate::cancel::check();
                 let spans = [0, 1].map(|side| {
@@ -1081,16 +1086,22 @@ impl LineGraph {
                 // Lines that meet at an angle stay within tolerance near the
                 // meeting point. Only support beyond those near zones can make a
                 // run shared linework. Without a meeting point nothing changes.
-                let near = !short
-                    && !exact
-                    && self.near_zones_explain(
+                let near = !short && !exact && {
+                    // Line ends within tolerance of the other part meet it too.
+                    if !ends_met {
+                        let ends = self.end_meetings(tree, parts, &positions);
+                        meetings.entry(parts).or_default().extend(ends);
+                        ends_met = true;
+                    }
+                    self.near_zones_explain(
                         tree,
                         parts,
                         &positions,
                         &uncertainty,
                         &spans,
-                        meetings.get(&parts).map_or(&[][..], Vec::as_slice),
-                    );
+                        &meetings[&parts],
+                    )
+                };
                 // Within one part, only a meeting point can bound a run.
                 let judged = parts[0] != parts[1] && (short || confined);
                 if judged || near {
@@ -1556,12 +1567,78 @@ impl LineGraph {
     pub fn source(&self, index: usize) -> Line {
         self.sources[index].line(&self.parts)
     }
+    /// Open ends of either part lying within tolerance of the other, meeting it at
+    /// their nearest points. Coordinates within tolerance are coincident, so such
+    /// an end meets the other line. An end from which a further part of the same
+    /// feature continues ends no linework, and one within a sixteenth of the
+    /// tolerance already meets the other part as a vertex does.
+    fn end_meetings(
+        &self,
+        tree: &index::Index,
+        parts: [usize; 2],
+        positions: &[Vec<f64>],
+    ) -> Vec<Meeting> {
+        let tolerance = self.tolerance;
+        let mut meetings = Vec::new();
+        if parts[0] == parts[1] {
+            return meetings;
+        }
+        for side in 0..2 {
+            let part = &self.parts[parts[side]];
+            if part.is_closed {
+                continue;
+            }
+            let coords = &part.original.0;
+            let feature = part.reference.feature();
+            let total = *positions[parts[side]].last().expect("source");
+            for (position, point) in [(0., coords[0]), (total, *coords.last().expect("source"))] {
+                let mut closest = None;
+                let mut continues = false;
+                for item in tree.locate_in_envelope_intersecting(&index::at(point, tolerance)) {
+                    let segment = self.segment(item.data);
+                    let (parameter, projected) = projection(self.source(item.data), point);
+                    let offset = distance(point, projected);
+                    if offset > tolerance {
+                        continue;
+                    }
+                    if segment.part == parts[1 - side] {
+                        let p = &positions[segment.part];
+                        let at = p[segment.start]
+                            + parameter * (p[segment.start + 1] - p[segment.start]);
+                        if closest.is_none_or(|(best, _)| offset < best) {
+                            closest = Some((offset, at));
+                        }
+                    } else if segment.part != parts[side]
+                        && self.parts[segment.part].reference.feature() == feature
+                    {
+                        continues = true;
+                    }
+                }
+                if let Some((offset, at)) = closest
+                    && !continues
+                    && offset > tolerance / 16.
+                {
+                    let mut meeting = Meeting {
+                        positions: [at; 2],
+                        end: Some(point),
+                    };
+                    meeting.positions[side] = position;
+                    meetings.push(meeting);
+                }
+            }
+        }
+        meetings
+    }
     /// Whether a run's support lies within the near zones of points where its
     /// passages meet, except for at most one tolerance, on both passages. Walking
     /// along one passage can miss linework the other runs alongside after a turn.
     ///
     /// Lines meeting at angle `a` stay within tolerance for about `tolerance / sin a`
-    /// beyond the meeting point, wherever their vertices lie. Walking away from a
+    /// beyond the meeting point, wherever their vertices lie. A line end within
+    /// tolerance of the other passage meets it too, as if the lines met where they
+    /// would at the rate they part from it. A line approaching at an angle and
+    /// ending within tolerance then shares no linework, however it is segmented,
+    /// while one running nearly parallel keeps its support. Walking away from a
     /// meeting point along a passage, its near zone extends to where the passages
     /// leave tolerance of each other, plus one tolerance, if their separation grows
     /// steadily on the way. Lines diverging too slowly to leave tolerance within the
@@ -1752,20 +1829,48 @@ impl LineGraph {
                     });
                 let origin = self.point_at(part, p, start);
                 let separation = |point: Coord| nearest(&segments, point).0;
+                // From a line end meeting the other passage, separation is measured
+                // from the end's offset, as if the lines met where they would at the
+                // rate they part. It may wobble by an eighth of what remains of the
+                // tolerance beyond that offset.
+                let gap0 = meeting.end.map_or(0., |_| origin.map_or(0., separation));
+                let wobble = (tolerance - gap0) / 8.;
                 for direction in [1., -1.] {
-                    let at = |offset: f64| self.point_at(part, p, start + direction * offset);
+                    // From a line end, the walk also samples the end of an open
+                    // passage `room` away, wherever it lies between two steps.
+                    let finish = (meeting.end.is_some() && !closed[side]).then(|| {
+                        let coords = &self.original(part).0;
+                        if direction > 0. {
+                            (total[side] - start, *coords.last().expect("source"))
+                        } else {
+                            (start, coords[0])
+                        }
+                    });
+                    let room = finish.map_or(f64::INFINITY, |(room, _)| room);
+                    let at = |offset: f64| match finish {
+                        Some((room, point)) if offset == room => Some(point),
+                        _ => self.point_at(part, p, start + direction * offset),
+                    };
                     let mut walk = Vec::new();
                     let mut peak = 0.;
                     // Where the other passage ends away from this meeting point,
-                    // lines leaving tolerance there have not parted at an angle.
+                    // other than at the line end meeting it here, lines leaving
+                    // tolerance there have not parted at an angle.
                     let mut ended = false;
-                    for offset in (1..).map(|k| k as f64 * step).take_while(|&o| o <= limit) {
+                    let offsets = (1..)
+                        .map(|k| k as f64 * step)
+                        .take_while(|&o| o < room)
+                        .chain((room > 0. && room.is_finite()).then_some(room))
+                        .take_while(|&o| o <= limit);
+                    for offset in offsets {
                         let Some(point) = at(offset) else {
                             break;
                         };
                         let (gap, end) = nearest(&segments, point);
                         ended = end.is_some_and(|end| {
-                            origin.is_none_or(|origin| distance(end, origin) > tolerance / 16.)
+                            Some(end) != meeting.end
+                                && origin
+                                    .is_none_or(|origin| distance(end, origin) > tolerance / 16.)
                         });
                         walk.push((offset, gap));
                         peak = gap.max(peak);
@@ -1781,9 +1886,15 @@ impl LineGraph {
                     let straight = |until: f64, rate: f64| {
                         walk.iter().take_while(|&&(offset, _)| offset < until).all(
                             |&(offset, gap)| {
-                                (gap - offset * rate).abs() <= offset * rate / 4. + tolerance / 8.
+                                (gap - gap0 - offset * rate).abs() <= offset * rate / 4. + wobble
                             },
                         )
+                    };
+                    // The zone of lines diverging at `rate`, shrinking smoothly for
+                    // lines too close to parallel to leave tolerance before the cap,
+                    // and reaching from where lines leaving a line end would have met.
+                    let vanishing = |rate: f64| {
+                        (limit * (2. * rate * limit / tolerance).min(1.) - gap0 / rate).max(0.)
                     };
                     // Separation grows steadily up to a peak, rather than stalling.
                     let grows = |until: f64, peak: f64, slack: f64| {
@@ -1792,18 +1903,29 @@ impl LineGraph {
                             .all(|&(offset, gap)| gap >= 0.75 * offset / until * peak - slack)
                     };
                     let reach_end = match walk.last() {
-                        // The passages leave tolerance of each other.
+                        // The passages leave tolerance of each other. Lines leaving a
+                        // line end too slowly to leave tolerance within the cap from
+                        // where they would have met get the zone of lines meeting there
+                        // at a small angle.
                         Some(&(exit, gap)) if gap > tolerance => {
-                            (!ended && straight(exit, tolerance / exit)).then_some(exit + tolerance)
+                            let rate = (tolerance - gap0) / exit;
+                            (!ended && straight(exit, rate)).then(|| {
+                                if meeting.end.is_some() && tolerance / rate > limit {
+                                    vanishing(rate).min(exit + tolerance)
+                                } else {
+                                    exit + tolerance
+                                }
+                            })
                         }
                         // They diverge steadily without leaving tolerance before the
                         // cap, as lines meeting at a small angle do. The zone shrinks
                         // smoothly with that angle, so lines meeting at a vanishing
                         // angle keep their support.
-                        Some(&(last, gap)) if last + step > limit && gap > tolerance / 16. => {
-                            let rate = gap / last;
-                            straight(f64::INFINITY, rate)
-                                .then(|| limit * (2. * rate * limit / tolerance).min(1.))
+                        Some(&(last, gap))
+                            if last + step > limit && gap - gap0 > tolerance / 16. =>
+                        {
+                            let rate = (gap - gap0) / last;
+                            straight(f64::INFINITY, rate).then(|| vanishing(rate))
                         }
                         // A line leaves the other from its end and hooks back across
                         // it, meeting it again before leaving tolerance and parting
@@ -1821,7 +1943,7 @@ impl LineGraph {
                                     at(offset).is_none_or(|point| separation(point) > tolerance)
                                 });
                             (hooked
-                                && peak >= tolerance / 2.
+                                && peak - gap0 >= tolerance / 2.
                                 && grows(peak_at, peak, 0.)
                                 && parts_beyond)
                                 .then_some(rejoin.min(tolerance))

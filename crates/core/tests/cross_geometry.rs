@@ -3639,3 +3639,466 @@ fn arms_folding_back_alongside_after_a_crossing_keep_their_overlaps() {
         assert!((shared - 3.).abs() < 1e-9, "{rule}: {report:?}");
     }
 }
+
+/// A line arriving at `degrees` to the x axis and ending `offset` above it at
+/// x = 0, `length` long, with vertices at the given distances before its end.
+fn arm(degrees: f64, offset: f64, length: f64, vertices: &[f64]) -> Geometry {
+    let (sin, cos) = degrees.to_radians().sin_cos();
+    let mut distances = vertices
+        .iter()
+        .copied()
+        .filter(|&s| s > 0. && s < length)
+        .collect::<Vec<_>>();
+    distances.sort_by(|a, b| b.total_cmp(a));
+    let coords = std::iter::once(length)
+        .chain(distances)
+        .chain([0.])
+        .map(|s| (-s * cos, offset + s * sin))
+        .collect::<Vec<_>>();
+    line(&coords)
+}
+
+fn overlaps(rule: Rule, geometries: Vec<Geometry>, tolerance: f64) -> Vec<f64> {
+    let t = topology(rule, geometries, rule.inputs().1.is_some(), tolerance);
+    t.validate()
+        .unwrap()
+        .violations()
+        .filter(|v| v.kind == ViolationKind::Overlap)
+        .map(|v| geo_length(&v.geometry))
+        .collect()
+}
+
+#[test]
+fn branches_ending_within_tolerance_share_no_linework_however_segmented() {
+    // Within tolerance, coordinates are coincident: a line ending within
+    // tolerance of another meets it there, and a branch arriving at an angle
+    // shares no linework with it, wherever its vertices lie.
+    let other = line(&[(-30., 0.), (30., 0.)]);
+    let mut seed = 0x2545_f491_4f6c_dd1d_u64;
+    for degrees in [3_f64, 5., 10., 20., 29., 45.] {
+        for offset in [0., 0.03, 0.2, 0.5, 0.9, 1.] {
+            for length in [1., 1.5, 2., 3., 5., 8., 40.] {
+                // Arms lying wholly within tolerance are stubs, not branches.
+                if length * degrees.to_radians().sin() + offset <= 1. {
+                    continue;
+                }
+                let mut random = || {
+                    seed ^= seed << 13;
+                    seed ^= seed >> 7;
+                    seed ^= seed << 17;
+                    (0..1 + seed % 4)
+                        .map(|k| ((seed >> (8 * k)) % 1024) as f64 / 1024. * length)
+                        .collect::<Vec<_>>()
+                };
+                let vertices = [
+                    vec![],
+                    (1..160).map(|k| k as f64 / 4.).collect(),
+                    (1..40).map(f64::from).collect(),
+                    vec![1.2],
+                    vec![0.5],
+                    vec![0.1],
+                    vec![length / 2.],
+                    vec![0.9 * length],
+                    random(),
+                    random(),
+                ];
+                for vertices in &vertices {
+                    let branch = arm(degrees, offset, length, vertices);
+                    for (dx, dy) in [(0., 0.), (-256., -512.)] {
+                        let pair = vec![translated(&branch, dx, dy), translated(&other, dx, dy)];
+                        for rule in [
+                            Rule::LineMustNotOverlap,
+                            Rule::LineMustNotOverlapWith,
+                            Rule::LineMustNotIntersect,
+                        ] {
+                            let found = overlaps(rule, pair.clone(), 1.);
+                            assert!(
+                                found.is_empty(),
+                                "{rule} at {degrees} degrees, {offset} short, {length} long, \
+                                 vertices {vertices:?}, shifted {dx} {dy}: {found:?}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn a_branch_ending_short_of_a_line_is_judged_alike_with_a_vertex_near_its_end() {
+    // Arriving at 29 degrees and ending 0.2 short of the other line, with and
+    // without a vertex 1.2 before its end.
+    let other = LineString::from(vec![(-30., 0.), (30., 0.)]);
+    for branch in [
+        LineString::from(vec![(-34.985, 19.592), (-1.0495, 0.7818), (0., 0.2)]),
+        LineString::from(vec![(-34.985, 19.592), (0., 0.2)]),
+    ] {
+        for (a, b) in meeting_variants(&branch, &other) {
+            for rule in [
+                Rule::LineMustNotOverlap,
+                Rule::LineMustNotOverlapWith,
+                Rule::LineMustNotIntersect,
+                Rule::LineMustNotIntersectWith,
+            ] {
+                let found = overlaps(rule, vec![a.clone().into(), b.clone().into()], 1.);
+                assert!(found.is_empty(), "{rule}: {a:?} {b:?} {found:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn lines_converging_to_ends_within_tolerance_share_linework_only_when_running_together() {
+    // IGN Argentina underground ducts (ln_ign_ar_ductos, EPSG:8857, CC BY 4.0),
+    // features 140 and 141: converging at about 6 degrees, they come within 1 m
+    // about 2 m before 140 ends 0.81 m from 141, which ends 0.95 m from that end.
+    let a = LineString::from(vec![
+        (-5834686.0170614645, -4800765.125013224),
+        (-5834687.872245371, -4800765.376502841),
+        (-5834689.501543387, -4800765.546445226),
+    ]);
+    let b = LineString::from(vec![
+        (-5834688.922602736, -4800761.618514752),
+        (-5834687.884960355, -4800764.384984638),
+        (-5834690.149162575, -4800764.852044867),
+    ]);
+    // A vee whose arms start 0.5 apart and part at 10 degrees.
+    let (sin, cos) = 10_f64.to_radians().sin_cos();
+    let vee = (
+        LineString::from(vec![(0., 0.), (20., 0.)]),
+        LineString::from(vec![(0., 0.5), (20. * cos, 0.5 + 20. * sin)]),
+    );
+    for (a, b) in [(a, b), vee] {
+        for (a, b) in meeting_variants(&a, &b) {
+            for rule in [
+                Rule::LineMustNotOverlap,
+                Rule::LineMustNotOverlapWith,
+                Rule::LineMustNotIntersect,
+            ] {
+                let found = overlaps(rule, vec![a.clone().into(), b.clone().into()], 1.);
+                assert!(found.is_empty(), "{rule}: {a:?} {b:?} {found:?}");
+            }
+        }
+    }
+    // Arms approaching a line at under 3 degrees run together with it beyond the
+    // near zone of where they would have met it. Wherever the arm touching the
+    // line keeps its overlap, so does every arm ending short of it.
+    let other = line(&[(-120., 0.), (30., 0.)]);
+    for degrees in [0.5, 1., 1.5, 2., 2.5] {
+        for step in [0.25, 1.] {
+            let vertices = (1..400).map(|k| k as f64 * step).collect::<Vec<_>>();
+            for rule in [Rule::LineMustNotOverlap, Rule::LineMustNotOverlapWith] {
+                let touching = overlaps(
+                    rule,
+                    vec![arm(degrees, 0., 100., &vertices), other.clone()],
+                    1.,
+                );
+                if touching.is_empty() {
+                    continue;
+                }
+                for offset in [0.1, 0.2, 0.3, 0.5, 0.7, 0.8, 0.9] {
+                    let branch = arm(degrees, offset, 100., &vertices);
+                    let found = overlaps(rule, vec![branch, other.clone()], 1.);
+                    assert!(
+                        found.len() == 1,
+                        "{rule} at {degrees} degrees, {offset} short, vertices every {step}: \
+                         {found:?}, touching {touching:?}"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn nearly_parallel_runs_from_line_ends_within_tolerance_remain_overlaps() {
+    for (a, b, length) in [
+        // Starting 0.77 off and leaving at 1.5 degrees, then turning away and
+        // returning alongside 0.5 off.
+        (
+            vec![(-40., 0.), (30., 0.)],
+            vec![
+                (0., 0.77),
+                (-8.5, 1.),
+                (-11., 3.),
+                (-14., 0.5),
+                (-20., 0.5),
+                (-20., 6.),
+            ],
+            14.5,
+        ),
+        // Starting 0.5 off and drifting to 0.8 off over 18, then turning away.
+        (
+            vec![(0., 0.), (30., 0.)],
+            vec![(0., 0.5), (18., 0.8), (22.33, 3.3)],
+            18.,
+        ),
+        // Starting beyond the other line's end 0.69 off and drifting to 0.91 off
+        // over 13, then turning away.
+        (
+            vec![(0., 0.), (-20., 0.)],
+            vec![(5., 0.69), (-8., 0.91), (-13., 5.65)],
+            8.,
+        ),
+        // Approaching at 2 degrees and ending 0.3 off, with vertices closer near
+        // the end.
+        (
+            vec![(-80., 0.), (30., 0.)],
+            vec![
+                (-59.96345, 2.39397),
+                (-39.975633, 1.69598),
+                (-29.981725, 1.346985),
+                (-19.987817, 0.99799),
+                (-9.993908, 0.648995),
+                (-4.996954, 0.474497),
+                (-1.998782, 0.369799),
+                (-0.999391, 0.334899),
+                (0., 0.3),
+            ],
+            19.988,
+        ),
+    ] {
+        let (a, b) = (LineString::from(a), LineString::from(b));
+        for (a, b) in meeting_variants(&a, &b) {
+            for rule in [
+                Rule::LineMustNotOverlap,
+                Rule::LineMustNotOverlapWith,
+                Rule::LineMustNotIntersect,
+                Rule::LineMustNotIntersectWith,
+            ] {
+                let found = overlaps(rule, vec![a.clone().into(), b.clone().into()], 1.);
+                assert!(
+                    found.len() == 1 && (found[0] - length).abs() < 1e-3,
+                    "{rule}: {a:?} {b:?} {found:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn lines_meeting_at_a_vertex_just_off_the_other_share_no_linework() {
+    // The first line meets the second at a vertex 0.03 off it, arriving at about
+    // 31 degrees and leaving at 10 degrees for 1.2 before ending.
+    let a = LineString::from(vec![
+        (5.6271801590919495, 2.0371830463409424),
+        (-0.0056688785552978516, -0.02945953607559204),
+        (-0.3518734574317932, 0.10268974304199219),
+        (-1.2145591974258423, 0.4319842457771301),
+    ]);
+    let b = LineString::from(vec![
+        (-29.459525227546692, 5.668895363807678),
+        (-4.5737815499305725, 0.8801326155662537),
+        (-1.9813232421875, 0.38126593828201294),
+        (0.6447558999061584, -0.12407034635543823),
+        (29.459525227546692, -5.668895363807678),
+    ]);
+    for (a, b) in meeting_variants(&a, &b) {
+        for rule in [
+            Rule::LineMustNotOverlap,
+            Rule::LineMustNotOverlapWith,
+            Rule::LineMustNotIntersect,
+            Rule::LineMustNotIntersectWith,
+        ] {
+            let found = overlaps(rule, vec![a.clone().into(), b.clone().into()], 1.);
+            assert!(found.is_empty(), "{rule}: {a:?} {b:?} {found:?}");
+        }
+    }
+}
+
+#[test]
+fn parts_meeting_within_tolerance_are_judged_as_if_they_touched() {
+    let self_overlaps = |geometry: &Geometry, dx: f64, dy: f64| {
+        let t = topology(
+            Rule::LineMustNotSelfOverlap,
+            vec![translated(geometry, dx, dy)],
+            false,
+            1.,
+        );
+        t.validate()
+            .unwrap()
+            .violations()
+            .map(|v| geo_length(&v.geometry))
+            .collect::<Vec<_>>()
+    };
+    let parts = |coords: &[&[(f64, f64)]]| -> Geometry {
+        MultiLineString(
+            coords
+                .iter()
+                .map(|c| LineString::from(c.to_vec()))
+                .collect(),
+        )
+        .into()
+    };
+    for (dx, dy) in [(0., 0.), (-256., -512.)] {
+        // A part leaving another's end at an angle, starting within tolerance of
+        // it, shares nothing with it, as when it starts at that end, or as one
+        // line bending there.
+        for degrees in [10_f64, 20., 45.] {
+            let (sin, cos) = degrees.to_radians().sin_cos();
+            let (mid, far) = ((5. * cos, 5. * sin), (10. * cos, 10. * sin));
+            let mut geometries = vec![line(&[(10., 0.), (0., 0.), far])];
+            for start in [(0.3, 0.2), (-0.4, 0.3), (0., 0.)] {
+                geometries.push(parts(&[&[(10., 0.), (0., 0.)], &[start, far]]));
+                geometries.push(parts(&[
+                    &[(10., 0.), (5., 0.), (0., 0.)],
+                    &[start, mid, far],
+                ]));
+            }
+            for geometry in &geometries {
+                let found = self_overlaps(geometry, dx, dy);
+                assert!(
+                    found.is_empty(),
+                    "{degrees} degrees, {geometry:?}: {found:?}"
+                );
+            }
+        }
+        // A part folding back along another from near its end, or running along
+        // it from near its start, keeps that shared stretch.
+        for start in [(10.2, 0.4), (9.7, 0.4), (10., 0.)] {
+            let geometry = parts(&[
+                &[(0., 0.), (10., 0.)],
+                &[start, (6., 0.4), (2., 0.4), (2., 10.)],
+            ]);
+            let found = self_overlaps(&geometry, dx, dy);
+            assert!(
+                found.len() == 1 && (found[0] - 8.).abs() < 1e-3,
+                "{geometry:?}: {found:?}"
+            );
+        }
+        for start in [(0.2, 0.4), (-0.3, 0.4)] {
+            let geometry = parts(&[&[(0., 0.), (10., 0.)], &[start, (8., 0.4), (8., 10.)]]);
+            let found = self_overlaps(&geometry, dx, dy);
+            assert!(
+                found.len() == 1 && found[0] > 7.5,
+                "{geometry:?}: {found:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn stretches_within_tolerance_between_line_ends_and_meetings_remain_overlaps() {
+    let cases = [
+        // Natural and Land Survey of Iceland watercourses (ln_iceland_watercourse,
+        // EPSG:3057, CC BY 4.0), features 168500 and 168505: a 2.4 m line lying
+        // within 1 m of another and ending on it.
+        (
+            vec![
+                (439513.1157645894, 472039.82003628544),
+                (439513.0863, 472040.3112),
+                (439513.3115, 472041.9254),
+                (439513.6118, 472043.0892),
+                (439514.0623, 472044.0652),
+            ],
+            vec![(439512.4014, 472042.3137), (439514.0623, 472044.0652)],
+            1.3956,
+        ),
+        // OpenStreetMap roads (HOT export, ln_hotosm_rwanda_roads, EPSG:32735,
+        // ODbL), features 6919 and 39914: 39914 starts within 0.28 m of 6919 and
+        // reaches it 1.38 m later at a shared vertex.
+        (
+            vec![
+                (875280.3662555307, 9848796.192978948),
+                (875277.2748966113, 9848799.700723652),
+                (875275.0775320219, 9848802.192978948),
+            ],
+            vec![
+                (875277.9641303706, 9848798.503940983),
+                (875277.2748966113, 9848799.700723652),
+                (875279.3615717051, 9848802.192978948),
+            ],
+            1.3536,
+        ),
+        // OpenStreetMap roads (HOT export, ln_hotosm_bhutan_roads, EPSG:32646,
+        // ODbL), features 19241 and 24085: 19241 starts within 0.65 m of 24085 and
+        // reaches it 1.91 m later at a shared vertex.
+        (
+            vec![
+                (351214.97485596675, 3053337.0000013374),
+                (351213.92813964153, 3053338.597304434),
+                (351213.5164375729, 3053340.7987),
+            ],
+            vec![
+                (351211.4515, 3053339.394075475),
+                (351213.92813964153, 3053338.597304434),
+                (351214.84501361643, 3053334.7987),
+            ],
+            1.7983,
+        ),
+        // OpenStreetMap waterways (HOT export, ln_hotosm_haiti_waterways,
+        // EPSG:32618, ODbL), features 8002 and 8003: 8002 leaves the end of 8003
+        // along it at 3.6 degrees for 1.09 m, then bends away.
+        (
+            vec![
+                (841720.0015203024, 2016666.532589315),
+                (841722.5461576518, 2016668.1967764425),
+                (841723.4568829531, 2016668.8001649126),
+                (841722.9996172354, 2016671.4984706775),
+            ],
+            vec![
+                (841726.0015203024, 2016670.8141139287),
+                (841722.5461576518, 2016668.1967764425),
+            ],
+            1.0925,
+        ),
+    ];
+    for (a, b, length) in cases {
+        let (a, b) = (LineString::from(a), LineString::from(b));
+        for (a, b) in meeting_variants(&a, &b) {
+            for rule in [
+                Rule::LineMustNotOverlap,
+                Rule::LineMustNotOverlapWith,
+                Rule::LineMustNotIntersect,
+                Rule::LineMustNotIntersectWith,
+            ] {
+                let found = overlaps(rule, vec![a.clone().into(), b.clone().into()], 1.);
+                assert!(
+                    found.len() == 1 && (found[0] - length).abs() < 1e-3,
+                    "{rule}: {a:?} {b:?} {found:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn parts_continuing_from_an_end_within_tolerance_keep_the_line_unbroken() {
+    // An approach to within half a tolerance that turns away again shares that
+    // stretch, whether the line is one part or two joined at the turn, end to end
+    // or a fraction of the tolerance apart. Alone, the approach is a branch
+    // ending within tolerance and shares nothing.
+    let other = line(&[(0., 0.), (10., 0.)]);
+    let approach = LineString::from(vec![(0., 3.), (2., 0.99), (3.4, 0.5)]);
+    let lines = [
+        line(&[(0., 3.), (2., 0.99), (3.4, 0.5), (5., 3.)]),
+        MultiLineString(vec![
+            approach.clone(),
+            LineString::from(vec![(3.4, 0.5), (5., 3.)]),
+        ])
+        .into(),
+        MultiLineString(vec![
+            approach.clone(),
+            LineString::from(vec![(3.5, 0.6), (5., 3.)]),
+        ])
+        .into(),
+    ];
+    for (dx, dy) in [(0., 0.), (-256., -512.)] {
+        for rule in [Rule::LineMustNotOverlap, Rule::LineMustNotOverlapWith] {
+            for line in &lines {
+                let pair = vec![translated(line, dx, dy), translated(&other, dx, dy)];
+                let found = overlaps(rule, pair, 1.);
+                assert!(
+                    found.len() == 1 && (found[0] - 1.4).abs() < 1e-3,
+                    "{rule}: {line:?} {found:?}"
+                );
+            }
+            let pair = vec![
+                translated(&approach.clone().into(), dx, dy),
+                translated(&other, dx, dy),
+            ];
+            assert_eq!(overlaps(rule, pair, 1.), Vec::<f64>::new(), "{rule}");
+        }
+    }
+}
