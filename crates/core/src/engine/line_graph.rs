@@ -237,6 +237,29 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn ends_near_searches_each_x_in_the_window_by_y() {
+        let [f, g] = [(LayerId(0), 1), (LayerId(0), 2)];
+        let at = |x: f64, y: f64| Coord { x, y };
+        let mut ends = vec![(g, at(0., 0.)), (f, at(1., 0.))];
+        // Many ends on one x, as along a line their parts end on.
+        ends.extend((0..1000).map(|i| (f, at(0., f64::from(i)))));
+        ends.extend([
+            (f, at(1e-9, 500.)),
+            (f, at(-1e-9, 499.5)),
+            (f, at(1e-9, 600.)),
+        ]);
+        ends.sort_by(|a, b| a.0.cmp(&b.0).then(coordinate_order(&a.1, &b.1)));
+        let near = |point, window| ends_near(&ends, f, point, window).collect::<Vec<_>>();
+        assert_eq!(
+            near(at(0., 500.), 0.6),
+            [at(-1e-9, 499.5), at(0., 500.), at(1e-9, 500.)]
+        );
+        assert_eq!(near(at(0., 0.), 0.), [at(0., 0.)]);
+        assert!(near(at(0.5, 0.), 0.4).is_empty());
+        assert_eq!(near(at(2., 0.), 1.), [at(1., 0.)]);
+    }
 }
 impl GraphPart {
     pub fn closed(&self) -> bool {
@@ -597,6 +620,29 @@ fn add_cut(cuts: &mut HashMap<usize, Vec<Coord>>, source: usize, line: Line, poi
 }
 fn coordinate_order(a: &Coord, b: &Coord) -> std::cmp::Ordering {
     a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y))
+}
+/// Ends of `feature` within `window` of `point` on both axes, from ends sorted by
+/// feature and [`coordinate_order`] without negative zeros: one search over y for
+/// each distinct x in the window.
+fn ends_near(
+    ends: &[(FeatureKey, Coord)],
+    feature: FeatureKey,
+    point: Coord,
+    window: f64,
+) -> impl Iterator<Item = Coord> + '_ {
+    let mut next = ends.partition_point(|&(f, end)| (f, end.x) < (feature, point.x - window));
+    std::iter::from_fn(move || {
+        let &(_, first) = ends
+            .get(next)
+            .filter(|&&(f, end)| f == feature && end.x <= point.x + window)?;
+        let run = &ends[next..];
+        let run = &run[..run.partition_point(|&(f, end)| f == feature && end.x == first.x)];
+        next += run.len();
+        let low = run.partition_point(|&(_, end)| end.y < point.y - window);
+        let high = run.partition_point(|&(_, end)| end.y <= point.y + window);
+        Some(run[low..high].iter().map(|&(_, end)| end))
+    })
+    .flatten()
 }
 // Zero tolerance has no grouping after contact discovery. Keep a sorted index
 // into the existing coordinate array instead of retaining the coordinate hash
@@ -2071,9 +2117,12 @@ impl LineGraph {
         // Most source segments have no interior contact. Store only actual cuts,
         // avoiding one empty Vec allocation header per original segment.
         let mut split = HashMap::new();
-        // Multipart endpoint parity belongs to original feature coordinates.
-        // Nearby clustered endpoints do not form an original through passage.
+        // A point is on a feature's boundary when an odd number of its open parts end
+        // there (the OGC mod-2 rule), counted on original feature coordinates. Closed
+        // parts and passages add nothing; nearby clustered endpoints stay separate.
         let mut endpoint_counts = HashMap::<_, usize>::new();
+        // The same ends by feature and coordinate, to find those beside a contact.
+        let mut feature_ends = Vec::with_capacity(endpoints.len());
         for (&point, &source) in endpoints.iter().zip(&endpoint_sources) {
             let feature = parts[segments[source].part].reference.feature();
             *endpoint_counts
@@ -2083,7 +2132,16 @@ impl LineGraph {
                     super::cluster::bits(point.y),
                 ))
                 .or_default() += 1;
+            // Adding zero makes negative zeros positive, so the order agrees with the
+            // comparisons of the search.
+            let end = Coord {
+                x: point.x + 0.,
+                y: point.y + 0.,
+            };
+            feature_ends.push((feature, end));
         }
+        feature_ends.sort_by(|a, b| a.0.cmp(&b.0).then(coordinate_order(&a.1, &b.1)));
+        feature_ends.dedup();
         let mut original_contacts = Vec::new();
         let mut contact = |a: usize, b: usize, points: [Coord; 2], coordinate: Coord| {
             let sources = [a, b];
@@ -2091,27 +2149,43 @@ impl LineGraph {
             if parts[a].reference.feature() == parts[b].reference.feature() {
                 return;
             }
+            // The nearest end of the whole feature decides, and an end at the contact
+            // itself is nearest. Otherwise the touched part's own ends count within
+            // tolerance; other parts' ends only where they coincide with the contact
+            // up to rounding of the coordinates the contact came from, so within twice
+            // their rounding reach.
+            let [l0, l1] = sources.map(|source| segments[source].line(&parts));
             let interior = [0, 1].map(|side| {
                 let p = &parts[[a, b][side]];
-                if p.closed() {
-                    return true;
-                }
                 let feature = p.reference.feature();
-                let endpoints = [p.original.0[0], *p.original.0.last().expect("source")];
-                let endpoint = endpoints
-                    .into_iter()
-                    .filter(|&point| distance(points[side], point) <= t.tolerance())
-                    .min_by(|&a, &b| {
-                        distance(points[side], a).total_cmp(&distance(points[side], b))
-                    });
-                endpoint.is_none_or(|point| {
-                    endpoint_counts[&(
+                let point = points[side];
+                let count = |end: Coord| {
+                    let key = (
                         feature,
-                        super::cluster::bits(point.x),
-                        super::cluster::bits(point.y),
-                    )]
-                        .is_multiple_of(2)
-                })
+                        super::cluster::bits(end.x),
+                        super::cluster::bits(end.y),
+                    );
+                    endpoint_counts.get(&key).copied()
+                };
+                let nearest = || {
+                    let own = [p.original.0[0], *p.original.0.last().expect("source")]
+                        .into_iter()
+                        .filter(|&end| !p.closed() && distance(point, end) <= t.tolerance());
+                    // Rounding is the largest coordinate's, so an end only adds its own.
+                    let base = rounding(&[point, l0.start, l0.end, l1.start, l1.end]);
+                    let window = 2. * base.min(t.tolerance());
+                    let others = ends_near(&feature_ends, feature, point, window).filter(|&end| {
+                        distance(point, end) <= base.max(rounding(&[end])).min(t.tolerance())
+                    });
+                    own.chain(others).min_by(|a, b| {
+                        distance(point, *a)
+                            .total_cmp(&distance(point, *b))
+                            .then(coordinate_order(a, b))
+                    })
+                };
+                count(point)
+                    .or_else(|| nearest().and_then(count))
+                    .is_none_or(|count| count.is_multiple_of(2))
             });
             // Endpoint junctions need no retained meeting evidence.
             if interior[0] || interior[1] {
@@ -2246,6 +2320,7 @@ impl LineGraph {
         // Endpoint parity is construction evidence, not retained graph storage.
         // Release it before allocating noded edges and incidences.
         drop(endpoint_counts);
+        drop(feature_ends);
         drop(endpoint_sources);
         drop(tree);
         let mut cluster = Cluster::new(t.tolerance());

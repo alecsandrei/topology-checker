@@ -1,9 +1,9 @@
 use geo::{
-    Contains, Geometry, LineString, Point, Rect, Relate, coord, coordinate_position::CoordPos,
-    dimensions::Dimensions,
+    Contains, Geometry, LineString, MultiLineString, Point, Rect, Relate, coord,
+    coordinate_position::CoordPos, dimensions::Dimensions,
 };
-use proptest::prelude::*;
-use std::collections::BTreeSet;
+use proptest::{prelude::*, test_runner::TestCaseError};
+use std::collections::{BTreeMap, BTreeSet};
 use topology_checker_core::{Layer, Report, Rule, Topology, ViolationKind};
 
 type Pairs = BTreeSet<(i64, i64, ViolationKind)>;
@@ -107,6 +107,126 @@ proptest! {
             if let Some(kind) = kind { expected.insert((i as i64,j as i64,kind)); }
         }}
         prop_assert_eq!(pairs(&check(lines.into_iter().map(Geometry::LineString).collect(),None,Rule::LineMustNotIntersectOrTouchInterior,0.)),expected);
+    }
+}
+
+/// Multipart lines on a small grid, some parts closed. No segment has zero length,
+/// and segments of one feature meet only at grid vertices without retracing each
+/// other, so every node is exact and the mod-2 boundary is well defined.
+fn multi_line() -> impl Strategy<Value = MultiLineString> {
+    use geo::line_intersection::{LineIntersection, line_intersection};
+    let part = (
+        prop::collection::vec((-3i32..4, -3i32..4), 2..4),
+        any::<bool>(),
+    )
+        .prop_map(|(points, closed)| {
+            let mut part = points
+                .into_iter()
+                .map(|(x, y)| coord! { x: x as f64, y: y as f64 })
+                .collect::<Vec<_>>();
+            if closed && part.len() > 2 {
+                part.push(part[0]);
+            }
+            LineString(part)
+        });
+    prop::collection::vec(part, 1..4)
+        .prop_map(MultiLineString)
+        .prop_filter("distinct vertices, segments meeting at vertices", |m| {
+            let segments = m.0.iter().flat_map(LineString::lines).collect::<Vec<_>>();
+            segments.iter().enumerate().all(|(i, &a)| {
+                a.start != a.end
+                    && segments[i + 1..].iter().all(|&b| {
+                        matches!(
+                            line_intersection(a, b),
+                            None | Some(LineIntersection::SinglePoint {
+                                is_proper: false,
+                                ..
+                            })
+                        )
+                    })
+            })
+        })
+}
+/// Line-intersect results per feature pair against the DE-9IM, whose multipart
+/// boundary is the mod-2 rule. Shared linework or points must be reported as an
+/// overlap or a crossing; whether the lines also meet elsewhere is not visible in
+/// the matrix. Otherwise an interior meeting a boundary is the only touch-interior.
+fn match_mod_2_de9im(
+    a: &[MultiLineString],
+    b: Option<&[MultiLineString]>,
+) -> Result<(), TestCaseError> {
+    let multi = |lines: &[MultiLineString]| {
+        lines
+            .iter()
+            .cloned()
+            .map(Geometry::MultiLineString)
+            .collect::<Vec<_>>()
+    };
+    let rules = if b.is_some() {
+        [
+            Rule::LineMustNotIntersectWith,
+            Rule::LineMustNotIntersectOrTouchInteriorWith,
+        ]
+    } else {
+        [
+            Rule::LineMustNotIntersect,
+            Rule::LineMustNotIntersectOrTouchInterior,
+        ]
+    };
+    for (rule, touch) in rules.into_iter().zip([false, true]) {
+        let mut found = BTreeMap::<_, BTreeSet<_>>::new();
+        for (i, j, kind) in pairs(&check(multi(a), b.map(multi), rule, 0.)) {
+            found.entry((i, j)).or_default().insert(kind);
+        }
+        for (i, x) in a.iter().enumerate() {
+            for (j, y) in b.unwrap_or(a).iter().enumerate() {
+                if b.is_none() && j <= i {
+                    continue;
+                }
+                let kinds = found.remove(&(i as i64, j as i64)).unwrap_or_default();
+                let matrix = x.relate(y);
+                let touches = matrix.get(CoordPos::Inside, CoordPos::OnBoundary)
+                    != Dimensions::Empty
+                    || matrix.get(CoordPos::OnBoundary, CoordPos::Inside) != Dimensions::Empty;
+                match matrix.get(CoordPos::Inside, CoordPos::Inside) {
+                    Dimensions::OneDimensional => prop_assert!(
+                        kinds.contains(&ViolationKind::Overlap),
+                        "{rule} {i} {j}: {kinds:?}"
+                    ),
+                    Dimensions::ZeroDimensional => prop_assert!(
+                        kinds.contains(&ViolationKind::Crossing)
+                            && !kinds.contains(&ViolationKind::Overlap),
+                        "{rule} {i} {j}: {kinds:?}"
+                    ),
+                    _ => prop_assert_eq!(
+                        &kinds,
+                        &if touch && touches {
+                            BTreeSet::from([ViolationKind::TouchInterior])
+                        } else {
+                            BTreeSet::new()
+                        },
+                        "{} {} {}",
+                        rule,
+                        i,
+                        j
+                    ),
+                }
+                prop_assert!(touch || !kinds.contains(&ViolationKind::TouchInterior));
+            }
+        }
+        prop_assert!(found.is_empty(), "{rule}: {found:?}");
+    }
+    Ok(())
+}
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(256))]
+    #[test]
+    fn multipart_line_contacts_match_mod_2_de9im(lines in prop::collection::vec(multi_line(), 0..5)) {
+        match_mod_2_de9im(&lines, None)?;
+    }
+    #[test]
+    fn cross_layer_multipart_line_contacts_match_mod_2_de9im(a in prop::collection::vec(multi_line(), 0..4), b in prop::collection::vec(multi_line(), 0..4)) {
+        match_mod_2_de9im(&a, Some(&b))?;
     }
 }
 

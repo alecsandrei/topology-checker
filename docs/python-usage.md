@@ -175,7 +175,10 @@ A line part whose original vertices all lie within the tolerance of each other i
 collapsed. It contributes no edges to line graphs built with that tolerance and
 receives one warning identifying its layer, FID, and original part. Warnings
 appear in `warnings()` and reports.
-Closed parts have no endpoints. A polygon-boundary crossing within tolerance of
+Closed parts have no endpoints. In the line `MUST_NOT_INTERSECT` and
+`MUST_NOT_INTERSECT_OR_TOUCH_INTERIOR` rules, a feature's endpoints are where an odd
+number of its open parts end (OGC mod-2); dangle, pseudo-node and endpoint rules use
+every open part end. A polygon-boundary crossing within tolerance of
 an open part endpoint is exempt from `MUST_NOT_CROSS_BOUNDARIES`; closed parts have
 no exemption. Boundary intervals pass `MUST_BE_INSIDE`, fail
 `MUST_BE_PROPERLY_INSIDE`, and are reported as lines by intersection rules.
