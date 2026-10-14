@@ -773,7 +773,7 @@ fn outside_pieces(
             }
             // Split the window where it enters and leaves channels.
             let mut start = 0.;
-            for [lo, hi] in precision::covered(window, &precision::channels(&edges, tolerance)) {
+            for [lo, hi] in precision::Channels::new(&edges, tolerance).covered(window) {
                 for (t, flag) in [(lo, true), (hi, false)] {
                     let point = crate::engine::matching::point(window, t);
                     if t > start && coords.last() != Some(&point) {

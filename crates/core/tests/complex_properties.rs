@@ -393,6 +393,60 @@ proptest! {
         prop_assert!(outside.is_subset(&strict), "{:?} {:?}", outside, strict);
     }
     #[test]
+    fn lines_not_reported_outside_stay_within_tolerance_of_the_polygons(
+        tiles in tiles(),
+        lines in prop::collection::vec(crack_path(), 1..8),
+        degrees in prop_oneof![Just(0.), Just(17.), Just(45.)],
+        offset in prop_oneof![Just((0., 0.)), Just((5e5, 1.8e5)), Just((3e6, -2e6))],
+        tolerance in prop_oneof![Just(0.), Just(0.005), Just(0.01)]){
+        use geo::{Rotate, Translate};
+        let centre = Point::new(10., 10.);
+        let tiles = tiles
+            .into_iter()
+            .map(|p| p.rotate_around_point(degrees, centre).translate(offset.0, offset.1))
+            .collect::<Vec<_>>();
+        let mut lines = lines
+            .into_iter()
+            .map(|l| l.rotate_around_point(degrees, centre).translate(offset.0, offset.1))
+            .collect::<Vec<_>>();
+        // Lines leaving each corner along the extension of an edge. After
+        // rounding, adjacent edges are only nearly perpendicular.
+        for tile in &tiles {
+            let ring = &tile.exterior().0;
+            for k in 0..4 {
+                let (a, before) = (ring[k], ring[(k + 3) % 4]);
+                let length = (a.x - before.x).hypot(a.y - before.y);
+                lines.push(LineString::from(vec![
+                    (a.x, a.y),
+                    (a.x + 3. * (a.x - before.x) / length, a.y + 3. * (a.y - before.y) / length),
+                ]));
+            }
+        }
+        let reported = origins(&run(
+            Rule::LineMustBeInside,
+            lines.iter().cloned().map(Geometry::LineString).collect(),
+            tiles.iter().cloned().map(Geometry::Polygon).collect(),
+            tolerance,
+        ));
+        // Closed gaps never carry a line beyond the tolerance from the polygons.
+        for (i, l) in lines.iter().enumerate() {
+            if reported.contains(&(-100 + i as i64)) {
+                continue;
+            }
+            for s in l.lines() {
+                for k in 0..=64 {
+                    let t = f64::from(k) / 64.;
+                    let p = Point::new(s.start.x + t * (s.end.x - s.start.x), s.start.y + t * (s.end.y - s.start.y));
+                    let nearest = tiles
+                        .iter()
+                        .map(|tile| Euclidean.distance(&p, tile))
+                        .fold(f64::INFINITY, f64::min);
+                    prop_assert!(nearest <= tolerance * (1. + 1e-6) + 1e-9, "{:?} {:?}", p, nearest);
+                }
+            }
+        }
+    }
+    #[test]
     fn bent_line_pairs_match_de9im(lines in prop::collection::vec(bent_line(),0..8)){
         let mut expected = BTreeSet::new();
         for i in 0..lines.len() {
