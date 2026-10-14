@@ -132,12 +132,16 @@ pub(crate) fn evidence(a: Line, b: Line, tolerance: f64) -> Option<Evidence> {
     })
 }
 
-pub(crate) fn union(mut spans: Vec<[f64; 2]>) -> Vec<[f64; 2]> {
+pub(crate) fn union(spans: Vec<[f64; 2]>) -> Vec<[f64; 2]> {
+    union_within(spans, 0.)
+}
+/// The union of spans, joining those at most `gap` apart.
+pub(crate) fn union_within(mut spans: Vec<[f64; 2]>, gap: f64) -> Vec<[f64; 2]> {
     spans.sort_by(|a, b| a[0].total_cmp(&b[0]).then(a[1].total_cmp(&b[1])));
     let mut result: Vec<[f64; 2]> = Vec::new();
     for span in spans {
         if let Some(last) = result.last_mut()
-            && span[0] <= last[1]
+            && span[0] <= last[1] + gap
         {
             last[1] = last[1].max(span[1]);
         } else {

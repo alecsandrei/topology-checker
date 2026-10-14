@@ -1,8 +1,8 @@
 use topology_checker_core::{
     Layer, Rule, Topology, Violation, ViolationKind,
     geo::{
-        Geometry, GeometryCollection, LineString, MultiLineString, MultiPoint, MultiPolygon, Point,
-        Polygon, Rect, Rotate, Translate, coord,
+        Geometry, GeometryCollection, LineString, MapCoords, MultiLineString, MultiPoint,
+        MultiPolygon, Point, Polygon, Rect, Rotate, Translate, coord,
     },
 };
 #[path = "support/exact_line_polygon.rs"]
@@ -456,6 +456,11 @@ fn moved(g: &Geometry, (degrees, (x, y)): (f64, (f64, f64))) -> Geometry {
     g.rotate_around_point(degrees, Point::new(0., 0.))
         .translate(x, y)
 }
+/// Coordinates rounded to a multiple of 2^-31, as in stored survey data.
+fn rounded(g: &Geometry) -> Geometry {
+    const GRID: f64 = 2147483648.;
+    g.map_coords(|c| coord! {x: (c.x * GRID).round() / GRID, y: (c.y * GRID).round() / GRID})
+}
 fn all_moved(geometries: &[Geometry], frame: (f64, (f64, f64))) -> Vec<Geometry> {
     geometries.iter().map(|g| moved(g, frame)).collect()
 }
@@ -801,6 +806,189 @@ fn bases_of_open_holes_stay_boundary_beside_acute_corners() {
         }
     }
 }
+/// A hole `width` wide with sides along `direction`, whose end caps lean at
+/// `bottom` and `top` degrees to the sides, and lines crossing it near both
+/// ends and across its middle.
+fn pocket(
+    width: f64,
+    (bottom, top): (f64, f64),
+    direction: f64,
+    densify: bool,
+) -> (Geometry, Vec<Geometry>) {
+    let (sin, cos) = direction.to_radians().sin_cos();
+    let (v, n) = ((cos, sin), (-sin, cos));
+    let at = |side: f64, t: f64| (5. + side * n.0 + t * v.0, 2. + side * n.1 + t * v.1);
+    let length = 1.;
+    let ring = [
+        at(0., 0.),
+        at(width, width / bottom.to_radians().tan()),
+        at(width, length - width / top.to_radians().tan()),
+        at(0., length),
+    ];
+    let mut points = vec![];
+    for (k, &p) in ring.iter().enumerate() {
+        points.push(p);
+        if densify {
+            let q = ring[(k + 1) % 4];
+            points.push(((p.0 + q.0) / 2., (p.1 + q.1) / 2.));
+        }
+    }
+    points.push(ring[0]);
+    let target = Polygon::new(
+        rect(0., -3., 12., 8.).exterior().clone(),
+        vec![LineString::from(points)],
+    );
+    let lines = [0.0005, 0.004, length - 0.004]
+        .map(|t| line(&[at(-0.03, t), at(width + 0.03, t)]))
+        .to_vec();
+    (target.into(), lines)
+}
+#[test]
+fn holes_narrower_than_tolerance_close_at_oblique_ends() {
+    let tolerance = 0.01;
+    // Caps lean from 60 degrees to square, and both ways, at either end.
+    let caps = [60., 80., 89.99, 89.99999, 90., 100.]
+        .into_iter()
+        .flat_map(|bottom| [80., 90., 120.].map(|top| (bottom, top)))
+        .collect::<Vec<_>>();
+    for width in [0.5, 0.99] {
+        for densify in [false, true] {
+            for &leaning in &caps {
+                for direction in [90., 17.3] {
+                    let (target, lines) = pocket(width * tolerance, leaning, direction, densify);
+                    for offset in [(0., 0.), (5e5, 1.8e5)] {
+                        for round in [false, true] {
+                            let frame = (0., offset);
+                            let place = |g: &Geometry| {
+                                let g = moved(g, frame);
+                                if round { rounded(&g) } else { g }
+                            };
+                            for l in &lines {
+                                for rule in [
+                                    Rule::LineMustBeInside,
+                                    Rule::LineMustBeProperlyInsidePolygons,
+                                ] {
+                                    let errors =
+                                        run(rule, vec![place(l)], vec![place(&target)], tolerance);
+                                    assert!(
+                                        errors.is_empty(),
+                                        "{width} {densify} {leaning:?} {direction} {offset:?} {round} {rule} {l:?}: {errors:?}"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // A hole wider than the tolerance stays open, with any cap.
+    for width in [1.05, 1.5] {
+        for &leaning in &caps[..6] {
+            let (target, lines) = pocket(width * tolerance, leaning, 17.3, false);
+            for l in &lines {
+                let errors = run(
+                    Rule::LineMustBeProperlyInsidePolygons,
+                    vec![l.clone()],
+                    vec![target.clone()],
+                    tolerance,
+                );
+                assert_eq!(errors.len(), 1, "{width} {leaning:?} {l:?}");
+            }
+        }
+    }
+    // The hole from a stored polygon whose caps lean 80 degrees.
+    let target: Geometry = Polygon::new(
+        rect(0., 0., 10., 10.).exterior().clone(),
+        vec![LineString::from(vec![
+            (5., 2.),
+            (5.005, 2.),
+            (5.18132698, 3.),
+            (5.17632698, 3.),
+            (5., 2.),
+        ])],
+    )
+    .into();
+    let l = line(&[(4.97, 2.002), (5.035, 2.002)]);
+    assert!(
+        run(
+            Rule::LineMustBeProperlyInsidePolygons,
+            vec![l],
+            vec![target],
+            tolerance
+        )
+        .is_empty()
+    );
+}
+#[test]
+fn cracks_closed_by_other_polygons_stay_closed_when_rotated_and_rounded() {
+    let tolerance = 0.01;
+    for gap in [0.005, 0.0099] {
+        let tiles: Vec<Geometry> = vec![
+            rect(0., 2., 10., 8.).into(),
+            rect(10. + gap, 2., 20., 8.).into(),
+            rect(0., 8., 20., 10.).into(),
+            rect(0., 0., 20., 2.).into(),
+        ];
+        for degrees in [1.1931, 17., 45., 73.7] {
+            for offset in [(0., 0.), (5e5, 1.8e5), (3e6, -2e6)] {
+                let frame = (degrees, offset);
+                let place = |g: &Geometry| rounded(&moved(g, frame));
+                let target = tiles.iter().map(&place).collect::<Vec<_>>();
+                for y in [2.0005, 2.004, 2.0075, 7.9925, 7.996, 7.9995] {
+                    let l = place(&line(&[(9., y), (11., y)]));
+                    for rule in [
+                        Rule::LineMustBeInside,
+                        Rule::LineMustBeProperlyInsidePolygons,
+                    ] {
+                        let errors = run(rule, vec![l.clone()], target.clone(), tolerance);
+                        assert!(errors.is_empty(), "{gap} {frame:?} {y} {rule}: {errors:?}");
+                    }
+                }
+            }
+        }
+    }
+}
+#[test]
+fn a_wide_gap_beside_the_end_of_a_crack_is_reported_whole() {
+    // Three sectors meet in a wedge. The line crosses a gap 1.064 times the
+    // tolerance wide, 0.65 times the tolerance from where it ends.
+    let target: Vec<Geometry> = vec![
+        ring_polygon(&[
+            (-1.7364817766938359, 9.848077530099545),
+            (1.7364817766938359, 9.848077530099545),
+            (5., 8.660254037822597),
+            (7.660444431181531, 6.427876096859109),
+            (9.396926207875367, 3.420201433240436),
+            (9.999061712878756, 0.0053212908096612),
+            (0., 0.0053212908096612),
+            (0., 0.0010034458246082),
+            (-4.9995212616049685, 8.660428284376394),
+            (-1.7364817766938359, 9.848077530099545),
+        ])
+        .into(),
+        ring_polygon(&[
+            (9.396926207875367, -3.420201433240436),
+            (7.660444431181531, -6.427876096859109),
+            (5., -8.660254037822597),
+            (1.7364817766938359, -9.848077530099545),
+            (-1.7364817766938359, -9.848077530099545),
+            (-4.999580528237857, -8.66040671308292),
+            (0., -0.0008792216540314),
+            (0., -0.0053212908096612),
+            (9.999061712878756, -0.0053212908096612),
+            (9.396926207875367, -3.420201433240436),
+        ])
+        .into(),
+    ];
+    let l = line(&[
+        (0.0332084704423323, 0.2787333483574912),
+        (-0.0008718031458557, -0.0707730166031979),
+    ]);
+    let pieces = run(Rule::LineMustBeInside, vec![l], target, 0.01);
+    assert_eq!(pieces.len(), 1, "{pieces:?}");
+    assert!((reported_length(&pieces) - 0.010693).abs() < 1e-5);
+}
 #[test]
 fn inside_rules_scale_along_a_densely_noded_crack() {
     // One segment runs the length of a crack with 20 thousand vertices per side.
@@ -819,7 +1007,7 @@ fn inside_rules_scale_along_a_densely_noded_crack() {
     ] {
         assert!(run(rule, vec![l.clone()], target.clone(), 0.01).is_empty());
     }
-    assert!(start.elapsed().as_secs() < 30, "{:?}", start.elapsed());
+    assert!(start.elapsed().as_secs() < 5, "{:?}", start.elapsed());
 }
 #[test]
 fn line_overlap_and_contact_have_distinct_geometries_and_length_thresholds() {

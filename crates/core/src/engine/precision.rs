@@ -1414,8 +1414,10 @@ pub(crate) fn squared_gap(a: Line, b: Line) -> f64 {
 // stretch of boundary is a seam where its outward normals, or those of a
 // convex vertex, meet a facing edge again within tolerance; the chords across
 // the uncovered space form channels. A channel reaches no farther than the
-// tolerance from the edges that define it, and ends where a widening gap
-// reaches the tolerance, up to the slack of the rounded coordinates. At
+// tolerance from the edges that define it, up to the slack of the rounded
+// coordinates, and ends where a widening gap reaches the tolerance along its
+// normals. Measured across a wedge, a gap can therefore close up to about
+// 1.02 times the tolerance at 20 degrees and 1.1 times at 60 degrees. At
 // tolerance 0 there are no channels.
 
 /// A channel side: the inside is where `(p - point) · normal >= 0`. The
@@ -1450,20 +1452,29 @@ struct Channel {
     source: Option<Side>,
     /// The side along the facing edge.
     facing: Side,
+    /// Whether the facing edge is within about 45 degrees of antiparallel to
+    /// the source edge. Other strips are slivers beside a corner.
+    primary: bool,
+    /// The stretch of the source edge the strip spans and the chord at its
+    /// ends.
+    spans: Option<([Coord; 2], [f64; 2])>,
+    /// For a sliver, the side that limits the part of its facing edge that
+    /// is a seam, where the sliver meets a solid channel.
+    ground: Option<Side>,
     /// Bounds of the region before sides are moved outward by the slack.
     bounds: Rect,
 }
 impl Channel {
     /// Parameters of `segment` inside the channel, with each side moved
-    /// outward by its slack.
-    fn clip(&self, segment: Line, slack: impl Fn(&Side) -> f64) -> Option<[f64; 2]> {
+    /// outward by the slack.
+    fn clip(&self, segment: Line, slack: f64) -> Option<[f64; 2]> {
         let (dx, dy) = (
             segment.end.x - segment.start.x,
             segment.end.y - segment.start.y,
         );
         let mut range = [0f64, 1.];
-        for side in &self.sides {
-            let a = side.value(segment.start) + slack(side);
+        for side in self.sides.iter().chain(&self.ground) {
+            let a = side.value(segment.start) + slack;
             let b = dx * side.normal.x + dy * side.normal.y;
             if b > 0. {
                 range[0] = range[0].max(-a / b);
@@ -1493,8 +1504,9 @@ fn bounds(points: &[Coord]) -> Rect {
 /// Normals of `e` that meet `f` within tolerance. With both covered sides on
 /// the left, `f` faces `e` across uncovered space when their directions oppose.
 /// Where `f` is nearly perpendicular to `e` the normals reach it only over a
-/// stretch of `e` within the slack, which is not a channel.
-fn strip(e: Line, f: Line, tolerance: f64, slack: f64) -> Option<Channel> {
+/// stretch of `e` within the rounding of the coordinates, which is not a
+/// channel.
+fn strip(e: Line, f: Line, tolerance: f64, slack: f64, rounding: f64) -> Option<Channel> {
     let (dx, dy) = (e.end.x - e.start.x, e.end.y - e.start.y);
     let (fx, fy) = (f.end.x - f.start.x, f.end.y - f.start.y);
     if dx * fx + dy * fy >= 0. {
@@ -1527,25 +1539,26 @@ fn strip(e: Line, f: Line, tolerance: f64, slack: f64) -> Option<Channel> {
         };
         range = [range[0].max(lo), range[1].min(hi)];
     }
-    if range[1] - range[0] <= slack {
+    if range[1] - range[0] <= rounding {
         return None;
     }
+    let primary = (dx * fx + dy * fy) / (length * fx.hypot(fy)) <= -std::f64::consts::FRAC_1_SQRT_2;
     let outward = (uy, -ux);
     let along = |t: f64| Coord {
         x: e.start.x + t * ux,
         y: e.start.y + t * uy,
     };
-    let chord = |t: f64| {
-        let s = if slope == 0. {
+    let offset = |t: f64| {
+        if slope == 0. {
             c.1
         } else {
             c.1 + slope * (t - c.0)
         }
-        .clamp(0., tolerance);
-        Coord {
-            x: along(t).x + s * outward.0,
-            y: along(t).y + s * outward.1,
-        }
+        .clamp(0., tolerance)
+    };
+    let chord = |t: f64| Coord {
+        x: along(t).x + offset(t) * outward.0,
+        y: along(t).y + offset(t) * outward.1,
     };
     let [a, b] = range;
     let source = Side::new(e.start, outward)?;
@@ -1566,6 +1579,9 @@ fn strip(e: Line, f: Line, tolerance: f64, slack: f64) -> Option<Channel> {
         ],
         source: Some(source),
         facing,
+        primary,
+        spans: Some(([along(a), along(b)], [offset(a), offset(b)])),
+        ground: None,
         bounds: bounds(&[along(a), along(b), chord(a), chord(b)]),
     })
 }
@@ -1639,7 +1655,98 @@ fn fan(e: Line, next: Coord, f: Line, tolerance: f64) -> Option<Channel> {
         ],
         source: None,
         facing: base,
+        primary: false,
+        spans: None,
+        ground: None,
         bounds: bounds(&[v, p, q]),
+    })
+}
+/// Slivers beside a corner are solid where they meet a channel that is: the
+/// strip between the long sides of a narrow hole, or a sliver that meets one.
+/// A stretch of the sliver's facing edge, up to the chord there, then closes
+/// the end of the hole. The chord at the end of a sliver beside the corner
+/// of a wider gap meets only other slivers of that gap or open space.
+fn ground(items: &mut [Channel], tree: &index::Index, tolerance: f64) {
+    let mut solid = items.iter().map(|c| c.primary).collect::<Vec<_>>();
+    loop {
+        let mut changed = false;
+        for i in 0..items.len() {
+            if solid[i] || items[i].source.is_none() {
+                continue;
+            }
+            if let Some(cap) = ground_at(items, tree, &solid, i, tolerance) {
+                items[i].ground = Some(cap);
+                solid[i] = true;
+                changed = true;
+            }
+        }
+        if !changed {
+            return;
+        }
+    }
+}
+/// The side across the sliver `i` at the nearest chord to its corner that a
+/// solid channel with the same source starts or ends at and covers.
+fn ground_at(
+    items: &[Channel],
+    tree: &index::Index,
+    solid: &[bool],
+    i: usize,
+    tolerance: f64,
+) -> Option<Side> {
+    let sliver = &items[i];
+    let source = sliver.source.as_ref()?;
+    let ([a, b], chords) = sliver.spans?;
+    let u = Coord {
+        x: -source.normal.y,
+        y: source.normal.x,
+    };
+    let length = (b.x - a.x) * u.x + (b.y - a.y) * u.y;
+    let line_slack = channel_slack([Line::new(a, b)], tolerance);
+    let mut candidates = tree
+        .locate_in_envelope_intersecting(&index::envelope(sliver.bounds))
+        .filter(|item| solid[item.data] && item.data != i)
+        .filter_map(|item| {
+            let (other, [c, d]) = (&items[item.data], items[item.data].spans?.0);
+            let parallel = other.source.as_ref()?.normal;
+            let same = parallel.x * source.normal.x + parallel.y * source.normal.y > 1. - 1e-9
+                && source.value(c).abs() <= line_slack;
+            Some(same.then_some([c, d]).into_iter().flatten())
+        })
+        .flatten()
+        .map(|p| ((p.x - a.x) * u.x + (p.y - a.y) * u.y).clamp(0., length))
+        .collect::<Vec<_>>();
+    // From the corner outward, where the chord is shortest.
+    let corner_first = chords[0] <= chords[1];
+    candidates.sort_by(|x, y| x.total_cmp(y));
+    if !corner_first {
+        candidates.reverse();
+    }
+    candidates.into_iter().find_map(|t| {
+        let foot = Coord {
+            x: a.x + t * u.x,
+            y: a.y + t * u.y,
+        };
+        let chord = chords[0] + (chords[1] - chords[0]) * t / length;
+        let leg = Line::new(
+            foot,
+            Coord {
+                x: foot.x + chord * source.normal.x,
+                y: foot.y + chord * source.normal.y,
+            },
+        );
+        let slack = channel_slack([leg], tolerance);
+        let covered = super::matching::union_within(
+            tree.locate_in_envelope_intersecting(&index::expanded(leg.bounding_rect(), 2. * slack))
+                .filter(|item| solid[item.data] && item.data != i)
+                .filter_map(|item| items[item.data].clip(leg, slack))
+                .collect(),
+            2. * slack / chord,
+        );
+        let toward = if corner_first { -1. } else { 1. };
+        (chord <= slack || covered.first().is_some_and(|&[x, y]| x <= 0. && y >= 1.))
+            .then(|| Side::new(foot, (toward * u.x, toward * u.y)))
+            .flatten()
     })
 }
 /// Output vertices lie within `MAX_ROUNDING_STEPS` floats of their exact
@@ -1652,23 +1759,17 @@ fn slack(lines: impl IntoIterator<Item = Line>) -> f64 {
         .fold(0f64, |m, p| m.max(p.x.abs()).max(p.y.abs()));
     magnitude * f64::EPSILON * f64::from(2 * MAX_ROUNDING_STEPS)
 }
-/// Sorted union of parameter intervals, joining those at most `gap` apart.
-fn merge(mut spans: Vec<[f64; 2]>, gap: f64) -> Vec<[f64; 2]> {
-    spans.sort_by(|a, b| a[0].total_cmp(&b[0]));
-    let mut result: Vec<[f64; 2]> = Vec::new();
-    for span in spans {
-        match result.last_mut() {
-            Some(last) if span[0] <= last[1] + gap => last[1] = last[1].max(span[1]),
-            _ => result.push(span),
-        }
-    }
-    result
+/// The slack of channel sides. It also covers coordinates quantised to about
+/// a ten millionth of the tolerance, like a float grid of 2^-31 at 0.01.
+fn channel_slack(lines: impl IntoIterator<Item = Line>, tolerance: f64) -> f64 {
+    slack(lines).max(1e-7 * tolerance)
 }
 /// The channels between a set of boundary edges.
 #[derive(Debug)]
 pub(crate) struct Channels {
     items: Vec<Channel>,
     tree: index::Index,
+    tolerance: f64,
 }
 impl Channels {
     /// Channels between `edges`, given with the covered side on their left and
@@ -1681,7 +1782,8 @@ impl Channels {
                 .enumerate()
                 .map(|(i, (e, _))| (i, e.bounding_rect())),
         );
-        let slack = slack(edges.iter().map(|&(e, _)| e));
+        let rounding = slack(edges.iter().map(|&(e, _)| e));
+        let slack = rounding.max(1e-7 * tolerance);
         let mut items = Vec::new();
         for &(e, next) in edges {
             crate::cancel::check();
@@ -1691,61 +1793,72 @@ impl Channels {
                 tree.locate_in_envelope_intersecting(&index::expanded(e.bounding_rect(), tolerance))
             {
                 let f = edges[item.data].0;
-                items.extend(strip(e, f, tolerance, slack));
+                items.extend(strip(e, f, tolerance, slack, rounding));
                 if convex {
                     items.extend(fan(e, next, f, tolerance));
                 }
             }
         }
         let tree = index::build(items.iter().enumerate().map(|(i, c)| (i, c.bounds)));
-        Self { items, tree }
+        ground(&mut items, &tree, tolerance);
+        Self {
+            items,
+            tree,
+            tolerance,
+        }
     }
     fn near(&self, line: Line, margin: f64) -> impl Iterator<Item = &Channel> {
         self.tree
             .locate_in_envelope_intersecting(&index::expanded(line.bounding_rect(), margin))
             .map(|item| &self.items[item.data])
     }
-    /// Sorted parameter intervals of `piece` inside channels.
-    pub(crate) fn covered(&self, piece: Line) -> Vec<[f64; 2]> {
-        let slack = slack([piece]);
+    /// Sorted parameter intervals of `piece` inside channels, and inside strips
+    /// alone. A fan only fills the corner of a gap, so what only a fan covers
+    /// does not stand for a closed gap.
+    pub(crate) fn covered(&self, piece: Line) -> [Vec<[f64; 2]>; 2] {
+        let slack = channel_slack([piece], self.tolerance);
         let length = (piece.end.x - piece.start.x).hypot(piece.end.y - piece.start.y);
-        merge(
-            self.near(piece, 2. * slack)
-                .filter_map(|c| c.clip(piece, |_| slack))
-                .collect(),
-            2. * slack / length,
-        )
+        let spans = |strips: bool| {
+            super::matching::union_within(
+                self.near(piece, 2. * slack)
+                    .filter(|c| !strips || c.source.is_some())
+                    .filter_map(|c| c.clip(piece, slack))
+                    .collect(),
+                2. * slack / length,
+            )
+        };
+        [spans(false), spans(true)]
     }
     /// Sorted parameter intervals of boundary `edge` that are seams: the
     /// uncovered space just outside it lies in a channel. An edge along the
-    /// far side of a strip is not a seam there unless its own normals span
-    /// the strip: near a corner, a strip hugging an adjacent edge is a sliver
-    /// of an open gap.
+    /// far side of a strip is a seam there when its own normals span the
+    /// strip, or when the strip is a sliver beside a corner that meets a
+    /// solid channel, like the end of a narrow hole, up to where it does.
+    /// Other slivers are the corners of an open gap.
     pub(crate) fn seams(&self, edge: Line) -> Vec<[f64; 2]> {
-        let slack = slack([edge]);
+        let slack = channel_slack([edge], self.tolerance);
         let length = (edge.end.x - edge.start.x).hypot(edge.end.y - edge.start.y);
         let along = |side: &Side| {
             [edge.start, edge.end]
                 .iter()
                 .all(|&p| side.value(p).abs() <= slack)
         };
-        merge(
+        super::matching::union_within(
             self.near(edge, 2. * slack)
                 .filter(|c| {
-                    c.source
-                        .as_ref()
-                        .is_none_or(|source| along(source) || !along(&c.facing))
+                    c.source.as_ref().is_none_or(|source| {
+                        c.primary || c.ground.is_some() || along(source) || !along(&c.facing)
+                    })
                 })
-                .filter_map(|c| c.clip(edge, |_| slack))
+                .filter_map(|c| c.clip(edge, slack))
                 .collect(),
             2. * slack / length,
         )
     }
     /// Whether `piece` lies inside channels.
     pub(crate) fn covers(&self, piece: Line) -> bool {
-        self.covered(piece)
-            .first()
-            .is_some_and(|&[a, b]| a <= 0. && b >= 1.)
+        let [all, _] = self.covered(piece);
+        all.first().is_some_and(|&[a, b]| a <= 0. && b >= 1.)
     }
 }
 

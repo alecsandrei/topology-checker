@@ -686,7 +686,7 @@ fn outside_pieces(
     tolerance: f64,
 ) -> Vec<LineString> {
     let mut coords = Vec::new();
-    let mut outside = Vec::new();
+    let mut states = Vec::new();
     for segment in line.lines() {
         crate::cancel::check();
         // Polygon bounds restrict both boundary cuts and interval classification.
@@ -768,28 +768,60 @@ fn outside_pieces(
             };
             if edges.is_empty() {
                 coords.push(window.end);
-                outside.push(uncovered);
+                states.push(if uncovered {
+                    Cover::Outside
+                } else {
+                    Cover::Inside
+                });
                 continue;
             }
             // Split the window where it enters and leaves channels.
-            let mut start = 0.;
-            for [lo, hi] in precision::Channels::new(&edges, tolerance).covered(window) {
-                for (t, flag) in [(lo, true), (hi, false)] {
-                    let point = crate::engine::matching::point(window, t);
-                    if t > start && coords.last() != Some(&point) {
-                        coords.push(point);
-                        outside.push(flag);
-                    }
+            let [channels, strips] = precision::Channels::new(&edges, tolerance).covered(window);
+            let within = |spans: &[[f64; 2]], t: f64| spans.iter().any(|s| s[0] <= t && t <= s[1]);
+            let mut ts = vec![0., 1.];
+            ts.extend(channels.iter().chain(&strips).flatten());
+            ts.sort_by(f64::total_cmp);
+            ts.dedup();
+            for pair in ts.windows(2) {
+                let end = crate::engine::matching::point(window, pair[1]);
+                if coords.last() == Some(&end) {
+                    continue;
                 }
-                start = hi;
-            }
-            if start < 1. {
-                coords.push(window.end);
-                outside.push(true);
+                let middle = (pair[0] + pair[1]) / 2.;
+                coords.push(end);
+                states.push(if within(&strips, middle) {
+                    Cover::Inside
+                } else if within(&channels, middle) {
+                    Cover::Corner
+                } else {
+                    Cover::Outside
+                });
             }
         }
     }
-    selected_pieces(&coords, &outside)
+    // A run of outside and corner pieces is outside when it has an outside
+    // piece. Corners only fill the gaps between strips, so they count toward
+    // the length of what lies beside them but never stand alone.
+    let selected = states
+        .iter()
+        .map(|&state| state != Cover::Inside)
+        .collect::<Vec<_>>();
+    selected_runs(&coords, &selected)
+        .into_iter()
+        .filter(|run| {
+            run.windows(2)
+                .any(|w| states[if w[1] == w[0] + 1 { w[0] } else { 0 }] == Cover::Outside)
+        })
+        .map(|run| LineString(run.into_iter().map(|i| coords[i]).collect()))
+        .collect()
+}
+/// How a piece of a line lies against the target polygons.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Cover {
+    Inside,
+    /// Outside the polygons, in a gap closed only by a corner fan.
+    Corner,
+    Outside,
 }
 /// Target boundary segments within `distance` of `segment`, directed with the
 /// covered side on their left, each with the far end of the next segment.
