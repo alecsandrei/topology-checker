@@ -1973,6 +1973,251 @@ fn oblique_endpoints_inside_retained_overlaps_are_not_interior_contacts() {
         assert_eq!(kinds, [ViolationKind::Overlap], "{rule}: {report:?}");
     }
 }
+/// The input, four translations and every coordinate of each line moved by one
+/// unit in the last place in each direction.
+fn rounding_frames(lines: &[Geometry]) -> Vec<Vec<Geometry>> {
+    use topology_checker_core::geo::MapCoords;
+    let mut frames = vec![lines.to_vec()];
+    for (dx, dy) in [
+        (1048576., -524288.),
+        (-325000., 162500.),
+        (7000., -3500.),
+        (0.1, 0.3),
+    ] {
+        frames.push(
+            lines
+                .iter()
+                .map(|g| {
+                    g.map_coords(|p| Coord {
+                        x: p.x + dx,
+                        y: p.y + dy,
+                    })
+                })
+                .collect(),
+        );
+    }
+    for index in 0..lines.len() {
+        for step in [f64::next_up, f64::next_down] {
+            for axis in 0..2 {
+                let mut moved = lines.to_vec();
+                moved[index] = moved[index].map_coords(|mut p| {
+                    if axis == 0 {
+                        p.x = step(p.x);
+                    } else {
+                        p.y = step(p.y);
+                    }
+                    p
+                });
+                frames.push(moved);
+            }
+        }
+    }
+    frames
+}
+fn assert_line_meetings(lines: &[Geometry], tolerance: f64, expected: &[ViolationKind]) {
+    for frame in rounding_frames(lines) {
+        for rule in [
+            Rule::LineMustNotIntersect,
+            Rule::LineMustNotIntersectWith,
+            Rule::LineMustNotIntersectOrTouchInterior,
+            Rule::LineMustNotIntersectOrTouchInteriorWith,
+        ] {
+            let t = topology(rule, frame.clone(), rule.inputs().1.is_some(), tolerance);
+            let report = t.validate().unwrap();
+            let kinds = report.violations().map(|v| v.kind).collect::<Vec<_>>();
+            assert_eq!(kinds, expected, "{rule}: {report:?}");
+            let mut streamed = Vec::new();
+            t.validate_into(|_, v| {
+                streamed.push(v);
+                Ok::<_, ()>(())
+            })
+            .unwrap();
+            assert_eq!(streamed, report.rules[0].violations, "{rule}");
+        }
+    }
+}
+#[test]
+fn vertices_on_lines_at_overlap_ends_meet_the_same_way_in_every_frame() {
+    // The vertex (10.1, 3.535) lies on the second line up to rounding and ends the
+    // overlap. The first line then leaves on the same side, or crosses there.
+    let other = line(&[(0., 0.), (20., 7.)]);
+    for tolerance in [1., 0.001] {
+        for departure in [2., -2.] {
+            let first = line(&[
+                (2., 2. * 0.35 + 0.5 * tolerance),
+                (10.1, 10.1 * 0.35),
+                (12., 12. * 0.35 + departure * tolerance),
+            ]);
+            assert_line_meetings(
+                &[first, other.clone()],
+                tolerance,
+                &[ViolationKind::Overlap],
+            );
+        }
+    }
+    // An endpoint one unit in the last place past an interior vertex of the line it
+    // overlaps, and an endpoint next to the seam of a ring it overlaps.
+    let shared = line(&[(-3., 0.5), (5., 0.5), (10., 0.5)]);
+    let ring = line(&[
+        (5., 0.5),
+        (10., 0.5),
+        (10., 5.),
+        (0., 5.),
+        (0., 0.5),
+        (5., 0.5),
+    ]);
+    for end in [5., 5_f64.next_up()] {
+        for first in [&shared, &ring] {
+            assert_line_meetings(
+                &[first.clone(), line(&[(-5., 0.), (end, 0.)])],
+                1.,
+                &[ViolationKind::Overlap],
+            );
+        }
+    }
+}
+#[test]
+fn crossings_beside_overlap_ends_and_rounded_tangencies_are_kept_in_every_frame() {
+    // The vertex (10, 0.5) ends the overlap away from the other line, and the next
+    // segment crosses it 0.007 further on.
+    let other = line(&[(0., 0.), (20., 0.)]);
+    assert_line_meetings(
+        &[line(&[(0., 0.5), (10., 0.5), (10.05, -3.)]), other],
+        1.,
+        &[ViolationKind::Overlap, ViolationKind::Crossing],
+    );
+    // A vertex on the other line up to rounding, without an overlap, touches it from
+    // one side or crosses it.
+    let other = line(&[(0., 0.), (20., 7.)]);
+    for departure in [1., -1.] {
+        let first = line(&[
+            (8., 8. * 0.35 + 1.),
+            (10.1, 10.1 * 0.35),
+            (12., 12. * 0.35 + departure),
+        ]);
+        assert_line_meetings(&[first, other.clone()], 0.25, &[ViolationKind::Crossing]);
+    }
+}
+#[test]
+fn endpoint_touches_are_kept_when_their_projection_joins_another_node() {
+    // Both endpoints project to (5, 0) on the first line. That point joins the node of
+    // the nearer endpoint at (5, -0.8), not the node of (5, 0.9).
+    let lines = [
+        line(&[(0., 0.), (10., 0.)]),
+        line(&[(5., -0.8), (5., -5.)]),
+        line(&[(5., 0.9), (5., 5.)]),
+    ];
+    for rule in [
+        Rule::LineMustNotIntersectOrTouchInterior,
+        Rule::LineMustNotIntersectOrTouchInteriorWith,
+    ] {
+        let mut t = Topology::new(1.).unwrap();
+        let features = lines
+            .iter()
+            .cloned()
+            .enumerate()
+            .map(|(i, g)| (i as i64, g));
+        if rule.inputs().1.is_some() {
+            let mut features = features.collect::<Vec<_>>();
+            let target = t.add_layer(Layer::from_features("target", features.split_off(1)));
+            let source = t.add_layer(Layer::from_features("source", features));
+            t.add_rule(rule, source, Some(target)).unwrap();
+        } else {
+            let layer = t.add_layer(Layer::from_features("lines", features));
+            t.add_rule(rule, layer, None).unwrap();
+        }
+        let report = t.validate().unwrap();
+        let touches = report
+            .violations()
+            .map(|v| (v.kind, v.geometry.clone()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            touches,
+            [
+                (ViolationKind::TouchInterior, point(5., -0.8)),
+                (ViolationKind::TouchInterior, point(5., 0.9)),
+            ],
+            "{rule}"
+        );
+        let mut streamed = Vec::new();
+        t.validate_into(|_, v| {
+            streamed.push(v);
+            Ok::<_, ()>(())
+        })
+        .unwrap();
+        assert_eq!(streamed, report.rules[0].violations, "{rule}");
+    }
+}
+#[test]
+fn rounded_vertices_meet_lines_only_within_tolerance() {
+    // Each middle vertex is ten and sixteen units in the last place off the first line:
+    // 9.3e-9 at 5e6 and 2 at 1e15. That is within rounding of these coordinates, so it
+    // meets the line within tolerance, but never beyond it.
+    for (lines, beyond, within) in [
+        (
+            [
+                line(&[(5e6, 5e6), (5e6 + 10., 5e6)]),
+                line(&[
+                    (5e6 + 4., 5e6 + 2.),
+                    (5e6 + 5., 5e6 + 10. * 2_f64.powi(-30)),
+                    (5e6 + 6., 5e6 + 2.),
+                ]),
+            ],
+            1e-9,
+            1e-8,
+        ),
+        (
+            [
+                line(&[(1e15, 1e15), (1e15 + 100., 1e15)]),
+                line(&[
+                    (1e15 + 40., 1e15 + 50.),
+                    (1e15 + 50., 1e15 + 2.),
+                    (1e15 + 60., 1e15 + 50.),
+                ]),
+            ],
+            1.,
+            2.5,
+        ),
+    ] {
+        assert_line_meetings(&lines, beyond, &[]);
+        for rule in [Rule::LineMustNotIntersect, Rule::LineMustNotIntersectWith] {
+            let t = topology(rule, lines.to_vec(), rule.inputs().1.is_some(), within);
+            let report = t.validate().unwrap();
+            let kinds = report.violations().map(|v| v.kind).collect::<Vec<_>>();
+            assert_eq!(kinds, [ViolationKind::Crossing], "{rule}: {report:?}");
+        }
+    }
+}
+#[test]
+fn crossings_beside_rounded_vertices_are_counted_once_in_every_frame() {
+    // A vertex of the ring at (-263.0470419040875, 665.975889234363) lies on the first
+    // line up to rounding, beside an exact crossing a few units in the last place away.
+    let lines = [
+        line(&[
+            (-260.9313581947057, 662.4879633963319),
+            (-263.34307200782433, 666.4639258170903),
+            (-265.7547858209429, 670.4398882378487),
+        ]),
+        MultiLineString(vec![
+            LineString::from(vec![
+                (-265.9871113056022, 662.2784314330856),
+                (-263.3989446666477, 665.2692641805332),
+            ]),
+            LineString::from(vec![
+                (-263.0470419040875, 665.975889234363),
+                (-265.3919752665837, 666.6081248816553),
+                (-263.7137051171506, 671.294364393417),
+                (-263.0470419040875, 665.975889234363),
+            ]),
+        ])
+        .into(),
+    ];
+    assert_line_meetings(
+        &lines,
+        1.,
+        &[ViolationKind::Crossing, ViolationKind::Crossing],
+    );
+}
 
 mod zero_tolerance_contacts {
     //! Decimal data that touches in decimal can, in binary, cross, touch or
