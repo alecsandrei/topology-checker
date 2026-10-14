@@ -4519,6 +4519,70 @@ fn nearly_parallel_runs_from_line_ends_within_tolerance_remain_overlaps() {
 }
 
 #[test]
+fn arms_from_a_meeting_to_a_line_end_within_tolerance_stay_shared_beside_a_continuing_line() {
+    // Ordnance Survey Open Rivers and VectorMap District surface water
+    // (ln_os_open_rivers_gb, ln_os_vmd_surfacewater_line_tq, EPSG:27700, OGL), features
+    // 157375 and 61827: they meet at a shared vertex, and 61827 runs 4.64 m along the
+    // river at 0.8 degrees to end 0.066 m short of it, then continues along the river's
+    // other leg. The arm stays within tolerance between the meeting and its end.
+    let real = (
+        vec![
+            (551198.42, 108857.61),
+            (551104.98, 108935.05),
+            (551147.82, 109041.08),
+        ],
+        vec![
+            (551106.78, 108939.33),
+            (551104.98, 108935.05),
+            (551151.3, 108898.3),
+        ],
+        4.6431,
+    );
+    // The same shape on a straight line: an arm leaving the shared vertex at `degrees`
+    // and ending `length` out, then a second leg 60 long leaving the vertex alongside
+    // the other line at `turn` degrees, to either side of it.
+    let mut cases = vec![real];
+    for degrees in [0.8_f64, 1.2, 2., 2.5] {
+        for length in [1.5, 3., 4.64, 6.] {
+            let (sin, cos) = degrees.to_radians().sin_cos();
+            let offset = length * sin;
+            if !(1. / 16. + 1e-3..=0.2).contains(&offset) {
+                continue;
+            }
+            for turn in [-2_f64, -1.17, 1.17, 2.] {
+                let (sin, cos_turn) = turn.to_radians().sin_cos();
+                cases.push((
+                    vec![(-100., 0.), (0., 0.), (100., 0.)],
+                    vec![
+                        (length * cos, offset),
+                        (0., 0.),
+                        (-60. * cos_turn, 60. * sin),
+                    ],
+                    length,
+                ));
+            }
+        }
+    }
+    for (a, b, length) in cases {
+        let (a, b) = (LineString::from(a), LineString::from(b));
+        for (a, b) in meeting_variants(&a, &b) {
+            for rule in [
+                Rule::LineMustNotOverlap,
+                Rule::LineMustNotOverlapWith,
+                Rule::LineMustNotIntersect,
+                Rule::LineMustNotIntersectWith,
+            ] {
+                let found = overlaps(rule, vec![a.clone().into(), b.clone().into()], 1.);
+                assert!(
+                    found.len() == 1 && (found[0] - length).abs() < 1e-2,
+                    "{rule}: {a:?} {b:?} {found:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn lines_meeting_at_a_vertex_just_off_the_other_share_no_linework() {
     // The first line meets the second at a vertex 0.03 off it, arriving at about
     // 31 degrees and leaving at 10 degrees for 1.2 before ending.
