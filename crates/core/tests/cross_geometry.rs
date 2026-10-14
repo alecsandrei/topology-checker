@@ -1066,6 +1066,45 @@ fn a_line_leaving_overlapping_tiles_at_a_corner_is_reported_whole() {
     }
 }
 #[test]
+fn a_corner_on_another_tiles_edge_does_not_cover_the_line_leaving_it() {
+    // The top-left corner of the lower tile lies on the left edge of the upper
+    // tile, which is collinear with the tile's own left edge only to within
+    // rounding. The line leaves that corner along the top edge, outside both.
+    let tile = |x0: f64, y0: f64, x1: f64, y1: f64| {
+        Polygon::new(
+            LineString::from(vec![(x1, y0), (x1, y1), (x0, y1), (x0, y0), (x1, y0)]),
+            vec![],
+        )
+    };
+    let tiles: Vec<Geometry> = vec![
+        tile(0.002, -0.003, 9.996, 10.003).into(),
+        tile(0.002, 10., 10.003, 19.994).into(),
+    ];
+    let l = line(&[(0.002, 10.003), (-2.998, 10.003)]);
+    let around = Point::new(10., 10.);
+    let rotated = |g: &Geometry| g.rotate_around_point(17., around);
+    let mut cases = vec![(tiles.iter().map(rotated).collect::<Vec<_>>(), rotated(&l))];
+    cases.extend(
+        frames()
+            .into_iter()
+            .map(|f| (all_moved(&tiles, f), moved(&l, f))),
+    );
+    for (tiles, l) in cases {
+        for tolerance in [0.005, 0.01] {
+            let pieces = run(
+                Rule::LineMustBeInside,
+                vec![l.clone()],
+                tiles.clone(),
+                tolerance,
+            );
+            assert!(
+                (reported_length(&pieces) - 3.).abs() < 1e-6,
+                "{tolerance}: {pieces:?}"
+            );
+        }
+    }
+}
+#[test]
 fn inside_rules_scale_along_a_densely_noded_crack() {
     // One segment runs the length of a jagged crack, 0.001 to 0.009 wide, with
     // 10 thousand differently placed vertices per side.
