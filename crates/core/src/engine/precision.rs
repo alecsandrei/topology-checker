@@ -1587,13 +1587,18 @@ fn strip(e: Line, f: Line, tolerance: f64, slack: f64, rounding: f64) -> Option<
 }
 /// Normals of the convex vertex `e.end`, between `e` and the next edge ending
 /// at `next`, that meet `f` within tolerance: a triangle from the vertex.
-fn fan(e: Line, next: Coord, f: Line, tolerance: f64) -> Option<Channel> {
+fn fan(e: Line, next: Coord, f: Line, tolerance: f64, slack: f64) -> Option<Channel> {
     let v = e.end;
     if RobustKernel::orient2d(f.start, f.end, v) != Orientation::Clockwise {
         return None;
     }
     let (cx, cy) = (f.start.x - v.x, f.start.y - v.y);
     let (fx, fy) = (f.end.x - f.start.x, f.end.y - f.start.y);
+    // A vertex on the line of `f`, up to rounding, has no gap to fan across:
+    // the rays to either side of it would be set by that rounding.
+    if (cx * fy - cy * fx).abs() <= slack * fx.hypot(fy) {
+        return None;
+    }
     // Parameters of `f` in the normal cone: beyond `e`, before the next edge.
     let mut range = [0f64, 1.];
     for (dx, dy) in [
@@ -1795,7 +1800,7 @@ impl Channels {
                 let f = edges[item.data].0;
                 items.extend(strip(e, f, tolerance, slack, rounding));
                 if convex {
-                    items.extend(fan(e, next, f, tolerance));
+                    items.extend(fan(e, next, f, tolerance, slack));
                 }
             }
         }

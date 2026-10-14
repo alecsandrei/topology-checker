@@ -1032,6 +1032,40 @@ fn a_sliver_of_collinear_edges_does_not_split_an_outside_piece() {
     }
 }
 #[test]
+fn a_line_leaving_overlapping_tiles_at_a_corner_is_reported_whole() {
+    // The tiles overlap at their shared corners. The line runs from the bottom
+    // corner of the second tile down along the extension of its left edge.
+    let tiles: Vec<Geometry> = vec![
+        rect(0., 0.002, 10.003, 10.003).into(),
+        rect(10., 0.002, 19.996, 10.003).into(),
+        rect(-0.003, 9.997, 10.003, 20.003).into(),
+        rect(9.997, 9.997, 20.003, 20.003).into(),
+    ];
+    let l = line(&[(10., 0.002), (10., -2.998)]);
+    for frame in frames() {
+        let (tiles, l) = (all_moved(&tiles, frame), moved(&l, frame));
+        for tolerance in [0.005, 0.01] {
+            let pieces = run(
+                Rule::LineMustBeInside,
+                vec![l.clone()],
+                tiles.clone(),
+                tolerance,
+            );
+            assert!(
+                (reported_length(&pieces) - 3.).abs() < 1e-6,
+                "{frame:?} {tolerance}: {pieces:?}"
+            );
+            let errors = run(
+                Rule::LineMustBeProperlyInsidePolygons,
+                vec![l.clone()],
+                tiles.clone(),
+                tolerance,
+            );
+            assert_eq!(errors.len(), 1, "{frame:?} {tolerance}");
+        }
+    }
+}
+#[test]
 fn inside_rules_scale_along_a_densely_noded_crack() {
     // One segment runs the length of a jagged crack, 0.001 to 0.009 wide, with
     // 10 thousand differently placed vertices per side.
