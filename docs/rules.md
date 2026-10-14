@@ -27,7 +27,7 @@ Run a rule as `topology-checker <group> <rule>`, or use `rule = "<group>/<rule>"
 | `line/must-not-have-pseudo-nodes` | one line layer | Find joins connecting exactly two distinct features at their endpoints. Closed loops are allowed. | Must Not Have Pseudo Nodes | Must not have pseudo nodes |
 | `line/must-not-overlap` | one line layer | Find shared line segments between distinct features. Crossings, branches ending within tolerance and overlaps within one feature are excluded. | Must Not Overlap |  |
 | `line/must-not-overlap-with` | two line layers | Find shared line segments across two layers. Crossings and branches ending within tolerance are excluded. | Must Not Overlap With |  |
-| `line/must-not-self-overlap` | one line layer | Find line segments traced more than once by the same feature, including across its parts. | Must Not Self-Overlap |  |
+| `line/must-not-self-overlap` | one line layer | Find line segments traced more than once by the same feature, including across its parts. Parts branching off at an angle are excluded. | Must Not Self-Overlap |  |
 | `line/must-not-intersect` | one line layer | Find overlaps and crossings between distinct features away from their endpoints. Endpoint touches are allowed. | Must Not Intersect |  |
 | `line/must-not-intersect-with` | two line layers | Find overlaps and crossings across two layers away from their endpoints. Endpoint touches are allowed. | Must Not Intersect With |  |
 | `line/must-not-intersect-or-touch-interior` | one line layer | Find overlaps, crossings and endpoint touches on the interior of another feature. Touches only at both features' endpoints are allowed. | Must Not Intersect Or Touch Interior |  |
