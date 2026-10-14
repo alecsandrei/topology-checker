@@ -97,10 +97,10 @@ such as a distance threshold, a minimum retained line length, or a polygon slive
 filter. It does not apply a universal geometry buffer or repair geometries.
 Inspect the concrete rule description for the relevant behavior.
 
-Within the tolerance, coordinates are treated as coincident, as with an ArcGIS
-cluster tolerance, so a near miss within tolerance is a touch, not a dangle or an
-overlap. Set the tolerance to the data's positional precision. Tolerance 0 is
-exact on the binary coordinates, so floating-point slivers become reportable.
+Within the tolerance, coordinates are treated as coincident, so a near miss
+within tolerance is a touch, not a dangle or an overlap. Set the tolerance to the
+data's positional precision. Tolerance 0 is exact on the binary coordinates, so
+floating-point slivers become reportable.
 
 All known layer CRSs must agree. Explicit CRS metadata must agree with metadata
 on the input. Unknown CRSs are accepted as caller-supplied coordinates. When

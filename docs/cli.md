@@ -46,7 +46,7 @@ Tolerance is in coordinate units, and calculations are planar. `--tolerance` ove
 - geographic CRS: `1e-8` degrees;
 - unknown CRS, or any input without one: 0.
 
-Within the tolerance, coordinates are treated as coincident, as with an ArcGIS cluster tolerance, so a near miss within tolerance is a touch, not a dangle or an overlap. Set the tolerance to the data's positional precision. Tolerance 0 is exact on the binary coordinates, so floating-point slivers become reportable.
+Within the tolerance, coordinates are treated as coincident, so a near miss within tolerance is a touch, not a dangle or an overlap. Set the tolerance to the data's positional precision. Tolerance 0 is exact on the binary coordinates, so floating-point slivers become reportable.
 
 Inputs must share a CRS; the CLI does not reproject. GeoJSON without a `crs` member is EPSG:4326. A geographic CRS with a nonzero tolerance prints a warning, because calculations are planar.
 
