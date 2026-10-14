@@ -3432,3 +3432,210 @@ fn parallel_runs_beside_meeting_points_keep_their_overlaps() {
         }
     }
 }
+
+/// Each line, its two lines swapped, a reversed first line, and every exact shift.
+fn meeting_variants(a: &LineString, b: &LineString) -> Vec<(LineString, LineString)> {
+    let mut reversed = a.clone();
+    reversed.0.reverse();
+    let mut variants = vec![
+        (a.clone(), b.clone()),
+        (b.clone(), a.clone()),
+        (reversed, b.clone()),
+    ];
+    for d in exact_shifts(&[a, b]) {
+        let shift = |l: &LineString| {
+            LineString(
+                l.0.iter()
+                    .map(|p| Coord {
+                        x: p.x + d.x,
+                        y: p.y + d.y,
+                    })
+                    .collect(),
+            )
+        };
+        variants.push((shift(a), shift(b)));
+    }
+    variants
+}
+
+#[test]
+fn exact_crossings_beside_a_line_end_share_no_linework() {
+    // A road starting 0.38 m from a contour and crossing it at about 40 degrees
+    // 0.62 m later, clipped 10 m and 5 m from the crossing.
+    let clips = [
+        (
+            LineString::from(vec![
+                (359121.7392, 405151.7098),
+                (359121.6125, 405152.1267),
+                (359117.7663737586, 405162.6364),
+            ]),
+            LineString::from(vec![
+                (359122.63164696156, 405162.6364),
+                (359121.9703, 405153.4305),
+                (359118.7588, 405144.7629),
+                (359118.66375890526, 405142.6364),
+            ]),
+        ),
+        (
+            LineString::from(vec![
+                (359121.7392, 405151.7098),
+                (359121.6125, 405152.1267),
+                (359119.5961720599, 405157.6364),
+            ]),
+            LineString::from(vec![
+                (359122.27244961984, 405157.6364),
+                (359121.9703, 405153.4305),
+                (359119.8234828707, 405147.6364),
+            ]),
+        ),
+    ];
+    // A branch starting within tolerance below a line and crossing it steeply
+    // before leaving at 31 degrees.
+    let polar = |p: (f64, f64), degrees: f64, length: f64| {
+        let (sin, cos) = degrees.to_radians().sin_cos();
+        (p.0 + length * cos, p.1 + length * sin)
+    };
+    let mut branches = Vec::new();
+    for gap in [0.07, 0.3] {
+        let start = (0., -gap);
+        let corner = polar(start, 60., 0.32 + gap);
+        let bend = polar(corner, 31., 1.2);
+        branches.push((
+            LineString::from(vec![(-10., 0.), (0., 0.), (10., 0.)]),
+            LineString::from(vec![start, corner, bend, polar(bend, 80., 10.)]),
+        ));
+    }
+    for (a, b) in clips.iter().chain(&branches) {
+        use topology_checker_core::geo::Intersects;
+        assert!(a.intersects(b));
+        for (a, b) in meeting_variants(a, b) {
+            for rule in [
+                Rule::LineMustNotOverlap,
+                Rule::LineMustNotOverlapWith,
+                Rule::LineMustNotIntersect,
+                Rule::LineMustNotIntersectWith,
+            ] {
+                let t = topology(
+                    rule,
+                    vec![a.clone().into(), b.clone().into()],
+                    rule.inputs().1.is_some(),
+                    1.,
+                );
+                let report = t.validate().unwrap();
+                assert!(
+                    report
+                        .violations()
+                        .all(|v| v.kind != ViolationKind::Overlap),
+                    "{rule}: {a:?} {b:?} {:?}",
+                    report.rules
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn collinear_overshoots_between_line_ends_are_judged_by_length() {
+    // A line starting 0.0145 tolerances off another, 1.0002 tolerances before the
+    // other ends 0.00176 tolerances off the first.
+    let a = LineString::from(vec![
+        (327292.5475178135, 4307213.47902075),
+        (327292.9235756431, 4307229.3518706),
+        (327292.9642650116, 4307230.7513395455),
+        (327293.4554896322, 4307260.908348614),
+        (327293.59337847243, 4307269.4775358485),
+    ]);
+    let b = LineString::from(vec![
+        (327290.28918682, 4307134.755223263),
+        (327290.5346351322, 4307143.212023801),
+        (327291.9996989209, 4307194.973257096),
+        (327292.02184057154, 4307195.983032145),
+        (327292.34160825214, 4307207.829077485),
+        (327292.5475397348, 4307213.480020527),
+    ]);
+    for (a, b) in meeting_variants(&a, &b) {
+        for rule in [Rule::LineMustNotOverlap, Rule::LineMustNotOverlapWith] {
+            let t = topology(
+                rule,
+                vec![a.clone().into(), b.clone().into()],
+                rule.inputs().1.is_some(),
+                0.001,
+            );
+            let report = t.validate().unwrap();
+            let overlaps = report
+                .violations()
+                .filter(|v| v.kind == ViolationKind::Overlap)
+                .map(|v| geo_length(&v.geometry))
+                .collect::<Vec<_>>();
+            assert!(
+                overlaps.len() == 1 && (overlaps[0] - 0.0010001).abs() < 1e-7,
+                "{rule}: {overlaps:?}"
+            );
+        }
+    }
+    // Overshoots by s tolerances, with the overshooting end on the other line,
+    // a rounding error off it, or clearly off it, at small angles between them.
+    for (tolerance, origin) in [
+        (1., (0., 0.)),
+        (0.001, (327292.5475178135, 4307213.47902075)),
+    ] {
+        let (sin, cos) = 17_f64.to_radians().sin_cos();
+        let place = |p: (f64, f64)| {
+            let (x, y) = (p.0 * tolerance, p.1 * tolerance);
+            (origin.0 + x * cos - y * sin, origin.1 + x * sin + y * cos)
+        };
+        for s in [0.99999, 1.00001, 1.0001, 1.0002, 1.001, 1.01, 1.05, 1.1] {
+            for offset in [0., 1e-6, 0.07, 0.2] {
+                for degrees in [0_f64, 0.5, 1., 2., 2.9] {
+                    let (dy, dx) = degrees.to_radians().sin_cos();
+                    let a = line(&[place((0., 0.)), place((50., 0.))]);
+                    let b = line(&[place((s - 50. * dx, offset - 50. * dy)), place((s, offset))]);
+                    let t = topology(Rule::LineMustNotOverlapWith, vec![a, b], true, tolerance);
+                    let lengths = t
+                        .validate()
+                        .unwrap()
+                        .violations()
+                        .map(|v| geo_length(&v.geometry) / tolerance)
+                        .collect::<Vec<_>>();
+                    let name = format!("{tolerance} {s} {offset} {degrees}");
+                    if degrees == 0. {
+                        // Exactly collinear: reported exactly when longer than the
+                        // tolerance, wherever the overshooting end lies.
+                        if s > 1. {
+                            assert!(
+                                lengths.len() == 1 && (lengths[0] - s).abs() < 1e-4,
+                                "{name}: {lengths:?}"
+                            );
+                        } else {
+                            assert!(lengths.is_empty(), "{name}: {lengths:?}");
+                        }
+                    } else if s >= 1.01 {
+                        assert!(
+                            lengths.len() == 1 && (lengths[0] - s).abs() < 0.02,
+                            "{name}: {lengths:?}"
+                        );
+                    } else if s < 1. && offset <= 1e-6 {
+                        assert!(lengths.is_empty(), "{name}: {lengths:?}");
+                    }
+                }
+            }
+        }
+    }
+}
+#[test]
+fn arms_folding_back_alongside_after_a_crossing_keep_their_overlaps() {
+    // The second line crosses at 20 degrees, turns back and runs parallel 0.6
+    // from the first for 3 before ending. That parallel stretch is shared.
+    let a = line(&[(-20., 0.), (20., 0.)]);
+    let b = line(&[(-27.4748, -10.), (1.6485, 0.6), (-1.3515, 0.6)]);
+    for rule in [Rule::LineMustNotOverlap, Rule::LineMustNotIntersect] {
+        let t = topology(rule, vec![a.clone(), b.clone()], false, 1.);
+        let report = t.validate().unwrap();
+        let shared = report
+            .violations()
+            .filter(|v| v.kind == ViolationKind::Overlap)
+            .map(|v| geo_length(&v.geometry))
+            .sum::<f64>();
+        assert!((shared - 3.).abs() < 1e-9, "{rule}: {report:?}");
+    }
+}

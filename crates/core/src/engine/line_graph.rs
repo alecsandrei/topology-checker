@@ -23,6 +23,9 @@ struct Meeting {
 /// Lines meeting at a smaller angle are treated as one shared course beyond this
 /// many tolerances, so long nearly parallel runs keep their support.
 const NEAR_ZONE_TOLERANCES: f64 = 20.;
+/// A segment beside a passage: its envelope, its line, and whether each of its
+/// vertices ends an open part.
+type Beside = (rstar::AABB<[f64; 2]>, Line, [bool; 2]);
 #[cfg(test)]
 type MatchPairs = BTreeMap<(FeatureKey, FeatureKey), Vec<usize>>;
 
@@ -1554,7 +1557,8 @@ impl LineGraph {
         self.sources[index].line(&self.parts)
     }
     /// Whether a run's support lies within the near zones of points where its
-    /// passages meet, except for at most one tolerance on either passage.
+    /// passages meet, except for at most one tolerance, on both passages. Walking
+    /// along one passage can miss linework the other runs alongside after a turn.
     ///
     /// Lines meeting at angle `a` stay within tolerance for about `tolerance / sin a`
     /// beyond the meeting point, wherever their vertices lie. Walking away from a
@@ -1562,10 +1566,12 @@ impl LineGraph {
     /// leave tolerance of each other, plus one tolerance, if their separation grows
     /// steadily on the way. Lines diverging too slowly to leave tolerance within the
     /// cap get a zone that shrinks with their angle, and a line hooking back from
-    /// its end across the other gets the tolerance next to the meeting point. A
-    /// passage ending within tolerance of the other, or running alongside it before
-    /// turning away, has no near zone, so lines that merely touch or cross while
-    /// running alongside each other keep their support.
+    /// its end across the other gets the tolerance next to the meeting point. Lines
+    /// that leave tolerance only because the other passage ends there, or that run
+    /// alongside each other before turning away, have no near zone, so lines that
+    /// merely touch or cross while running alongside each other keep their
+    /// support. A run beginning and ending where lines end beside each other, such
+    /// as a short arm or a collinear overshoot, is judged by its length alone.
     fn near_zones_explain(
         &self,
         tree: &index::Index,
@@ -1606,62 +1612,50 @@ impl LineGraph {
             return false;
         }
         // Segments of the other passage within `radius` of a point, keeping only
-        // those closer, along a single part, to `there` than to `here`.
+        // those closer, along a single part, to `there` than to `here`, with
+        // whether each of their vertices ends an open part.
         let nearby = |side: usize, point: Coord, radius: f64, here: f64, there: f64| {
             use rstar::RTreeObject;
             tree.locate_in_envelope_intersecting(&index::at(point, radius))
-                .filter(|item| {
+                .filter_map(|item| {
                     let segment = self.segment(item.data);
-                    segment.part == parts[1 - side]
+                    let keep = segment.part == parts[1 - side]
                         && (parts[0] != parts[1] || {
                             let p = &positions[segment.part];
                             let span = [p[segment.start], p[segment.start + 1]];
                             gap(side, there, span) < gap(side, here, span)
-                        })
+                        });
+                    let open = !closed[1 - side];
+                    let last = self.original(segment.part).0.len() - 2;
+                    keep.then(|| {
+                        (
+                            item.geom().envelope(),
+                            self.source(item.data),
+                            [open && segment.start == 0, open && segment.start == last],
+                        )
+                    })
                 })
-                .map(|item| (item.geom().envelope(), self.source(item.data)))
                 .collect::<Vec<_>>()
         };
-        // Distance from a point to the nearest of those segments within tolerance.
-        let nearest = |segments: &[(rstar::AABB<[f64; 2]>, Line)], point: Coord| {
+        // Distance from a point to the nearest of those segments, exact up to just
+        // beyond the tolerance a walk step can cross, and the end of the other
+        // passage if that is the nearest point.
+        let nearest = |segments: &[Beside], point: Coord| {
             use rstar::Envelope;
-            let bounds = index::at(point, tolerance);
+            let bounds = index::at(point, 2. * tolerance);
             segments
                 .iter()
-                .filter(|(envelope, _)| envelope.intersects(&bounds))
-                .map(|&(_, line)| distance(point, projection(line, point).1))
-                .fold(f64::INFINITY, f64::min)
+                .filter(|(envelope, ..)| envelope.intersects(&bounds))
+                .map(|&(_, line, ends)| {
+                    let (parameter, projected) = projection(line, point);
+                    let end = (parameter == 0. && ends[0] || parameter == 1. && ends[1])
+                        .then_some(projected);
+                    (distance(point, projected), end)
+                })
+                .fold((f64::INFINITY, None), |best, next| {
+                    if next.0 < best.0 { next } else { best }
+                })
         };
-        let separation = |side: usize, point: Coord, here: f64, there: f64| {
-            nearest(&nearby(side, point, tolerance, here, there), point)
-        };
-        // A passage ending within tolerance of the other bounds the run as an arm.
-        let arm = (0..2).any(|side| {
-            let part = parts[side];
-            if closed[side] {
-                return false;
-            }
-            let coords = &self.original(part).0;
-            let ends = [
-                (0., coords[0]),
-                (total[side], *coords.last().expect("source")),
-            ];
-            ends.into_iter().any(|(position, point)| {
-                spans[side]
-                    .iter()
-                    .any(|&span| gap(side, position, span) <= tolerance)
-                    && {
-                        let d = relevant
-                            .iter()
-                            .map(|m| separation(side, point, position, m.positions[1 - side]))
-                            .fold(f64::INFINITY, f64::min);
-                        d > tolerance / 16. && d <= tolerance
-                    }
-            })
-        });
-        if arm {
-            return false;
-        }
         let ends = (0..2)
             .filter(|&side| !closed[side])
             .flat_map(|side| {
@@ -1669,6 +1663,41 @@ impl LineGraph {
                 [coords[0], *coords.last().expect("source")]
             })
             .collect::<Vec<_>>();
+        // Ends of either line that lie beside the other passage.
+        let beside = (0..2)
+            .filter(|&side| !closed[side])
+            .flat_map(|side| {
+                let coords = &self.original(parts[side]).0;
+                let there = spans[1 - side][0][0];
+                [
+                    (0., coords[0]),
+                    (total[side], *coords.last().expect("source")),
+                ]
+                .into_iter()
+                .filter(move |&(position, point)| {
+                    nearest(&nearby(side, point, tolerance, position, there), point).0 <= tolerance
+                })
+                .map(|(_, point)| point)
+            })
+            .collect::<Vec<_>>();
+        // A run that begins and ends where lines end beside each other, as a short
+        // arm or a collinear overshoot does, is judged by its length alone.
+        let bounded = (0..2).filter(|&side| !closed[side]).any(|side| {
+            let extent = [spans[side][0][0], spans[side].last().expect("support")[1]];
+            let [low, high] = extent.map(|v| {
+                self.point_at(parts[side], &positions[parts[side]], v)
+                    .map(|q| {
+                        (0..beside.len())
+                            .filter(|&e| distance(q, beside[e]) <= tolerance)
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default()
+            });
+            low.iter().any(|a| high.iter().any(|b| a != b))
+        });
+        if bounded {
+            return false;
+        }
         // Whether zones along one passage leave at most one tolerance of its
         // support unexplained.
         let explained = |side: usize, zones: Vec<[f64; 2]>| {
@@ -1694,7 +1723,7 @@ impl LineGraph {
         };
         let step = tolerance / 8.;
         let limit = cap + tolerance;
-        (0..2).any(|side| {
+        (0..2).all(|side| {
             let part = parts[side];
             let p = &positions[part];
             let mut zones = Vec::new();
@@ -1721,16 +1750,23 @@ impl LineGraph {
                     .map_or_else(Vec::new, |point| {
                         nearby(side, point, limit + 3. * tolerance, start, there)
                     });
-                let separation = |point: Coord| nearest(&segments, point);
+                let origin = self.point_at(part, p, start);
+                let separation = |point: Coord| nearest(&segments, point).0;
                 for direction in [1., -1.] {
                     let at = |offset: f64| self.point_at(part, p, start + direction * offset);
                     let mut walk = Vec::new();
                     let mut peak = 0.;
+                    // Where the other passage ends away from this meeting point,
+                    // lines leaving tolerance there have not parted at an angle.
+                    let mut ended = false;
                     for offset in (1..).map(|k| k as f64 * step).take_while(|&o| o <= limit) {
                         let Some(point) = at(offset) else {
                             break;
                         };
-                        let gap = separation(point);
+                        let (gap, end) = nearest(&segments, point);
+                        ended = end.is_some_and(|end| {
+                            origin.is_none_or(|origin| distance(end, origin) > tolerance / 16.)
+                        });
                         walk.push((offset, gap));
                         peak = gap.max(peak);
                         // Stop where the passages leave tolerance, or where they meet
@@ -1758,7 +1794,7 @@ impl LineGraph {
                     let reach_end = match walk.last() {
                         // The passages leave tolerance of each other.
                         Some(&(exit, gap)) if gap > tolerance => {
-                            straight(exit, tolerance / exit).then_some(exit + tolerance)
+                            (!ended && straight(exit, tolerance / exit)).then_some(exit + tolerance)
                         }
                         // They diverge steadily without leaving tolerance before the
                         // cap, as lines meeting at a small angle do. The zone shrinks
