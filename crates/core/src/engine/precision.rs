@@ -1417,8 +1417,8 @@ pub(crate) fn squared_gap(a: Line, b: Line) -> f64 {
 // tolerance from the edges that define it, up to the slack of the rounded
 // coordinates, and ends where a widening gap reaches the tolerance along its
 // normals. Measured across a wedge, a gap can therefore close up to about
-// 1.02 times the tolerance at 20 degrees and 1.1 times at 60 degrees. At
-// tolerance 0 there are no channels.
+// 1.01 to 1.02 times the tolerance at a full angle of 20 degrees and 1.1 times
+// at 60 degrees. At tolerance 0 there are no channels.
 
 /// A channel side: the inside is where `(p - point) · normal >= 0`. The
 /// normal has unit length, so side values are distances.
@@ -1818,6 +1818,8 @@ impl Channels {
     pub(crate) fn covered(&self, piece: Line) -> [Vec<[f64; 2]>; 2] {
         let slack = channel_slack([piece], self.tolerance);
         let length = (piece.end.x - piece.start.x).hypot(piece.end.y - piece.start.y);
+        // A channel only a few slacks long is a rounding artefact of nearly
+        // collinear edges. It must not split a piece, unless it is all of it.
         let spans = |strips: bool| {
             super::matching::union_within(
                 self.near(piece, 2. * slack)
@@ -1826,6 +1828,9 @@ impl Channels {
                     .collect(),
                 2. * slack / length,
             )
+            .into_iter()
+            .filter(|&[a, b]| (b - a) * length >= 4. * slack || a <= 0. && b >= 1.)
+            .collect::<Vec<_>>()
         };
         [spans(false), spans(true)]
     }

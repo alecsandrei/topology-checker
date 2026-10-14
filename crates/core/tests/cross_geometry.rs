@@ -990,14 +990,63 @@ fn a_wide_gap_beside_the_end_of_a_crack_is_reported_whole() {
     assert!((reported_length(&pieces) - 0.010693).abs() < 1e-5);
 }
 #[test]
+fn a_sliver_of_collinear_edges_does_not_split_an_outside_piece() {
+    let ring = [
+        (9.390279700048268, 3.4384076483547688),
+        (9.999981218017638, 0.0193814854137599),
+        (9.403537416830659, -3.401982370298356),
+        (7.672888222150505, -6.413016944658011),
+        (5.016775467898697, -8.650547029450536),
+        (1.7562740282155573, -9.844434053637087),
+        (0.0009574070572853, -0.0011365124955773),
+        (0.0042371265590191, -0.0050297807902098),
+        (7.651322104968131, 6.43693420290947),
+        (9.390279700048268, 3.4384076483547688),
+    ];
+    let densified = ring
+        .windows(2)
+        .flat_map(|w| [w[0], ((w[0].0 + w[1].0) / 2., (w[0].1 + w[1].1) / 2.)])
+        .chain([ring[0]])
+        .collect::<Vec<_>>();
+    let (a, b): ((f64, f64), (f64, f64)) = (
+        (0.0057971603237092, 0.0051159649156034),
+        (-0.004667819943279, -0.0070386356674135),
+    );
+    let expected = (a.0 - b.0).hypot(a.1 - b.1);
+    for polygon in [&ring[..], &densified[..]] {
+        for l in [
+            line(&[a, b]),
+            line(&[a, ((a.0 + b.0) / 2., (a.1 + b.1) / 2.), b]),
+        ] {
+            let pieces = run(
+                Rule::LineMustBeInside,
+                vec![l],
+                vec![ring_polygon(polygon).into()],
+                0.01,
+            );
+            assert!(
+                (reported_length(&pieces) - expected).abs() < 1e-6,
+                "{pieces:?}"
+            );
+        }
+    }
+}
+#[test]
 fn inside_rules_scale_along_a_densely_noded_crack() {
-    // One segment runs the length of a crack with 20 thousand vertices per side.
-    let count = 20_000;
-    let xs = (0..=count).map(|i| 998. * i as f64 / count as f64);
-    let mut upper = xs.clone().map(|x| (x, 0.005)).collect::<Vec<_>>();
+    // One segment runs the length of a jagged crack, 0.001 to 0.009 wide, with
+    // 10 thousand differently placed vertices per side.
+    let count = 10_000;
+    let x = |i: usize, shift: f64| 998. * (i as f64 + shift) / count as f64;
+    let mut upper = (0..=count)
+        .map(|i| (x(i, 0.), 0.005 + 0.002 * (i as f64 * 1.7).sin()))
+        .collect::<Vec<_>>();
     upper.extend([(998., 10.), (0., 10.)]);
     let mut lower = vec![(0., -10.), (998., -10.)];
-    lower.extend(xs.rev().map(|x| (x, 0.)));
+    lower.extend(
+        (0..=count)
+            .rev()
+            .map(|i| (x(i, 0.5).min(998.), 0.002 * (i as f64 * 2.3).cos())),
+    );
     let target: Vec<Geometry> = vec![ring_polygon(&upper).into(), ring_polygon(&lower).into()];
     let l = line(&[(1., 0.0025), (997., 0.0025)]);
     let start = std::time::Instant::now();

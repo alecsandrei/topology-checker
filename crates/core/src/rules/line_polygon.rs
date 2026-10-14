@@ -809,6 +809,9 @@ fn outside_pieces(
     selected_runs(&coords, &selected)
         .into_iter()
         .filter(|run| {
+            // The piece between consecutive coordinates is the lower index. A
+            // closed path that joins across its seam has one pair that is not
+            // consecutive, which is piece 0.
             run.windows(2)
                 .any(|w| states[if w[1] == w[0] + 1 { w[0] } else { 0 }] == Cover::Outside)
         })
