@@ -207,11 +207,15 @@ fn emitted_length(rule: Rule, out: &mut Vec<Case>) {
         let left = l(&[(-4., 0.), (0., 0.)]);
         let right = l(&[(-1., 0.), (4., 0.)]);
         assert!(length(&left) > t && length(&right) > t);
-        let expected = if t < 1. {
+        let expected = if boundary_coverage {
+            if 2. * t < 1. {
+                vec![one(K::NotCovered, l(&[(-1. + t, 0.), (-t, 0.)]))]
+            } else {
+                vec![]
+            }
+        } else if t < 1. {
             vec![if self_rule {
                 e(K::SelfOverlap, span.clone(), Some((0, A, None)), None)
-            } else if boundary_coverage {
-                one(K::NotCovered, span.clone())
             } else {
                 pair(K::Overlap, span.clone(), binary)
             }]
@@ -358,7 +362,7 @@ fn distances(rule: Rule, out: &mut Vec<Case>) {
         ("isolated-edge-distance-above", 0.25_f64.next_up()),
     ] {
         let (a, b, expected) = if rule == Rule::PolygonBoundariesMustBeCoveredByLines {
-            // All other edges are covered exactly, so only the bottom edge can fail.
+            // The other edges also cover the bottom edge's endpoint bands.
             (
                 vec![square()],
                 vec![ml(vec![
@@ -366,7 +370,7 @@ fn distances(rule: Rule, out: &mut Vec<Case>) {
                     l(&[(8., 0.), (8., 8.), (0., 8.), (0., 0.)]),
                 ])],
                 if d > 0.25 {
-                    vec![one(K::NotCovered, l(&[(0., 0.), (8., 0.)]))]
+                    vec![one(K::NotCovered, l(&[(0.25, 0.), (7.75, 0.)]))]
                 } else {
                     vec![]
                 },
