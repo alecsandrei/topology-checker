@@ -472,7 +472,7 @@ fn reported_length(violations: &[Violation]) -> f64 {
 fn inside_rules_close_gaps_narrower_than_tolerance_between_polygons() {
     let along = 11_f64.to_radians().sin();
     for origin in [(0., 0.), (5e5, 1.8e5)] {
-        for d in [1e-10, 1e-6, 0.005, 0.0099, 0.02] {
+        for d in [1e-10, 1e-6, 0.005, 0.0099, 0.021] {
             for d in [d, -d] {
                 let (squares, lines) = crack(d, origin);
                 for (crossing, (l, length)) in lines.into_iter().zip([d, d / along, 6.]).enumerate()
@@ -494,10 +494,26 @@ fn inside_rules_close_gaps_narrower_than_tolerance_between_polygons() {
                             squares.clone(),
                             tolerance,
                         );
-                        if outside {
+                        let residual = (d - 2. * tolerance).max(0.);
+                        let expected = if d <= 0. {
+                            0.
+                        } else {
+                            match crossing {
+                                0 => residual,
+                                1 => residual / along,
+                                _ => {
+                                    if d > 2. * tolerance {
+                                        length
+                                    } else {
+                                        0.
+                                    }
+                                }
+                            }
+                        };
+                        if expected > 0. {
                             assert_eq!(pieces.len(), 1, "{name}: {pieces:?}");
                             let reported = geo_length(&pieces[0].geometry);
-                            assert!((reported - length).abs() < 1e-6, "{name}: {reported}");
+                            assert!((reported - expected).abs() < 1e-6, "{name}: {reported}");
                         } else {
                             assert!(pieces.is_empty(), "{name}: {pieces:?}");
                         }
@@ -511,7 +527,7 @@ fn inside_rules_close_gaps_narrower_than_tolerance_between_polygons() {
 fn inside_rules_close_gaps_in_rotated_and_translated_frames() {
     let along = 11_f64.to_radians().sin();
     for frame in frames() {
-        for d in [1e-6, 0.005, 0.0099, 0.02] {
+        for d in [1e-6, 0.005, 0.0099, 0.021] {
             for d in [d, -d] {
                 let (squares, lines) = crack(d, (0., 0.));
                 let squares = all_moved(&squares, frame);
@@ -528,7 +544,22 @@ fn inside_rules_close_gaps_in_rotated_and_translated_frames() {
                         );
                         assert_eq!(strict.is_empty(), !outside, "{name}: {strict:?}");
                         let pieces = run(Rule::LineMustBeInside, l, squares.clone(), tolerance);
-                        let expected = if outside { length } else { 0. };
+                        let residual = (d - 2. * tolerance).max(0.);
+                        let expected = if d <= 0. {
+                            0.
+                        } else {
+                            match crossing {
+                                0 => residual,
+                                1 => residual / along,
+                                _ => {
+                                    if d > 2. * tolerance {
+                                        length
+                                    } else {
+                                        0.
+                                    }
+                                }
+                            }
+                        };
                         assert!(
                             (reported_length(&pieces) - expected).abs() < 1e-6,
                             "{name}: {pieces:?}"
@@ -599,8 +630,13 @@ fn crack_mouths_stay_boundary_while_enclosed_crack_ends_close() {
     // Within tolerance of the outer edge at the mouth of the open crack.
     check(&open, line(&[(9., 9.996), (11., 9.996)]), false, 0.);
     check(&open, line(&[(middle, 5.), (middle, 9.995)]), false, 0.);
-    // Through the mouth, the coverage ends at the outer boundary.
-    check(&open, line(&[(middle, 5.), (middle, 12.)]), false, 2.);
+    // Through the mouth, direct endpoint discs extend covered space.
+    check(
+        &open,
+        line(&[(middle, 5.), (middle, 12.)]),
+        false,
+        2. - (tolerance * tolerance - d * d / 4.).sqrt(),
+    );
 }
 #[test]
 fn single_polygon_notch_matches_a_crack_between_two_polygons() {
@@ -659,7 +695,7 @@ fn single_polygon_notch_matches_a_crack_between_two_polygons() {
 #[test]
 fn gaps_turning_a_corner_close_at_the_corner() {
     let tolerance = 0.01;
-    for (d, closed) in [(0.005, true), (0.02, false)] {
+    for (d, closed) in [(0.005, true), (0.024, false)] {
         // An L-shaped polygon around a square, `d` away from two of its sides.
         let target: Vec<Geometry> = vec![
             rect(0., 0., 10., 10.).into(),
@@ -725,7 +761,10 @@ fn channels_stay_within_tolerance_of_the_edges_that_define_them() {
         (14.999726493988472, 0.09058203762489409),
     ]);
     let pieces = run(Rule::LineMustBeInside, vec![l], target, tolerance);
-    assert!((reported_length(&pieces) - 5.).abs() < 1e-3, "{pieces:?}");
+    assert!(
+        (reported_length(&pieces) - (5. - tolerance)).abs() < 1e-3,
+        "{pieces:?}"
+    );
     // A corner facing an edge one float away reaches no farther than the tolerance.
     for tolerance in [1., 0.01] {
         let gap = 10_f64.next_up();
@@ -736,10 +775,7 @@ fn channels_stay_within_tolerance_of_the_edges_that_define_them() {
         let l = line(&[(10., 0.), (10., -5.)]);
         let pieces = run(Rule::LineMustBeInside, vec![l], target, tolerance);
         let reported = reported_length(&pieces);
-        assert!(
-            (5. - tolerance - 1e-6..=5. + 1e-6).contains(&reported),
-            "{tolerance}: {pieces:?}"
-        );
+        assert_eq!(reported, 0., "{tolerance}: {pieces:?}");
     }
 }
 #[test]
@@ -950,7 +986,7 @@ fn cracks_closed_by_other_polygons_stay_closed_when_rotated_and_rounded() {
     }
 }
 #[test]
-fn a_wide_gap_beside_the_end_of_a_crack_is_reported_whole() {
+fn a_gap_within_two_boundary_bands_has_no_residual() {
     // Three sectors meet in a wedge. The line crosses a gap 1.064 times the
     // tolerance wide, 0.65 times the tolerance from where it ends.
     let target: Vec<Geometry> = vec![
@@ -986,11 +1022,10 @@ fn a_wide_gap_beside_the_end_of_a_crack_is_reported_whole() {
         (-0.0008718031458557, -0.0707730166031979),
     ]);
     let pieces = run(Rule::LineMustBeInside, vec![l], target, 0.01);
-    assert_eq!(pieces.len(), 1, "{pieces:?}");
-    assert!((reported_length(&pieces) - 0.010693).abs() < 1e-5);
+    assert!(pieces.is_empty(), "{pieces:?}");
 }
 #[test]
-fn a_sliver_of_collinear_edges_does_not_split_an_outside_piece() {
+fn nearby_collinear_edges_cover_the_same_source_under_densification() {
     let ring = [
         (9.390279700048268, 3.4384076483547688),
         (9.999981218017638, 0.0193814854137599),
@@ -1012,7 +1047,6 @@ fn a_sliver_of_collinear_edges_does_not_split_an_outside_piece() {
         (0.0057971603237092, 0.0051159649156034),
         (-0.004667819943279, -0.0070386356674135),
     );
-    let expected = (a.0 - b.0).hypot(a.1 - b.1);
     for polygon in [&ring[..], &densified[..]] {
         for l in [
             line(&[a, b]),
@@ -1024,15 +1058,12 @@ fn a_sliver_of_collinear_edges_does_not_split_an_outside_piece() {
                 vec![ring_polygon(polygon).into()],
                 0.01,
             );
-            assert!(
-                (reported_length(&pieces) - expected).abs() < 1e-6,
-                "{pieces:?}"
-            );
+            assert!(pieces.is_empty(), "{pieces:?}");
         }
     }
 }
 #[test]
-fn a_line_leaving_overlapping_tiles_at_a_corner_is_reported_whole() {
+fn a_line_leaving_overlapping_tiles_keeps_the_tail_beyond_tolerance() {
     // The tiles overlap at their shared corners. The line runs from the bottom
     // corner of the second tile down along the extension of its left edge.
     let tiles: Vec<Geometry> = vec![
@@ -1052,7 +1083,7 @@ fn a_line_leaving_overlapping_tiles_at_a_corner_is_reported_whole() {
                 tolerance,
             );
             assert!(
-                (reported_length(&pieces) - 3.).abs() < 1e-6,
+                (reported_length(&pieces) - (3. - tolerance)).abs() < 1e-6,
                 "{frame:?} {tolerance}: {pieces:?}"
             );
             let errors = run(
@@ -1066,7 +1097,7 @@ fn a_line_leaving_overlapping_tiles_at_a_corner_is_reported_whole() {
     }
 }
 #[test]
-fn a_corner_on_another_tiles_edge_does_not_cover_the_line_leaving_it() {
+fn a_corner_on_another_tiles_edge_covers_only_its_direct_boundary_band() {
     // The top-left corner of the lower tile lies on the left edge of the upper
     // tile, which is collinear with the tile's own left edge only to within
     // rounding. The line leaves that corner along the top edge, outside both.
@@ -1098,7 +1129,7 @@ fn a_corner_on_another_tiles_edge_does_not_cover_the_line_leaving_it() {
                 tolerance,
             );
             assert!(
-                (reported_length(&pieces) - 3.).abs() < 1e-6,
+                (reported_length(&pieces) - (3. - tolerance)).abs() < 1e-6,
                 "{tolerance}: {pieces:?}"
             );
         }
@@ -5282,7 +5313,10 @@ fn a_rotated_edge_line_reports_the_stretch_beyond_the_corner() {
         );
         let (found, length) = outside_run(&pieces, start);
         assert!(found, "{tolerance}: {pieces:?}");
-        assert!(length >= beyond - 1e-9, "{tolerance}: {pieces:?}");
+        assert!(
+            length >= beyond - tolerance - 1e-9,
+            "{tolerance}: {pieces:?}"
+        );
     }
 }
 #[test]
@@ -5327,7 +5361,7 @@ fn edge_lines_beyond_a_corner_are_reported_at_any_rotation() {
         let (found, length) = outside_run(&pieces, a.0);
         assert!(found, "round {round}: {pieces:?}");
         assert!(
-            length >= beyond - 1e-6,
+            length >= beyond - tolerance - 1e-6,
             "round {round}: {length} for {beyond} at {tolerance}"
         );
     }
@@ -5400,8 +5434,18 @@ fn check_edge_lines(ring: &[(f64, f64)], convex: bool) {
                 };
                 for d in distances {
                     for ends in edge_lines(ring, d) {
+                        let expected = if tolerance == 0. {
+                            exact_outside(ends.map(place), &placed, 0.)
+                        } else {
+                            let original = ring
+                                .iter()
+                                .map(|&(x, y)| coord! { x: x, y: y })
+                                .collect::<Vec<_>>();
+                            (exact_outside(ends.map(|(x, y)| coord! { x: x, y: y }), &original, 0.)
+                                - tolerance)
+                                .max(0.)
+                        };
                         let ends = ends.map(place);
-                        let expected = exact_outside(ends, &placed, tolerance);
                         let pieces = run(
                             Rule::LineMustBeInside,
                             vec![line(&ends.map(|c| (c.x, c.y)))],
@@ -5415,7 +5459,7 @@ fn check_edge_lines(ring: &[(f64, f64)], convex: bool) {
                         );
                         // The stretch beyond a convex corner is clearly outside.
                         if convex && d > tolerance {
-                            assert!(length >= d - 1e-7, "{ends:?}: {length} for {d}");
+                            assert!(length >= d - tolerance - 1e-7, "{ends:?}: {length} for {d}");
                         }
                     }
                 }

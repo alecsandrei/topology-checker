@@ -9,7 +9,7 @@ use crate::{
         line_graph::{projection, proper_intersection},
         location::{self, Location},
         parameter::{self, Parameter},
-        polygons, precision,
+        polygons, precision, proximity,
     },
     model::Part,
 };
@@ -656,7 +656,6 @@ pub(super) fn inside(
                 t.tolerance(),
             )
             .into_iter()
-            .filter(|piece| Euclidean.length(piece) > t.tolerance())
             .map(|piece| {
                 violation(
                     spec,
@@ -677,8 +676,8 @@ thread_local! { static SEGMENT_POLYGONS: std::cell::Cell<usize> = const { std::c
 #[cfg(test)]
 thread_local! { static CROSSING_CONTACT_VISITS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) }; }
 
-/// Pieces outside every target polygon. At a positive tolerance, uncovered
-/// space narrower than the tolerance between polygons is covered.
+/// Pieces outside every target polygon and farther than tolerance from every
+/// original target boundary. Capsule cuts stay on the original source segment.
 fn outside_pieces(
     line: &LineString,
     target: &crate::model::Parts,
@@ -693,9 +692,26 @@ fn outside_pieces(
         crate::cancel::check();
         // Polygon bounds restrict both boundary cuts and interval classification.
         // A whole-line box can otherwise select every polygon along a long route.
+        // Expand outwards so binary rounding cannot exclude an exactly
+        // coincident candidate before the certified distance test.
+        let envelope = if tolerance > 0. {
+            let bounds = segment.bounding_rect();
+            rstar::AABB::from_corners(
+                [
+                    (bounds.min().x - tolerance).next_down(),
+                    (bounds.min().y - tolerance).next_down(),
+                ],
+                [
+                    (bounds.max().x + tolerance).next_up(),
+                    (bounds.max().y + tolerance).next_up(),
+                ],
+            )
+        } else {
+            index::envelope(segment.bounding_rect())
+        };
         let mut candidates = target
             .polygon_index()
-            .locate_in_envelope_intersecting(&index::envelope(segment.bounding_rect()))
+            .locate_in_envelope_intersecting(&envelope)
             .map(|item| item.data)
             .collect::<Vec<_>>();
         candidates.sort_unstable();
@@ -703,14 +719,15 @@ fn outside_pieces(
         SEGMENT_POLYGONS.with(|n| n.set(n.get() + candidates.len()));
         let mut params = vec![Parameter::start(0, segment), Parameter::end(0, segment)];
         let mut shared = Vec::new();
+        let mut covered = Vec::new();
         for &i in &candidates {
             let location = &locations[i];
-            for item in location
-                .tree
-                .locate_in_envelope_intersecting(&index::envelope(segment.bounding_rect()))
-            {
+            for item in location.tree.locate_in_envelope_intersecting(&envelope) {
                 crate::cancel::check();
                 let boundary = location.segments[item.data];
+                if tolerance > 0. {
+                    covered.extend(proximity::capsule(segment, boundary, tolerance));
+                }
                 match line_intersection(segment, boundary) {
                     None => {}
                     Some(LineIntersection::SinglePoint {
@@ -729,6 +746,7 @@ fn outside_pieces(
                 }
             }
         }
+        let covered = proximity::union(covered);
         // Order the cuts by exact parameter and classify each window at its
         // exact midpoint, so rounded cut coordinates never decide a side.
         order.clear();
@@ -751,86 +769,64 @@ fn outside_pieces(
             along[a] += 1;
             along[b] -= 1;
         }
-        if coords.is_empty() {
-            coords.push(segment.start);
-        }
+        let append = |coords: &mut Vec<Coord>, states: &mut Vec<bool>, a, b, outside| {
+            if coords.is_empty() {
+                coords.push(a);
+            }
+            if coords.last() != Some(&a) {
+                coords.push(a);
+                states.push(false);
+            }
+            if coords.last() != Some(&b) {
+                coords.push(b);
+                states.push(outside);
+            }
+        };
         let mut depth = 0;
         for (r, pair) in representatives.windows(2).enumerate() {
             depth += along[r];
             let (a, b) = (&params[pair[0]], &params[pair[1]]);
             let window = Line::new(a.point, b.point);
             // Cuts that round onto one coordinate enclose no length.
-            if window.start == window.end {
+            if window.start == window.end && tolerance == 0. {
                 continue;
             }
             let uncovered = depth <= 0
                 && !candidates
                     .iter()
                     .any(|&i| parameter::window_position(&locations[i], a, b) >= 0);
-            let edges = if uncovered && tolerance > 0. {
-                boundary(window, target, locations, tolerance)
+            if !uncovered || covered.is_empty() {
+                let (start, end) = if uncovered && tolerance > 0. {
+                    (a.outward(false), b.outward(true))
+                } else {
+                    (window.start, window.end)
+                };
+                append(&mut coords, &mut states, start, end, uncovered);
             } else {
-                Vec::new()
-            };
-            if edges.is_empty() {
-                coords.push(window.end);
-                states.push(if uncovered {
-                    Cover::Outside
-                } else {
-                    Cover::Inside
-                });
-                continue;
-            }
-            // Split the window where it enters and leaves channels.
-            let [channels, strips] = precision::Channels::new(&edges, tolerance).covered(window);
-            let within = |spans: &[[f64; 2]], t: f64| spans.iter().any(|s| s[0] <= t && t <= s[1]);
-            let mut ts = vec![0., 1.];
-            ts.extend(channels.iter().chain(&strips).flatten());
-            ts.sort_by(f64::total_cmp);
-            ts.dedup();
-            for pair in ts.windows(2) {
-                let end = crate::engine::matching::point(window, pair[1]);
-                if coords.last() == Some(&end) {
-                    continue;
+                for [start, end] in
+                    proximity::outside(a.exact().clone(), b.exact().clone(), &covered)
+                {
+                    append(
+                        &mut coords,
+                        &mut states,
+                        start.outward(segment, false),
+                        end.outward(segment, true),
+                        true,
+                    );
                 }
-                let middle = (pair[0] + pair[1]) / 2.;
-                coords.push(end);
-                states.push(if within(&strips, middle) {
-                    Cover::Inside
-                } else if within(&channels, middle) {
-                    Cover::Corner
-                } else {
-                    Cover::Outside
-                });
+                // Retain covered portions and input vertices between residual
+                // runs, without adding any artificial semantic joins.
+                if coords.last() != Some(&window.end) {
+                    let start = coords.last().copied().unwrap_or(window.start);
+                    append(&mut coords, &mut states, start, window.end, false);
+                }
             }
         }
     }
-    // A run of outside and corner pieces is outside when it has an outside
-    // piece. Corners only fill the gaps between strips, so they count toward
-    // the length of what lies beside them but never stand alone.
-    let selected = states
-        .iter()
-        .map(|&state| state != Cover::Inside)
-        .collect::<Vec<_>>();
-    selected_runs(&coords, &selected)
+    selected_runs(&coords, &states)
         .into_iter()
-        .filter(|run| {
-            // The piece between consecutive coordinates is the lower index. A
-            // closed path that joins across its seam has one pair that is not
-            // consecutive, which is piece 0.
-            run.windows(2)
-                .any(|w| states[if w[1] == w[0] + 1 { w[0] } else { 0 }] == Cover::Outside)
-        })
         .map(|run| LineString(run.into_iter().map(|i| coords[i]).collect()))
         .collect()
-}
-/// How a piece of a line lies against the target polygons.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Cover {
-    Inside,
-    /// Outside the polygons, in a gap closed only by a corner fan.
-    Corner,
-    Outside,
 }
 /// Target boundary segments within `distance` of `segment`, directed with the
 /// covered side on their left, each with the far end of the next segment.
