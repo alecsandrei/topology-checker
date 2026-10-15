@@ -115,10 +115,20 @@ fn crack_path() -> impl Strategy<Value = LineString> {
     ];
     let coordinate = (14i32..27, offset).prop_map(|(k, o)| f64::from(k) / 2. + o);
     prop::collection::vec((coordinate.clone(), coordinate), 2..5).prop_filter_map(
-        "distinct vertices",
-        |mut c| {
-            c.dedup();
-            (c.len() >= 2).then(|| LineString::from(c))
+        "vertices apart",
+        |c| {
+            // A segment shorter than the tolerance is never reported, wherever
+            // it lies, so keep the vertices well apart.
+            let mut kept: Vec<(f64, f64)> = vec![];
+            for p in c {
+                if kept
+                    .last()
+                    .is_none_or(|q| (p.0 - q.0).hypot(p.1 - q.1) >= 0.25)
+                {
+                    kept.push(p);
+                }
+            }
+            (kept.len() >= 2).then(|| LineString::from(kept))
         },
     )
 }
