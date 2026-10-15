@@ -5246,3 +5246,204 @@ fn splitting_parts_at_vertices_or_merging_them_end_to_end_keeps_line_contacts() 
         }
     }
 }
+/// Whether a reported piece has `c` as a vertex, and the total reported length.
+fn outside_run(pieces: &[Violation], c: Coord) -> (bool, f64) {
+    let has = |l: &LineString| l.0.contains(&c);
+    let found = pieces.iter().any(|v| match &v.geometry {
+        Geometry::LineString(l) => has(l),
+        Geometry::MultiLineString(m) => m.0.iter().any(has),
+        _ => false,
+    });
+    (found, reported_length(pieces))
+}
+#[test]
+fn a_rotated_edge_line_reports_the_stretch_beyond_the_corner() {
+    // The line runs along the top edge to within rounding and starts about
+    // 0.0195 beyond the corner.
+    let square = Polygon::new(
+        LineString::from(vec![
+            (1.680334743798507, -1.2433823034288607),
+            (11.243382303428861, 1.680334743798507),
+            (8.319665256201493, 11.243382303428861),
+            (-1.2433823034288607, 8.319665256201493),
+            (1.680334743798507, -1.2433823034288607),
+        ]),
+        vec![],
+    );
+    let start = coord! {x: 8.338313198942773, y: 11.249083551670955};
+    let beyond = (start.x - 8.319665256201493_f64).hypot(start.y - 11.243382303428861);
+    let l = line(&[(start.x, start.y), (2.581836720423281, 9.48915207509244)]);
+    for tolerance in [0., 0.001, 0.01] {
+        let pieces = run(
+            Rule::LineMustBeInside,
+            vec![l.clone()],
+            vec![square.clone().into()],
+            tolerance,
+        );
+        let (found, length) = outside_run(&pieces, start);
+        assert!(found, "{tolerance}: {pieces:?}");
+        assert!(length >= beyond - 1e-9, "{tolerance}: {pieces:?}");
+    }
+}
+#[test]
+fn edge_lines_beyond_a_corner_are_reported_at_any_rotation() {
+    // The line starts `d` beyond a corner of a square, along an edge, and is
+    // reported whichever side of the edge its rounding puts it on.
+    let mut state = 0x2545_f491_4f6c_dd1d_u64;
+    let mut random = move || {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        (state >> 11) as f64 / (1u64 << 53) as f64
+    };
+    for round in 0..600 {
+        let size = 4. + 40. * random();
+        let degrees = 360. * random();
+        let reach = [0., 1e2, 1e4, 5e6][round % 4];
+        let offset = (reach * (2. * random() - 1.), reach * (2. * random() - 1.));
+        let tolerance = [0., 0.001, 0.01, 1.][round / 4 % 4];
+        let beyond = if tolerance == 0. {
+            0.0195
+        } else {
+            tolerance * [1.2, 2., 5.][round % 3]
+        };
+        let square = polygon(0., 0., size)
+            .rotate_around_point(degrees, Point::new(0., 0.))
+            .translate(offset.0, offset.1);
+        // Start beyond the corner at (size, size), running left along the top edge.
+        let moved = |x: f64, y: f64| {
+            Point::new(x, y)
+                .rotate_around_point(degrees, Point::new(0., 0.))
+                .translate(offset.0, offset.1)
+        };
+        let (a, b) = (moved(size + beyond, size), moved(size * 0.3, size));
+        let l = line(&[(a.x(), a.y()), (b.x(), b.y())]);
+        let pieces = run(
+            Rule::LineMustBeInside,
+            vec![l],
+            vec![square.into()],
+            tolerance,
+        );
+        let (found, length) = outside_run(&pieces, a.0);
+        assert!(found, "round {round}: {pieces:?}");
+        assert!(
+            length >= beyond - 1e-6,
+            "round {round}: {length} for {beyond} at {tolerance}"
+        );
+    }
+}
+/// Total length of the pieces of the two-point line `ends` that lie outside
+/// the polygon with exterior `ring` and are longer than `tolerance`, from the
+/// exact cut points of the line.
+fn exact_outside(ends: [Coord; 2], ring: &[Coord], tolerance: f64) -> f64 {
+    let reference = exact_line_polygon::reference(&ends, &[ring.to_vec()]);
+    let along = |c: Coord| (c.x - ends[0].x).hypot(c.y - ends[0].y);
+    let mut gaps = vec![0.];
+    for run in &reference.runs {
+        let first = exact_line_polygon::rounded(&run.points[0]);
+        let last = exact_line_polygon::rounded(run.points.last().unwrap());
+        gaps.extend([along(first), along(last)]);
+    }
+    gaps.push(along(ends[1]));
+    gaps.chunks(2)
+        .map(|g| g[1] - g[0])
+        .filter(|&length| length > tolerance)
+        .sum()
+}
+/// Lines along every edge of the closed `ring` that start `d` beyond one of its
+/// ends and run to a point inside the edge or back to the end, and their
+/// mirror images.
+fn edge_lines(ring: &[(f64, f64)], d: f64) -> Vec<[(f64, f64); 2]> {
+    let mut lines = Vec::new();
+    for w in ring.windows(2) {
+        let (p, q) = (w[0], w[1]);
+        let length = (q.0 - p.0).hypot(q.1 - p.1);
+        let (ux, uy) = ((q.0 - p.0) / length, (q.1 - p.1) / length);
+        for (end, step, inward) in [
+            (
+                p,
+                (-ux, -uy),
+                (p.0 + 0.4 * (q.0 - p.0), p.1 + 0.4 * (q.1 - p.1)),
+            ),
+            (
+                q,
+                (ux, uy),
+                (q.0 - 0.4 * (q.0 - p.0), q.1 - 0.4 * (q.1 - p.1)),
+            ),
+        ] {
+            let beyond = (end.0 + d * step.0, end.1 + d * step.1);
+            lines.push([beyond, inward]);
+            lines.push([inward, beyond]);
+            lines.push([beyond, end]);
+        }
+    }
+    lines
+}
+/// Checks the reported outside length of `edge_lines` of `ring`, placed by
+/// each rotation and offset, against the exact outside length.
+fn check_edge_lines(ring: &[(f64, f64)], convex: bool) {
+    for degrees in [0., 1.1931, 17., 45., 73.7] {
+        for offset in [(0., 0.), (5e5, 1.8e5), (3e6, -2e6)] {
+            let place = |(x, y): (f64, f64)| {
+                let p = Point::new(x, y)
+                    .rotate_around_point(degrees, Point::new(0., 0.))
+                    .translate(offset.0, offset.1);
+                coord! {x: p.x(), y: p.y()}
+            };
+            let placed = ring.iter().map(|&c| place(c)).collect::<Vec<_>>();
+            let polygon = Polygon::new(LineString::new(placed.clone()), vec![]);
+            for tolerance in [0., 0.001, 0.01] {
+                let distances: [f64; 4] = if tolerance == 0. {
+                    [0.001, 0.01, 0.1, 0.1]
+                } else {
+                    [0.5, 1.2, 2., 5.].map(|factor| factor * tolerance)
+                };
+                for d in distances {
+                    for ends in edge_lines(ring, d) {
+                        let ends = ends.map(place);
+                        let expected = exact_outside(ends, &placed, tolerance);
+                        let pieces = run(
+                            Rule::LineMustBeInside,
+                            vec![line(&ends.map(|c| (c.x, c.y)))],
+                            vec![polygon.clone().into()],
+                            tolerance,
+                        );
+                        let length = reported_length(&pieces);
+                        assert!(
+                            (length - expected).abs() < 1e-7,
+                            "{degrees} {offset:?} tolerance {tolerance} {ends:?}: {length} for {expected}"
+                        );
+                        // The stretch beyond a convex corner is clearly outside.
+                        if convex && d > tolerance {
+                            assert!(length >= d - 1e-7, "{ends:?}: {length} for {d}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+#[test]
+fn edge_lines_report_their_outside_length_on_a_rotated_square() {
+    check_edge_lines(&[(0., 0.), (1., 0.), (1., 1.), (0., 1.), (0., 0.)], true);
+}
+#[test]
+fn edge_lines_report_their_outside_length_on_a_rotated_rectangle() {
+    check_edge_lines(&[(0., 0.), (3., 0.), (3., 1.), (0., 1.), (0., 0.)], true);
+}
+#[test]
+fn edge_lines_report_their_outside_length_on_a_rotated_l_shape() {
+    // Beyond the reflex corner an edge continues inside the polygon.
+    check_edge_lines(
+        &[
+            (0., 0.),
+            (2., 0.),
+            (2., 1.),
+            (1., 1.),
+            (1., 2.),
+            (0., 2.),
+            (0., 0.),
+        ],
+        false,
+    );
+}
