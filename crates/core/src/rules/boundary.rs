@@ -3,9 +3,11 @@ use super::{selected_pieces, violation};
 use crate::{
     Error, LayerId, RuleSpec, Topology, Violation, ViolationKind,
     aggregate::{Merge, aggregate},
-    engine::line_graph::InputMode,
+    engine::{cross, index, line_graph::InputMode, proximity},
 };
-use geo::{Euclidean, Length};
+use geo::{BoundingRect, Coord, Euclidean, Length, Line};
+use num_rational::BigRational as Q;
+use num_traits::{One, Zero};
 use std::collections::BTreeSet;
 
 /// Which noded linework must, or must not, coincide with the other layer's.
@@ -26,6 +28,9 @@ pub(super) fn linework(
     other: LayerId,
     mode: Boundary,
 ) -> Result<Vec<Violation>, Error> {
+    if mode != Boundary::NotShared {
+        return uncovered(t, spec, other, mode);
+    }
     let (primary, secondary) = if mode == Boundary::BoundariesCovered {
         (InputMode::PolygonBoundary, InputMode::Linework)
     } else {
@@ -108,4 +113,106 @@ pub(super) fn linework(
         }
     }
     Ok(aggregate(violations, Merge::AllDimensions))
+}
+
+fn uncovered(
+    t: &Topology,
+    spec: RuleSpec,
+    other: LayerId,
+    mode: Boundary,
+) -> Result<Vec<Violation>, Error> {
+    let source = t.parts(spec.layer)?;
+    let target = t.parts(other)?;
+    let source_lines = if mode == Boundary::BoundariesCovered {
+        cross::boundaries(source)
+    } else {
+        source.lines.as_slice()
+    };
+    let mut violations = Vec::new();
+    for source in source_lines {
+        crate::cancel::check();
+        let mut coords = Vec::<Coord>::new();
+        let mut selected = Vec::new();
+        for segment in source.geometry.lines() {
+            let query = index::expanded(segment.bounding_rect(), t.tolerance());
+            let mut covered = Vec::new();
+            let mut cover = |boundary| {
+                covered.extend(proximity::capsule(segment, boundary, t.tolerance()));
+            };
+            if mode == Boundary::BoundariesCovered {
+                let view = cross::segments(target);
+                for item in view.index.locate_in_envelope_intersecting(&query) {
+                    cover(view.segments[item.data].geometry);
+                }
+            } else {
+                let locations = crate::engine::location::locations(target);
+                for item in target
+                    .polygon_index()
+                    .locate_in_envelope_intersecting(&query)
+                {
+                    let location = &locations[item.data];
+                    for edge in location.tree.locate_in_envelope_intersecting(&query) {
+                        cover(location.segments[edge.data]);
+                    }
+                }
+            }
+            let covered = proximity::union(covered);
+            for [start, end] in proximity::outside(Q::zero(), Q::one(), &covered) {
+                append(
+                    &mut coords,
+                    &mut selected,
+                    segment,
+                    start.outward(segment, false),
+                    end.outward(segment, true),
+                    true,
+                );
+            }
+            // Covered intervals keep residual runs separate and preserve source
+            // vertices. No new path is inserted into the original geometry.
+            let start = coords.last().copied().unwrap_or(segment.start);
+            append(
+                &mut coords,
+                &mut selected,
+                segment,
+                start,
+                segment.end,
+                false,
+            );
+        }
+        violations.extend(
+            selected_pieces(&coords, &selected)
+                .into_iter()
+                .map(|piece| {
+                    violation(
+                        spec,
+                        ViolationKind::NotCovered,
+                        piece,
+                        Some(source.reference.at(spec.layer)),
+                        None,
+                    )
+                }),
+        );
+    }
+    Ok(aggregate(violations, Merge::AllDimensions))
+}
+
+fn append(
+    coords: &mut Vec<Coord>,
+    selected: &mut Vec<bool>,
+    segment: Line,
+    start: Coord,
+    end: Coord,
+    keep: bool,
+) {
+    if coords.is_empty() {
+        coords.push(segment.start);
+    }
+    if coords.last() != Some(&start) {
+        coords.push(start);
+        selected.push(false);
+    }
+    if coords.last() != Some(&end) {
+        coords.push(end);
+        selected.push(keep);
+    }
 }

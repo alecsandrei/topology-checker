@@ -1364,8 +1364,8 @@ fn line_polygon(rule: Rule) -> Vec<Case> {
             vec![]
         },
     ));
-    // The outside-piece fixture retains a long source. The other short
-    // whole-line fixtures also exercise graph input collapse.
+    // Required coverage keeps every residual beyond the distance band.
+    // Prohibited overlap also exercises the existing graph input collapse.
     if matches!(
         rule,
         Rule::LineMustBeInside
@@ -1378,7 +1378,10 @@ fn line_polygon(rule: Rule) -> Vec<Case> {
             ("piece-at", 0.25),
             ("piece-above", 0.25_f64.next_up()),
         ] {
-            let name = if rule == Rule::LineMustBeInside {
+            let name = if matches!(
+                rule,
+                Rule::LineMustBeInside | Rule::LineMustBeCoveredByPolygonBoundaries
+            ) {
                 name
             } else {
                 match name {
@@ -1398,7 +1401,7 @@ fn line_polygon(rule: Rule) -> Vec<Case> {
                 vec![if rule == Rule::LineMustBeInside {
                     one(K::Outside, l(&[(-length, 4.), (-0.25, 4.)]))
                 } else if rule == Rule::LineMustBeCoveredByPolygonBoundaries {
-                    one(K::NotCovered, g.clone())
+                    one(K::NotCovered, l(&[(0.25, 1.), (length, 1.)]))
                 } else {
                     pair(K::Overlap, g.clone(), true)
                 }]
@@ -2176,18 +2179,15 @@ fn polygon_boundary_coverage() -> Vec<Case> {
         out.push(case(rule, name, vec![a], b, 0., expected));
     }
     out.push(case(rule, "empty-input", vec![], vec![], 0., vec![]));
-    // The connected closed perimeter is tested against its total length, 8.
+    // An empty target cannot cover any perimeter, even when tolerance is
+    // at or above its total length.
     for (name, t) in [
         ("length-tolerance-below", 8_f64.next_down()),
         ("length-tolerance-at", 8.),
         ("length-tolerance-above", 8_f64.next_up()),
     ] {
         let g: Geometry = rect(0., 0., 2., 2.).into();
-        let expected = if t < 8. {
-            vec![one(K::NotCovered, perimeter(&g))]
-        } else {
-            vec![]
-        };
+        let expected = vec![one(K::NotCovered, perimeter(&g))];
         out.push(case(rule, name, vec![g], vec![], t, expected));
     }
     let far: Geometry = rect(12., 0., 8., 8.).into();
