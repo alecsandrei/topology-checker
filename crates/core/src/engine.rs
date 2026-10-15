@@ -9,5 +9,6 @@ pub(crate) mod matching;
 pub(crate) mod parameter;
 pub(crate) mod polygons;
 pub(crate) mod precision;
+pub(crate) mod proximity;
 pub(crate) mod storage;
 pub(crate) mod validity;

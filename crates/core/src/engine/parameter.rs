@@ -171,7 +171,7 @@ impl Parameter {
             y: directed(self.point.y, &exact[1], a.y, b.y),
         }
     }
-    fn exact(&self) -> &Q {
+    pub(crate) fn exact(&self) -> &Q {
         self.exact.get_or_init(|| match self.kind {
             Kind::Start => Q::zero(),
             Kind::End => Q::one(),

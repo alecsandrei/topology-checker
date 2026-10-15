@@ -1396,7 +1396,7 @@ fn line_polygon(rule: Rule) -> Vec<Case> {
             };
             let expected = if length > 0.25 {
                 vec![if rule == Rule::LineMustBeInside {
-                    one(K::Outside, l(&[(-length, 4.), (0., 4.)]))
+                    one(K::Outside, l(&[(-length, 4.), (-0.25, 4.)]))
                 } else if rule == Rule::LineMustBeCoveredByPolygonBoundaries {
                     one(K::NotCovered, g.clone())
                 } else {
