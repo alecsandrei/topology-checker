@@ -121,6 +121,17 @@ pub(crate) struct Endpoints {
     pub points: Vec<Part<Point>>,
     pub index: Index,
 }
+impl Endpoints {
+    /// Consecutive pairs retain the original ends of each exactly open part.
+    /// Closure belongs to this query's tolerance, never to the structural cache.
+    pub fn is_open(&self, i: usize, tolerance: f64) -> bool {
+        !super::proximity::coincident(
+            self.points[i].geometry.0,
+            self.points[i ^ 1].geometry.0,
+            tolerance,
+        )
+    }
+}
 pub(crate) fn endpoints(parts: &Parts) -> &Endpoints {
     parts.endpoints.get_or_init(|| {
         let points = parts

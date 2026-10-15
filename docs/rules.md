@@ -12,7 +12,7 @@ Run a rule as `topology-checker <group> <rule>`, or use `rule = "<group>/<rule>"
 | `point/must-not-overlap-with` | two point layers | Find duplicate points across two layers within the distance tolerance. |  |  |
 | `point/must-be-inside` | point layer + polygon layer | Find points outside the polygons, including points on or within the distance tolerance of their edges. | Must Be Properly Inside Polygons | Must be inside |
 | `point/must-be-covered-by-lines` | point layer + line layer | Find points without covering linework, including line endpoints. | Must Be Covered By (Point-Line) | Must be covered by |
-| `point/must-be-covered-by-line-endpoints` | point layer + line layer | Find points without a covering open line endpoint. Closed line parts have no endpoints. | Must Be Covered By Endpoint Of | Must be covered by endpoints of |
+| `point/must-be-covered-by-line-endpoints` | point layer + line layer | Find points without a covering open line endpoint. Line parts closed within tolerance have no endpoints. | Must Be Covered By Endpoint Of | Must be covered by endpoints of |
 | `point/must-be-covered-by-polygon-boundaries` | point layer + polygon layer | Find points away from polygon edges, including holes and shared parcel edges. | Must Be Covered By Boundary Of (Point-Area) |  |
 | `point/must-be-covered-by-polygons` | point layer + polygon layer | Find points outside polygon areas and farther than the tolerance from their edges. Boundary points are allowed. |  |  |
 | `point/must-not-be-inside-polygons` | point layer + polygon layer | Find points strictly inside polygons. Points on or within tolerance of their edges are allowed. |  |  |
@@ -34,14 +34,14 @@ Run a rule as `topology-checker <group> <rule>`, or use `rule = "<group>/<rule>"
 | `line/must-not-intersect-or-touch-interior-with` | two line layers | Find overlaps, crossings and endpoint touches on a line's interior across two layers. Touches only at both features' endpoints are allowed. A multipart line's endpoints are where an odd number of its parts end. | Must Not Intersect Or Touch Interior With |  |
 | `line/must-not-self-intersect` | one line layer | Find overlaps and crossings within one feature. Closed loops and self-touches are allowed. | Must Not Self-Intersect |  |
 | `line/must-be-inside` | line layer + polygon layer | Find line pieces outside the polygons and farther than the distance tolerance from their exterior or hole edges. Every remaining outside piece is reported, including short tails. | Must Be Inside |  |
-| `line/endpoints-must-be-covered-by-points` | line layer + point layer | Find open line endpoints without a covering point. Closed line parts have no endpoints. | Endpoint Must Be Covered By | End points must be covered by |
+| `line/endpoints-must-be-covered-by-points` | line layer + point layer | Find open line endpoints without a covering point. Line parts closed within tolerance have no endpoints. | Endpoint Must Be Covered By | End points must be covered by |
 | `line/must-be-covered-by-polygon-boundaries` | line layer + polygon layer | Find line pieces that do not follow polygon edges, including holes and shared edges. | Must Be Covered By Boundary Of (Line-Area) |  |
 | `line/must-not-cross-polygon-boundaries` | line layer + polygon layer | Find lines entering or leaving polygons through exterior or hole edges. Tangencies, endpoint touches and shared segments are allowed. |  |  |
 | `line/must-be-properly-inside-polygons` | line layer + polygon layer | Find whole line parts that leave polygon coverage or come within tolerance of its boundary. Gaps narrower than the tolerance are closed, except where polygons face each other only at corners, and may close up to 10% over it where they widen to an open end. |  |  |
 | `line/must-not-overlap-with-polygons` | line layer + polygon layer | Find line pieces inside polygons or along their edges, longer than tolerance. Isolated contacts are allowed. |  |  |
 | `line/must-not-overlap-polygon-boundaries` | line layer + polygon layer | Find line pieces shared with polygon edges, longer than tolerance. Crossings and isolated contacts are allowed. |  |  |
 | `line/must-not-intersect-polygons` | line layer + polygon layer | Find any line contact with polygons, including interior pieces, shared edges and isolated touches within tolerance. |  |  |
-| `line/endpoints-must-be-covered-by-polygon-boundaries` | line layer + polygon layer | Find open line endpoints away from polygon exterior or hole edges. Closed line parts have no endpoints. |  |  |
+| `line/endpoints-must-be-covered-by-polygon-boundaries` | line layer + polygon layer | Find open line endpoints away from polygon exterior or hole edges. Line parts closed within tolerance have no endpoints. |  |  |
 
 ## Polygons (7)
 
