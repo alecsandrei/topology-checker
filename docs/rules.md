@@ -8,15 +8,15 @@ Run a rule as `topology-checker <group> <rule>`, or use `rule = "<group>/<rule>"
 
 | Rule | Needs | Description | ArcGIS | QGIS |
 | --- | --- | --- | --- | --- |
-| `point/must-not-overlap` | one point layer | Find duplicate points within the distance tolerance. | Must Be Disjoint | Must not have duplicates |
-| `point/must-not-overlap-with` | two point layers | Find duplicate points across two layers within the distance tolerance. |  |  |
+| `point/must-not-overlap` | one point layer | Find duplicate points within the inclusive Euclidean distance tolerance. | Must Be Disjoint | Must not have duplicates |
+| `point/must-not-overlap-with` | two point layers | Find duplicate points across two layers within the inclusive Euclidean distance tolerance. |  |  |
 | `point/must-be-inside` | point layer + polygon layer | Find points outside the polygons, including points on or within the distance tolerance of their edges. | Must Be Properly Inside Polygons | Must be inside |
-| `point/must-be-covered-by-lines` | point layer + line layer | Find points without covering linework, including line endpoints. | Must Be Covered By (Point-Line) | Must be covered by |
+| `point/must-be-covered-by-lines` | point layer + line layer | Find points without linework within the inclusive distance tolerance, including line endpoints. | Must Be Covered By (Point-Line) | Must be covered by |
 | `point/must-be-covered-by-line-endpoints` | point layer + line layer | Find points without a covering open line endpoint. Line parts closed within tolerance have no endpoints. | Must Be Covered By Endpoint Of | Must be covered by endpoints of |
 | `point/must-be-covered-by-polygon-boundaries` | point layer + polygon layer | Find points away from polygon edges, including holes and shared parcel edges. | Must Be Covered By Boundary Of (Point-Area) |  |
 | `point/must-be-covered-by-polygons` | point layer + polygon layer | Find points outside polygon areas and farther than the tolerance from their edges. Boundary points are allowed. |  |  |
 | `point/must-not-be-inside-polygons` | point layer + polygon layer | Find points strictly inside polygons. Points on or within tolerance of their edges are allowed. |  |  |
-| `point/must-not-intersect-lines` | point layer + line layer | Find points touching linework anywhere, including endpoints, within tolerance. |  |  |
+| `point/must-not-intersect-lines` | point layer + line layer | Find points touching linework anywhere within the inclusive distance tolerance, including endpoints. |  |  |
 | `point/must-not-intersect-polygons` | point layer + polygon layer | Find points inside polygons or touching their edges within tolerance. |  |  |
 
 ## Lines (19)

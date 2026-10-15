@@ -1,8 +1,7 @@
 //! Reusable boundary and ray indexes over original polygon coordinates.
 use super::{
-    cluster::distance,
     index::{self, Index},
-    line_graph::projection,
+    proximity,
 };
 use geo::{
     BoundingRect, Coord, Kernel, Line, Polygon, Rect, Winding,
@@ -119,7 +118,7 @@ impl Location {
                     RobustKernel::orient2d(s.start, s.end, p) == Orientation::Collinear
                         && s.bounding_rect().contains_coord(p)
                 } else {
-                    distance(p, projection(s, p).1) <= tolerance
+                    proximity::near_segment(p, s, tolerance)
                 }
             })
     }
