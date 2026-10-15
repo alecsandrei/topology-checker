@@ -249,7 +249,18 @@ proptest! {
         use geo::{Distance,Euclidean};
         let points = points.into_iter().map(|(x,y)| Point::new(x as f64,y as f64)).collect::<Vec<_>>();
         for rule in [Rule::PointMustBeCoveredByLines,Rule::PointMustBeCoveredByLineEndpoints] {
-            let expected = points.iter().enumerate().filter(|(_,p)| !lines.iter().any(|l| if rule == Rule::PointMustBeCoveredByLines { Euclidean.distance(l,*p) <= tolerance } else { l.0.iter().any(|c| Euclidean.distance(&Point(*c),*p) <= tolerance) })).map(|(i,_)| i as i64).collect::<BTreeSet<_>>();
+            let expected = points.iter().enumerate().filter(|(_,p)| !lines.iter().any(|l| {
+                if rule == Rule::PointMustBeCoveredByLines {
+                    Euclidean.distance(l,*p) <= tolerance
+                } else {
+                    // Generated parts have two integer-coordinate ends. Their
+                    // squared separation gives an independent exact closure oracle.
+                    let dx = l.0[0].x - l.0[1].x;
+                    let dy = l.0[0].y - l.0[1].y;
+                    dx * dx + dy * dy > tolerance * tolerance
+                        && l.0.iter().any(|c| Euclidean.distance(&Point(*c),*p) <= tolerance)
+                }
+            })).map(|(i,_)| i as i64).collect::<BTreeSet<_>>();
             let r = check(points.iter().copied().map(Geometry::Point).collect(),Some(lines.iter().cloned().map(Geometry::LineString).collect()),rule,tolerance);
             prop_assert_eq!(r.violations().map(|e| e.origin.unwrap().fid).collect::<BTreeSet<_>>(),expected);
         }

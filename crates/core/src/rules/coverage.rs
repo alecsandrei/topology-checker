@@ -43,7 +43,12 @@ fn covered(point: &Point, target: Target, parts: &Parts, tolerance: f64) -> bool
         }
         Target::LineEndpoints => {
             let view = cross::endpoints(parts);
-            on_points(point, &view.points, &view.index, tolerance)
+            view.index
+                .locate_in_envelope_intersecting(&index::at(point.0, tolerance))
+                .any(|i| {
+                    view.is_open(i.data, tolerance)
+                        && distance(view.points[i.data].geometry.0, point.0) <= tolerance
+                })
         }
         Target::PolygonBoundaries => {
             let locations = crate::engine::location::locations(parts);
@@ -61,12 +66,17 @@ fn uncovered(
     other: LayerId,
     target: Target,
     sources: &[Part<Point>],
+    endpoints: Option<&cross::Endpoints>,
 ) -> Result<Vec<Violation>, Error> {
     let b = t.parts(other)?;
     let violations = sources
         .par_iter()
-        .filter(|p| !covered(&p.geometry, target, b, t.tolerance()))
-        .map(|p| {
+        .enumerate()
+        .filter(|(i, p)| {
+            endpoints.is_none_or(|ends| ends.is_open(*i, t.tolerance()))
+                && !covered(&p.geometry, target, b, t.tolerance())
+        })
+        .map(|(_, p)| {
             violation(
                 spec,
                 ViolationKind::NotCovered,
@@ -86,7 +96,7 @@ pub(super) fn points(
     other: LayerId,
     target: Target,
 ) -> Result<Vec<Violation>, Error> {
-    uncovered(t, spec, other, target, &t.parts(spec.layer)?.points)
+    uncovered(t, spec, other, target, &t.parts(spec.layer)?.points, None)
 }
 /// Report open line part endpoints that no target covers.
 pub(super) fn endpoints(
@@ -96,7 +106,7 @@ pub(super) fn endpoints(
     target: Target,
 ) -> Result<Vec<Violation>, Error> {
     let a = cross::endpoints(t.parts(spec.layer)?);
-    uncovered(t, spec, other, target, &a.points)
+    uncovered(t, spec, other, target, &a.points, Some(a))
 }
 /// Report each point within tolerance of a line part.
 pub(super) fn line_contacts(

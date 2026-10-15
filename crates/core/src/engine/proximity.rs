@@ -13,6 +13,23 @@ fn q(x: f64) -> Q {
     Q::from_float(x).expect("finite input")
 }
 
+/// Inclusive Euclidean coincidence of the original binary coordinates.
+pub(crate) fn coincident(a: Coord, b: Coord, tolerance: f64) -> bool {
+    if tolerance == 0. {
+        return a == b;
+    }
+    let difference = Interval(a.x, a.x)
+        .sub(Interval(b.x, b.x))
+        .square()
+        .add(Interval(a.y, a.y).sub(Interval(b.y, b.y)).square())
+        .sub(Interval(tolerance, tolerance).square());
+    if let Some(order) = difference.sign() {
+        return order.is_lt();
+    }
+    let (dx, dy) = (q(a.x) - q(b.x), q(a.y) - q(b.y));
+    &dx * &dx + &dy * &dy <= q(tolerance) * q(tolerance)
+}
+
 #[derive(Clone, Debug)]
 struct ExactCut {
     center: Q,
