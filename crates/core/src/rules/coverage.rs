@@ -3,10 +3,10 @@ use super::violation;
 use crate::{
     Error, LayerId, RuleSpec, Topology, Violation, ViolationKind,
     aggregate::{Merge, aggregate},
-    engine::{cluster::distance, cross, index},
+    engine::{cross, index, proximity},
     model::{Part, Parts},
 };
-use geo::{Distance, Euclidean, Line, Point};
+use geo::{Line, Point};
 use rayon::prelude::*;
 
 /// Secondary-layer features that cover a point within tolerance.
@@ -29,11 +29,11 @@ fn on_segments(
     tolerance: f64,
 ) -> bool {
     tree.locate_in_envelope_intersecting(&index::at(point.0, tolerance))
-        .any(|i| Euclidean.distance(&segments[i.data].geometry, point) <= tolerance)
+        .any(|i| proximity::near_segment(point.0, segments[i.data].geometry, tolerance))
 }
 fn on_points(point: &Point, points: &[Part<Point>], tree: &index::Index, tolerance: f64) -> bool {
     tree.locate_in_envelope_intersecting(&index::at(point.0, tolerance))
-        .any(|i| distance(points[i.data].geometry.0, point.0) <= tolerance)
+        .any(|i| proximity::coincident(points[i.data].geometry.0, point.0, tolerance))
 }
 fn covered(point: &Point, target: Target, parts: &Parts, tolerance: f64) -> bool {
     match target {
@@ -47,7 +47,7 @@ fn covered(point: &Point, target: Target, parts: &Parts, tolerance: f64) -> bool
                 .locate_in_envelope_intersecting(&index::at(point.0, tolerance))
                 .any(|i| {
                     view.is_open(i.data, tolerance)
-                        && distance(view.points[i.data].geometry.0, point.0) <= tolerance
+                        && proximity::coincident(view.points[i.data].geometry.0, point.0, tolerance)
                 })
         }
         Target::PolygonBoundaries => {
@@ -120,15 +120,18 @@ pub(super) fn line_contacts(
         .par_bridge()
         .filter_map(|(i, j)| {
             let (p, l) = (&a.points[i], &b.lines[j]);
-            (Euclidean.distance(l.geometry.as_ref(), &p.geometry) <= t.tolerance()).then(|| {
-                violation(
-                    spec,
-                    ViolationKind::Intersection,
-                    p.geometry,
-                    Some(p.reference.at(spec.layer)),
-                    Some(l.reference.at(other)),
-                )
-            })
+            l.geometry
+                .lines()
+                .any(|line| proximity::near_segment(p.geometry.0, line, t.tolerance()))
+                .then(|| {
+                    violation(
+                        spec,
+                        ViolationKind::Intersection,
+                        p.geometry,
+                        Some(p.reference.at(spec.layer)),
+                        Some(l.reference.at(other)),
+                    )
+                })
         })
         .collect();
     Ok(aggregate(violations, Merge::AllDimensions))

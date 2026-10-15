@@ -30,6 +30,51 @@ pub(crate) fn coincident(a: Coord, b: Coord, tolerance: f64) -> bool {
     &dx * &dx + &dy * &dy <= q(tolerance) * q(tolerance)
 }
 
+/// Inclusive distance to an original finite segment, with rational fallback.
+pub(crate) fn near_segment(point: Coord, line: Line, tolerance: f64) -> bool {
+    if tolerance == 0. {
+        if point.x < line.start.x.min(line.end.x)
+            || point.x > line.start.x.max(line.end.x)
+            || point.y < line.start.y.min(line.end.y)
+            || point.y > line.start.y.max(line.end.y)
+        {
+            return false;
+        }
+        if line.start.x == line.end.x
+            || line.start.y == line.end.y
+            || point == line.start
+            || point == line.end
+        {
+            return true;
+        }
+    }
+    let v = vector(line.start, line.end);
+    let offset = vector(line.start, point);
+    let parameter = idot(offset, v).div(idot(v, v));
+    let parameter = Interval(parameter.0.clamp(0., 1.), parameter.1.clamp(0., 1.));
+    let difference = offset[0]
+        .sub(parameter.mul(v[0]))
+        .square()
+        .add(offset[1].sub(parameter.mul(v[1])).square())
+        .sub(Interval(tolerance, tolerance).square());
+    if let Some(order) = difference.sign() {
+        return order.is_lt();
+    }
+    let [v, _, p] = exact_vectors(line, Line::new(point, point));
+    let length = dot(&v, &v);
+    let along = -dot(&p, &v);
+    let squared = q(tolerance) * q(tolerance);
+    if along <= Q::zero() || length.is_zero() {
+        dot(&p, &p) <= squared
+    } else if along >= length {
+        let offset = [&p[0] + &v[0], &p[1] + &v[1]];
+        dot(&offset, &offset) <= squared
+    } else {
+        let perpendicular = cross(&p, &v);
+        &perpendicular * &perpendicular <= squared * length
+    }
+}
+
 #[derive(Clone, Debug)]
 struct ExactCut {
     center: Q,

@@ -1,6 +1,6 @@
 use crate::{
     Error, LayerId, RuleSpec, Topology, Violation, ViolationKind,
-    engine::{cluster::distance, index},
+    engine::{index, proximity::coincident},
 };
 use rayon::prelude::*;
 
@@ -75,7 +75,7 @@ pub(crate) fn overlap_into<E>(
                 if spec.other.is_none() && ranks[&q.reference.fid] <= ranks[&fid] {
                     continue;
                 }
-                if distance(p.geometry.0, q.geometry.0) > t.tolerance() {
+                if !coincident(p.geometry.0, q.geometry.0, t.tolerance()) {
                     continue;
                 }
                 let reference = q.reference.at(other);
@@ -94,7 +94,7 @@ pub(crate) fn overlap_into<E>(
                 if indices.len() == 1
                     || b.point_feature(target)
                         .iter()
-                        .any(|q| distance(p.geometry.0, q.geometry.0) <= t.tolerance())
+                        .any(|q| coincident(p.geometry.0, q.geometry.0, t.tolerance()))
                 {
                     let reference = p.reference.at(spec.layer);
                     origin.get_or_insert(reference).aggregate(reference);
@@ -117,7 +117,7 @@ pub(crate) fn overlap_into<E>(
                         theirs.len() == 1
                             || own
                                 .iter()
-                                .any(|p| distance(p.geometry.0, q.geometry.0) <= t.tolerance())
+                                .any(|p| coincident(p.geometry.0, q.geometry.0, t.tolerance()))
                     })
                     .map(|q| {
                         (
