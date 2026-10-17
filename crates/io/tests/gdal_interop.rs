@@ -822,3 +822,109 @@ fn native_shapefile_writer_and_gdal_encoding_inputs() {
         "café"
     );
 }
+fn create_with_wkt(path: &Path, driver: &str, wkts: &[&str]) {
+    let mut ds = DriverManager::get_driver_by_name(driver)
+        .unwrap()
+        .create_vector_only(path)
+        .unwrap();
+    let l = ds
+        .create_layer(LayerOptions {
+            name: "mixed",
+            ty: OGRwkbGeometryType::wkbUnknown,
+            ..Default::default()
+        })
+        .unwrap();
+    l.create_defn_fields(&[
+        ("label", OGRFieldType::OFTString),
+        ("size", OGRFieldType::OFTReal),
+        ("count", OGRFieldType::OFTInteger),
+        ("big", OGRFieldType::OFTInteger64),
+        ("day", OGRFieldType::OFTDate),
+        ("moment", OGRFieldType::OFTDateTime),
+    ])
+    .unwrap();
+    for (i, wkt) in wkts.iter().enumerate() {
+        let mut f = Feature::new(l.defn()).unwrap();
+        f.set_field_string(0, &i.to_string()).unwrap();
+        f.set_field_double(1, 1.5).unwrap();
+        f.set_field_integer(2, 7).unwrap();
+        f.set_field_integer64(3, 9007199254740993).unwrap();
+        f.set_field_string(4, "2024-05-06").unwrap();
+        f.set_field_string(5, "2024-05-06 07:08:09").unwrap();
+        f.set_geometry(gdal::vector::Geometry::from_wkt(wkt).unwrap())
+            .unwrap();
+        f.create(&l).unwrap();
+    }
+}
+#[test]
+fn additional_drivers_convert_every_geometry_kind_and_field_type() {
+    let dir = tempfile::tempdir().unwrap();
+    let wkts = [
+        "POINT (1 2)",
+        "LINESTRING (0 0, 1 1)",
+        "POLYGON ((0 0, 10 0, 10 10, 0 0), (1 1, 2 1, 2 2, 1 1))",
+        "MULTILINESTRING ((0 0, 1 1), (2 2, 3 3))",
+        "MULTIPOLYGON (((0 0, 1 0, 1 1, 0 0)), ((5 5, 6 5, 6 6, 5 5)))",
+    ];
+    let path = dir.path().join("mixed.tab");
+    create_with_wkt(&path, "MapInfo File", &wkts);
+    let imported = read::read_with_attributes(&path, None, "mixed", true).unwrap();
+    assert_eq!(imported[0].layer.len(), wkts.len());
+    let first = &imported[0].attributes[0];
+    assert_eq!(first["size"], 1.5);
+    assert_eq!(first["count"], 7);
+    assert_eq!(first["big"], "9007199254740993");
+    assert_eq!(first["day"], "2024-05-06");
+    assert!(
+        first["moment"]
+            .as_str()
+            .unwrap()
+            .starts_with("2024-05-06 07:08:09")
+    );
+}
+fn wkt_csv(dir: &Path, name: &str, wkts: &[String]) -> std::path::PathBuf {
+    let path = dir.join(name);
+    let rows = wkts
+        .iter()
+        .enumerate()
+        .map(|(i, wkt)| format!("\"{wkt}\",{i}\n"))
+        .collect::<String>();
+    std::fs::write(&path, format!("WKT,label\n{rows}")).unwrap();
+    path
+}
+#[test]
+fn wkt_csv_exercises_empty_multi_and_collection_geometries() {
+    let dir = tempfile::tempdir().unwrap();
+    let wkts = [
+        "POINT (1 2)",
+        "POINT EMPTY",
+        "POLYGON EMPTY",
+        "MULTIPOINT ((1 1), (2 2))",
+        "MULTIPOINT (EMPTY, (3 3))",
+        "GEOMETRYCOLLECTION (POINT (1 1), POINT EMPTY, LINESTRING (0 0, 1 1))",
+        "GEOMETRYCOLLECTION (MULTIPOINT ((1 1)), GEOMETRYCOLLECTION (POLYGON ((0 0, 1 0, 1 1, 0 0))))",
+        "POLYGON Z ((0 0 1, 10 0 1, 10 10 1, 0 0 1), (1 1 1, 2 1 1, 2 2 1, 1 1 1))",
+    ]
+    .map(String::from);
+    let path = wkt_csv(dir.path(), "kinds.csv", &wkts);
+    let imported = read::read_with_attributes(&path, None, "kinds", true)
+        .unwrap()
+        .remove(0);
+    assert!(imported.layer.len() >= 5, "{:?}", imported.warnings);
+    assert!(imported.warnings.iter().any(|w| w.contains("empty")));
+    assert!(imported.warnings.iter().any(|w| w.contains("Z/M")));
+}
+#[test]
+fn unsupported_gdal_geometry_types_are_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = wkt_csv(
+        dir.path(),
+        "curve.csv",
+        &["CIRCULARSTRING (0 0, 1 1, 2 0)".to_string()],
+    );
+    let error = read::read(&path, None, "curve").unwrap_err();
+    assert!(
+        format!("{error:#}").contains("unsupported GDAL geometry"),
+        "{error:#}"
+    );
+}
