@@ -10,6 +10,14 @@ use topology_checker_io::{
 const GDAL_WEB_MERCATOR: &str = r#"PROJCS["WGS 84 / Pseudo-Mercator",GEOGCS["WGS 84",DATUM["WGS_1984",SPHEROID["WGS 84",6378137,298.257223563,AUTHORITY["EPSG","7030"]],AUTHORITY["EPSG","6326"]],PRIMEM["Greenwich",0,AUTHORITY["EPSG","8901"]],UNIT["degree",0.0174532925199433,AUTHORITY["EPSG","9122"]],AUTHORITY["EPSG","4326"]],PROJECTION["Mercator_1SP"],PARAMETER["central_meridian",0],PARAMETER["scale_factor",1],PARAMETER["false_easting",0],PARAMETER["false_northing",0],UNIT["metre",1,AUTHORITY["EPSG","9001"]],AXIS["Easting",EAST],AXIS["Northing",NORTH],EXTENSION["PROJ4","+proj=merc +a=6378137 +b=6378137 +lat_ts=0 +lon_0=0 +x_0=0 +y_0=0 +k=1 +units=m +nadgrids=@null +wktext +no_defs"],AUTHORITY["EPSG","3857"]]"#;
 const SPHERICAL_EXTENSION: &str = r#"EXTENSION["PROJ4","+proj=merc +a=6378137 +b=6378137 +lat_ts=0 +lon_0=0 +x_0=0 +y_0=0 +k=1 +units=m +nadgrids=@null +wktext +no_defs"],"#;
 
+/// An altered definition may be rejected, or read as some other CRS by the GDAL fallback (when
+/// built with it), but never as EPSG:3857.
+fn assert_not_web_mercator(definition: &str, message: &str) {
+    if let Ok(parsed) = crs::parse(definition) {
+        assert_ne!(parsed, crs::parse("EPSG:3857").unwrap(), "{message}");
+    }
+}
+
 #[test]
 fn gdal_web_mercator_definition_is_epsg_3857() {
     let parsed = crs::parse(GDAL_WEB_MERCATOR).unwrap();
@@ -18,10 +26,10 @@ fn gdal_web_mercator_definition_is_epsg_3857() {
 }
 
 #[test]
-fn ellipsoidal_mercator_tagged_as_web_mercator_is_still_rejected() {
+fn ellipsoidal_mercator_tagged_as_web_mercator_is_not_web_mercator() {
     assert!(GDAL_WEB_MERCATOR.contains(SPHERICAL_EXTENSION));
     let ellipsoidal = GDAL_WEB_MERCATOR.replace(SPHERICAL_EXTENSION, "");
-    assert!(crs::parse(&ellipsoidal).is_err());
+    assert_not_web_mercator(&ellipsoidal, "ellipsoidal Mercator");
 }
 
 #[test]
@@ -51,7 +59,7 @@ fn only_gdals_exact_definition_is_taken_for_epsg_3857() {
     ] {
         assert!(GDAL_WEB_MERCATOR.contains(from), "{from}");
         let altered = GDAL_WEB_MERCATOR.replace(from, to);
-        assert!(crs::parse(&altered).is_err(), "{to}");
+        assert_not_web_mercator(&altered, to);
     }
 }
 
