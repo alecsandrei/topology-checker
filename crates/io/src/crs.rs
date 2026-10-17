@@ -28,20 +28,24 @@ pub fn transform_between(from: &str, to: &str) -> Result<Rc<Transform>> {
     Ok(operation)
 }
 
+#[derive(Debug, Clone)]
+enum Backend {
+    Native(proj_core::CrsDef),
+    #[cfg(feature = "gdal-system")]
+    Fallback(gdal::spatial_ref::SpatialRef),
+}
 /// Repository-owned CRS with conventional longitude/easting first coordinates.
 #[derive(Debug, Clone)]
 pub struct Crs {
     definition: String,
-    native: Option<proj_core::CrsDef>,
-    #[cfg(feature = "gdal-system")]
-    fallback: Option<gdal::spatial_ref::SpatialRef>,
+    backend: Backend,
 }
 impl PartialEq for Crs {
     fn eq(&self, other: &Self) -> bool {
-        match (&self.native, &other.native) {
-            (Some(a), Some(b)) => a.semantically_equivalent(b),
+        match (&self.backend, &other.backend) {
+            (Backend::Native(a), Backend::Native(b)) => a.semantically_equivalent(b),
+            #[cfg(feature = "gdal-system")]
             _ => {
-                #[cfg(feature = "gdal-system")]
                 if let (Ok(a), Ok(b)) = (self.to_gdal(), other.to_gdal()) {
                     return a == b;
                 }
@@ -52,69 +56,51 @@ impl PartialEq for Crs {
 }
 impl Crs {
     pub fn is_geographic(&self) -> bool {
-        if let Some(s) = &self.native {
-            return s.is_geographic();
+        match &self.backend {
+            Backend::Native(s) => s.is_geographic(),
+            #[cfg(feature = "gdal-system")]
+            Backend::Fallback(s) => s.is_geographic(),
         }
-        #[cfg(feature = "gdal-system")]
-        if let Some(s) = &self.fallback {
-            return s.is_geographic();
-        }
-        false
     }
     pub fn is_projected(&self) -> bool {
-        if let Some(s) = &self.native {
-            return s.is_projected();
+        match &self.backend {
+            Backend::Native(s) => s.is_projected(),
+            #[cfg(feature = "gdal-system")]
+            Backend::Fallback(s) => s.is_projected(),
         }
-        #[cfg(feature = "gdal-system")]
-        if let Some(s) = &self.fallback {
-            return s.is_projected();
-        }
-        false
     }
     pub fn linear_units(&self) -> f64 {
-        if let Some(s) = &self.native {
-            return s.as_projected().map_or(1., |p| p.linear_unit_to_meter());
+        match &self.backend {
+            Backend::Native(s) => s.as_projected().map_or(1., |p| p.linear_unit_to_meter()),
+            #[cfg(feature = "gdal-system")]
+            Backend::Fallback(s) => s.linear_units(),
         }
-        #[cfg(feature = "gdal-system")]
-        if let Some(s) = &self.fallback {
-            return s.linear_units();
-        }
-        1.
     }
     pub fn epsg(&self) -> Option<u32> {
-        if let Some(s) = &self.native {
-            return (s.epsg() != 0).then_some(s.epsg());
+        match &self.backend {
+            Backend::Native(s) => (s.epsg() != 0).then_some(s.epsg()),
+            #[cfg(feature = "gdal-system")]
+            Backend::Fallback(s) => s.auth_code().ok().and_then(|c| c.try_into().ok()),
         }
-        #[cfg(feature = "gdal-system")]
-        if let Some(s) = &self.fallback {
-            return s.auth_code().ok().and_then(|c| c.try_into().ok());
-        }
-        None
     }
     /// Serialize the CRS as WKT, preserving custom definitions.
     /// # Errors
     /// Returns an error when the CRS cannot be represented as WKT.
     pub fn to_wkt(&self) -> Result<String> {
-        if let Some(s) = &self.native {
-            return Ok(proj_wkt::to_wkt(s)?);
+        match &self.backend {
+            Backend::Native(s) => Ok(proj_wkt::to_wkt(s)?),
+            #[cfg(feature = "gdal-system")]
+            Backend::Fallback(s) => Ok(s.to_wkt()?),
         }
-        #[cfg(feature = "gdal-system")]
-        if let Some(s) = &self.fallback {
-            return Ok(s.to_wkt()?);
-        }
-        bail!("unsupported CRS")
     }
     /// # Errors
     /// Returns an error when the CRS cannot be represented as PROJJSON.
     pub fn to_projjson(&self) -> Result<String> {
-        if let Some(s) = &self.native {
-            return Ok(proj_wkt::to_projjson(s)?);
+        match &self.backend {
+            Backend::Native(s) => Ok(proj_wkt::to_projjson(s)?),
+            #[cfg(feature = "gdal-system")]
+            Backend::Fallback(s) => Ok(s.to_projjson()?),
         }
-        #[cfg(feature = "gdal-system")]
-        if let Some(s) = &self.fallback {
-            return Ok(s.to_projjson()?);
-        }
-        bail!("unsupported CRS")
     }
     /// # Errors
     /// Returns an error for a custom CRS without an authority identifier.
@@ -124,14 +110,11 @@ impl Crs {
             .ok_or_else(|| anyhow::anyhow!("custom CRS has no authority"))
     }
     pub fn name(&self) -> Option<String> {
-        if let Some(s) = &self.native {
-            return Some(s.name().to_string());
+        match &self.backend {
+            Backend::Native(s) => Some(s.name().to_string()),
+            #[cfg(feature = "gdal-system")]
+            Backend::Fallback(s) => s.name(),
         }
-        #[cfg(feature = "gdal-system")]
-        if let Some(s) = &self.fallback {
-            return s.name();
-        }
-        None
     }
     pub fn angular_units_name(&self) -> Option<String> {
         self.is_geographic().then(|| "degree".into())
@@ -165,13 +148,10 @@ pub fn parse(definition: &str) -> Result<Crs> {
     } else {
         definition
     };
-    let native = proj_wkt::parse_crs(definition);
-    match native {
+    match proj_wkt::parse_crs(definition) {
         Ok(native) => Ok(Crs {
             definition: definition.into(),
-            native: Some(native),
-            #[cfg(feature = "gdal-system")]
-            fallback: None,
+            backend: Backend::Native(native),
         }),
         Err(error) => {
             #[cfg(feature = "gdal-system")]
@@ -182,8 +162,7 @@ pub fn parse(definition: &str) -> Result<Crs> {
                     s.set_axis_mapping_strategy(AxisMappingStrategy::TraditionalGisOrder);
                     return Ok(Crs {
                         definition: definition.into(),
-                        native: None,
-                        fallback: Some(s),
+                        backend: Backend::Fallback(s),
                     });
                 }
             }
@@ -191,12 +170,16 @@ pub fn parse(definition: &str) -> Result<Crs> {
         }
     }
 }
+#[derive(Debug)]
+enum Operation {
+    Native(Box<proj_core::Transform>),
+    #[cfg(feature = "gdal-system")]
+    Fallback(gdal::spatial_ref::CoordTransform),
+}
 /// A horizontal XY transformation. Native operations always take precedence.
 #[derive(Debug)]
 pub struct Transform {
-    native: Option<proj_core::Transform>,
-    #[cfg(feature = "gdal-system")]
-    fallback: Option<gdal::spatial_ref::CoordTransform>,
+    operation: Operation,
 }
 impl Transform {
     /// # Errors
@@ -204,16 +187,13 @@ impl Transform {
     pub fn new(from: &Crs, to: &Crs) -> Result<Self> {
         match proj_wkt::transform_from_crs_strings_horizontal(&from.definition, &to.definition) {
             Ok(native) => Ok(Self {
-                native: Some(native),
-                #[cfg(feature = "gdal-system")]
-                fallback: None,
+                operation: Operation::Native(Box::new(native)),
             }),
             Err(_error) => {
                 #[cfg(feature = "gdal-system")]
                 {
                     Ok(Self {
-                        native: None,
-                        fallback: Some(gdal::spatial_ref::CoordTransform::new(
+                        operation: Operation::Fallback(gdal::spatial_ref::CoordTransform::new(
                             &from.to_gdal()?,
                             &to.to_gdal()?,
                         )?),
@@ -233,22 +213,20 @@ impl Transform {
         if x.iter().chain(y.iter()).any(|v| !v.is_finite()) {
             bail!("non-finite input coordinates");
         }
-        if let Some(t) = &self.native {
-            let result = x
-                .iter()
-                .zip(y.iter())
-                .map(|(&x, &y)| t.convert((x, y)))
-                .collect::<std::result::Result<Vec<_>, _>>()?;
-            for ((x, y), (tx, ty)) in x.iter_mut().zip(y.iter_mut()).zip(result) {
-                *x = tx;
-                *y = ty;
+        match &self.operation {
+            Operation::Native(t) => {
+                let result = x
+                    .iter()
+                    .zip(y.iter())
+                    .map(|(&x, &y)| t.convert((x, y)))
+                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                for ((x, y), (tx, ty)) in x.iter_mut().zip(y.iter_mut()).zip(result) {
+                    *x = tx;
+                    *y = ty;
+                }
             }
-        } else {
             #[cfg(feature = "gdal-system")]
-            self.fallback
-                .as_ref()
-                .expect("transform backend")
-                .transform_coords(x, y, &mut [])?;
+            Operation::Fallback(t) => t.transform_coords(x, y, &mut [])?,
         }
         if x.iter().chain(y.iter()).any(|v| !v.is_finite()) {
             bail!("coordinate transformation produced non-finite coordinates");
@@ -258,21 +236,17 @@ impl Transform {
     /// # Errors
     /// Returns an error for invalid bounds, excessive densification or transformation failures.
     pub fn transform_bounds(&self, bounds: &[f64; 4], densify: i32) -> Result<[f64; 4]> {
-        if let Some(t) = &self.native {
-            let b = t.transform_bounds(
-                proj_core::Bounds::new(bounds[0], bounds[1], bounds[2], bounds[3]),
-                densify.try_into()?,
-            )?;
-            return Ok([b.min_x, b.min_y, b.max_x, b.max_y]);
+        match &self.operation {
+            Operation::Native(t) => {
+                let b = t.transform_bounds(
+                    proj_core::Bounds::new(bounds[0], bounds[1], bounds[2], bounds[3]),
+                    densify.try_into()?,
+                )?;
+                Ok([b.min_x, b.min_y, b.max_x, b.max_y])
+            }
+            #[cfg(feature = "gdal-system")]
+            Operation::Fallback(t) => Ok(t.transform_bounds(bounds, densify)?),
         }
-        #[cfg(feature = "gdal-system")]
-        return Ok(self
-            .fallback
-            .as_ref()
-            .expect("transform backend")
-            .transform_bounds(bounds, densify)?);
-        #[cfg(not(feature = "gdal-system"))]
-        bail!("unsupported bounds transformation")
     }
 }
 /// Transform every original coordinate, preserving geometry structure.
