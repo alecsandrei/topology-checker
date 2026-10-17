@@ -627,7 +627,9 @@ fn malformed_configs_fail_without_panicking() {
     let path = temp.path().join("topology.toml");
     for content in [
         "[layers]\n",
+        "rules = []\n[layers]\np = { path = 'points.geojson' }\n",
         "[layers]\np = { path = 'points.geojson' }\n[[rules]]\nrule = 'point/must-not-overlap'\nlayer = 'missing'\n",
+        "[layers]\np = { path = 'points.geojson' }\n[[rules]]\nrule = 'point/must-not-overlap-with'\nlayer = 'p'\nother = 'missing'\n",
         "[layers]\np = { path = 'points.geojson' }\n[[rules]]\nrule = 'point/must-not-overlap-with'\nlayer = 'p'\n",
     ] {
         std::fs::write(&path, content).unwrap();
