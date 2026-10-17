@@ -87,4 +87,31 @@ mod tests {
         assert!(result.unwrap());
         assert_eq!(*cache.get_or_init(|| 99), 7);
     }
+
+    #[test]
+    fn a_panicking_initializer_does_not_poison_later_callers() {
+        let cache = Cache::new();
+        let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            cache.get_or_init(|| -> u8 { panic!("initializer failed") });
+        }));
+        assert!(failed.is_err());
+        assert_eq!(*cache.get_or_init(|| 7), 7);
+    }
+
+    #[test]
+    fn waiters_retry_until_a_slow_initializer_finishes() {
+        let cache = Arc::new(Cache::new());
+        let (started, owner_started) = mpsc::channel();
+        let owner_cache = Arc::clone(&cache);
+        let owner = std::thread::spawn(move || {
+            *owner_cache.get_or_init(|| {
+                started.send(()).unwrap();
+                std::thread::sleep(std::time::Duration::from_millis(60));
+                3
+            })
+        });
+        owner_started.recv().unwrap();
+        assert_eq!(*cache.get_or_init(|| 4), 3);
+        assert_eq!(owner.join().unwrap(), 3);
+    }
 }

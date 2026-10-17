@@ -128,14 +128,35 @@ mod tests {
         }
         let docs = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs"));
         // The published crate has no docs/ to keep current.
-        if !docs.is_dir() {
-            return;
+        if docs.is_dir() {
+            write_if_changed(&docs.join("rules.md"), &text);
         }
-        let path = docs.join("rules.md");
-        let current = std::fs::read_to_string(&path).map(|t| t.replace("\r\n", "\n"));
-        if current.ok().as_ref() != Some(&text) {
+    }
+
+    fn write_if_changed(path: &std::path::Path, text: &str) {
+        let current = std::fs::read_to_string(path).map(|t| t.replace("\r\n", "\n"));
+        if current.ok().as_deref() != Some(text) {
             std::fs::write(path, text).unwrap();
         }
+    }
+
+    #[test]
+    fn stale_or_missing_reference_files_are_rewritten() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rules.md");
+        write_if_changed(&path, "a\n");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "a\n");
+        write_if_changed(&path, "b\n");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "b\n");
+        // Windows checkouts compare equal after normalising line endings.
+        std::fs::write(&path, "b\r\n").unwrap();
+        write_if_changed(&path, "b\n");
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "b\r\n");
+    }
+
+    #[test]
+    fn layer_labels_cover_every_geometry_kind() {
+        assert_eq!(layer(GeometryKind::Collection), "geometry collection layer");
     }
 
     #[test]

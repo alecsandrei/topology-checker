@@ -14,6 +14,8 @@ pub(crate) struct Feature {
     pub points: Vec<Point>,
     pub locations: Vec<super::location::Location>,
     pub area: Option<super::precision::Geometry>,
+    /// Parts that are not polygons, emitted next to the union of the polygon parts.
+    pub non_areal: Vec<Geometry>,
 }
 #[derive(Debug, Default)]
 pub(crate) struct Views {
@@ -75,6 +77,15 @@ pub(crate) fn views(parts: &Parts) -> &Views {
                     .collect();
                 let area = (polygons.len() > 1)
                     .then(|| super::arrangement::overlay(&polygons, std::iter::empty(), false));
+                let non_areal = if area.is_some() {
+                    geometries
+                        .iter()
+                        .filter(|g| !matches!(g, Geometry::Polygon(_)))
+                        .cloned()
+                        .collect()
+                } else {
+                    Vec::new()
+                };
                 let geometry = if area.is_some() {
                     Geometry::GeometryCollection(geo::GeometryCollection(geometries))
                 } else {
@@ -82,6 +93,7 @@ pub(crate) fn views(parts: &Parts) -> &Views {
                 };
                 Feature {
                     area,
+                    non_areal,
                     locations,
                     reference: PartRef { fid, part: None },
                     geometry,
@@ -197,15 +209,7 @@ impl Feature {
         let Some(area) = &self.area else {
             return Ok(self.geometry.clone());
         };
-        let mut geometries = if let Geometry::GeometryCollection(parts) = &self.geometry {
-            parts
-                .iter()
-                .filter(|g| !matches!(g, Geometry::Polygon(_)))
-                .cloned()
-                .collect::<Vec<_>>()
-        } else {
-            Vec::new()
-        };
+        let mut geometries = self.non_areal.clone();
         geometries.push(area.emit(0.)?.into());
         Ok(Merge::AllDimensions.geometry(geometries))
     }

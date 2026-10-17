@@ -325,24 +325,11 @@ fn utility(
         .unwrap_or_else(|| read::default_tolerance(srs.as_ref()));
     let (mut t, ids, mut warnings) = collect(layers, tolerance)?;
     let mut geometries = Vec::new();
-    fn extract(g: &geo::Geometry, lines: &mut Vec<geo::LineString>) {
-        match g {
-            geo::Geometry::Line(l) => lines.push((*l).into()),
-            geo::Geometry::LineString(l) => lines.push(l.clone()),
-            geo::Geometry::MultiLineString(m) => lines.extend(m.0.iter().cloned()),
-            geo::Geometry::GeometryCollection(c) => {
-                for g in c {
-                    extract(g, lines);
-                }
-            }
-            _ => {}
-        }
-    }
     for id in ids {
         t.add_rule(Rule::LineMustNotHaveDangles, id, None)?;
         let mut lines = Vec::new();
         for (_, g) in t.layer(id)?.features() {
-            extract(g, &mut lines);
+            extract_lines(g, &mut lines);
         }
         let output = if name == "merge-lines" {
             topology_checker_core::merge_lines(lines, tolerance)?
@@ -380,6 +367,20 @@ fn utility(
         let _ = writeln!(diagnostics, "warning: {warning}");
     }
     Ok(0)
+}
+
+fn extract_lines(g: &geo::Geometry, lines: &mut Vec<geo::LineString>) {
+    match g {
+        geo::Geometry::Line(l) => lines.push((*l).into()),
+        geo::Geometry::LineString(l) => lines.push(l.clone()),
+        geo::Geometry::MultiLineString(m) => lines.extend(m.0.iter().cloned()),
+        geo::Geometry::GeometryCollection(c) => {
+            for g in c {
+                extract_lines(g, lines);
+            }
+        }
+        _ => {}
+    }
 }
 
 #[cfg(test)]
@@ -437,6 +438,26 @@ mod tests {
             args.push("rules".into());
         }
         cli::command().try_get_matches_from(args).unwrap()
+    }
+
+    #[test]
+    fn line_extraction_flattens_every_linear_geometry_and_skips_the_rest() {
+        let line = geo::LineString::from(vec![(0., 0.), (1., 0.)]);
+        let geometries = [
+            geo::Geometry::Line(geo::Line::new((0., 0.), (1., 0.))),
+            geo::Geometry::LineString(line.clone()),
+            geo::Geometry::MultiLineString(geo::MultiLineString(vec![line.clone(), line.clone()])),
+            geo::Geometry::GeometryCollection(geo::GeometryCollection(vec![
+                geo::Geometry::LineString(line.clone()),
+                geo::Geometry::Point(geo::Point::new(5., 5.)),
+            ])),
+            geo::Geometry::Point(geo::Point::new(1., 1.)),
+        ];
+        let mut lines = Vec::new();
+        for g in &geometries {
+            extract_lines(g, &mut lines);
+        }
+        assert_eq!(lines, vec![line; 5]);
     }
 
     #[test]

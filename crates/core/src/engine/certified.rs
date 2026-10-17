@@ -99,3 +99,19 @@ pub(super) fn compare(a: &Exact, b: &Exact, axis: usize) -> Ordering {
         a.1.cmp(&b.1)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn products_beyond_the_float_range_are_unbounded() {
+        let huge = Interval(1e200, 1e200);
+        let product = huge.mul(huge);
+        assert_eq!((product.0, product.1), (f64::NEG_INFINITY, f64::INFINITY));
+        assert_eq!(product.sign(), None);
+        let small = Interval(2., 3.).mul(Interval(-5., -4.));
+        assert!(small.0 <= -15. && small.1 >= -8.);
+        assert_eq!(small.sign(), Some(Ordering::Less));
+    }
+}

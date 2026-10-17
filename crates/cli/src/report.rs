@@ -63,13 +63,8 @@ pub fn print(
                     .collect::<Vec<_>>()
                     .join(", ")
             };
-            writeln!(
-                output,
-                "{:<55} {:<30} {}",
-                row.spec.rule.name(),
-                layers,
-                counts
-            )?;
+            let line = format!("{:<55} {:<30} {}", row.spec.rule.name(), layers, counts);
+            writeln!(output, "{line}")?;
         }
         writeln!(output, "{} topology errors", report.violation_count())?;
     }

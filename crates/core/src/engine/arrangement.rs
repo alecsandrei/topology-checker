@@ -79,11 +79,7 @@ pub(super) fn orient(a: &Exact, b: &Exact, c: &Exact) -> Q {
         .sub(by.sub(ay).mul(cx.sub(ax)))
         .sign()
     {
-        return Q::from_integer(match order {
-            Ordering::Less => (-1).into(),
-            Ordering::Greater => 1.into(),
-            Ordering::Equal => 0.into(),
-        });
+        return Q::from_integer(if order.is_gt() { 1 } else { -1 }.into());
     }
     let (ax, ay) = a.xy();
     let (bx, by) = b.xy();
@@ -204,13 +200,12 @@ fn ends(edge: usize, edges: &[Edge]) -> [usize; 2] {
 pub(super) fn angle(a: &Exact, b: &Exact, origin: &Exact) -> Ordering {
     if let (Exact::Input(a), Exact::Input(b), Exact::Input(o)) = (a, b, origin) {
         let half = |p: &Coord| p.y < o.y || p.y == o.y && p.x < o.x;
-        return half(a)
-            .cmp(&half(b))
-            .then_with(|| match RobustKernel::orient2d(*o, *a, *b) {
-                Orientation::Clockwise => Ordering::Greater,
-                Orientation::CounterClockwise => Ordering::Less,
-                Orientation::Collinear => Ordering::Equal,
-            });
+        return half(a).cmp(&half(b)).then_with(|| {
+            let turn = RobustKernel::orient2d(*o, *a, *b);
+            // Collinear rays have no turn and compare equal.
+            i8::from(turn == Orientation::Clockwise)
+                .cmp(&i8::from(turn == Orientation::CounterClockwise))
+        });
     }
     let half = |p: &Exact| {
         let y = certified::compare(p, origin, 1);
@@ -237,23 +232,22 @@ fn witness(h: usize, edges: &[Edge], nodes: &[Exact], tree: &index::Index) -> Ex
     let my = (&ay + &by) / &two;
     let middle = Exact::rational(mx.clone(), my.clone());
     let mut divisor = Q::from_integer(1_048_576.into());
-    for _ in 0..4096 {
-        let p = Exact::rational(&mx - (&by - &ay) / &divisor, &my + (&bx - &ax) / &divisor);
-        let clear = tree
-            .locate_in_envelope_intersecting(&envelope(middle.output(), p.output()))
-            .all(|item| {
-                if item.data == h / 2 {
-                    return true;
-                }
-                let [c, d] = edges[item.data].nodes;
-                !intersects(&middle, &p, &nodes[c], &nodes[d])
-            });
-        if clear {
-            return p;
-        }
-        divisor *= &two;
-    }
-    panic!("rational face witness failed to make progress");
+    (0..4096)
+        .find_map(|_| {
+            let p = Exact::rational(&mx - (&by - &ay) / &divisor, &my + (&bx - &ax) / &divisor);
+            divisor *= &two;
+            let clear = tree
+                .locate_in_envelope_intersecting(&envelope(middle.output(), p.output()))
+                .all(|item| {
+                    if item.data == h / 2 {
+                        return true;
+                    }
+                    let [c, d] = edges[item.data].nodes;
+                    !intersects(&middle, &p, &nodes[c], &nodes[d])
+                });
+            clear.then_some(p)
+        })
+        .expect("rational face witness within 4096 refinements")
 }
 fn contains_exact(location: &Location, point: &Exact) -> bool {
     position_exact(location, point) == 1
@@ -539,10 +533,12 @@ fn component(polygons: &[(&Polygon, usize)], intersection: bool) -> super::preci
                 }
                 cycle.extend(tail);
                 cycle.push(id);
-                match super::precision::area_sign(&nodes, &cycle) {
-                    Ordering::Greater => shells.push(cycle),
-                    Ordering::Less => holes.push(cycle),
-                    Ordering::Equal => {}
+                // A cycle without area bounds no face.
+                let sign = super::precision::area_sign(&nodes, &cycle);
+                if sign.is_gt() {
+                    shells.push(cycle);
+                } else if sign.is_lt() {
+                    holes.push(cycle);
                 }
             } else {
                 positions.insert(id, path.len());
@@ -585,12 +581,15 @@ pub(crate) fn overlay<'a>(
         let mut group = Vec::new();
         while let Some(i) = queue.pop_front() {
             group.push(polygons[i]);
-            if let Some(rect) = polygons[i].0.bounding_rect() {
-                for item in tree.locate_in_envelope_intersecting(&index::envelope(rect)) {
-                    if !visited[item.data] {
-                        visited[item.data] = true;
-                        queue.push_back(item.data);
-                    }
+            let touching = polygons[i]
+                .0
+                .bounding_rect()
+                .into_iter()
+                .flat_map(|rect| tree.locate_in_envelope_intersecting(&index::envelope(rect)));
+            for item in touching {
+                if !visited[item.data] {
+                    visited[item.data] = true;
+                    queue.push_back(item.data);
                 }
             }
         }
@@ -726,5 +725,25 @@ mod tests {
                 &mut ids
             )
         );
+    }
+
+    #[test]
+    fn intersections_need_both_operands_and_infinite_boxes_are_undecided() {
+        let square = Rect::new(Coord { x: 0., y: 0. }, Coord { x: 4., y: 4. }).to_polygon();
+        assert!(overlay([&square], [], true).0.is_empty());
+        assert_eq!(overlay([&square], [], false).0.len(), 1);
+        let location = Location::new(&square);
+        let unbounded = certified::Interval(f64::NEG_INFINITY, f64::INFINITY);
+        let point = certified::Interval(2., 2.);
+        assert_eq!(certified_position(&location, [unbounded, point]), None);
+        assert_eq!(certified_position(&location, [point, unbounded]), None);
+        // Edges that end exactly at the lower bound of the query band and lie to
+        // its right cannot touch the box.
+        let triangle = Location::new(&Polygon::new(
+            geo::LineString::from(vec![(3., 0.), (5., 0.), (4., 3.), (3., 0.)]),
+            vec![],
+        ));
+        let band = [certified::Interval(1., 1.), certified::Interval(3., 3.5)];
+        assert_eq!(certified_position(&triangle, band), Some(-1));
     }
 }

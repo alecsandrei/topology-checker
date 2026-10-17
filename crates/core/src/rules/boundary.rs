@@ -10,34 +10,26 @@ use num_rational::BigRational as Q;
 use num_traits::{One, Zero};
 use std::collections::BTreeSet;
 
-/// Which noded linework must, or must not, coincide with the other layer's.
+/// Which noded linework must coincide with the other layer's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum Boundary {
     /// Line pieces must lie on polygon boundaries.
     LinesCovered,
     /// Polygon boundary pieces must lie on lines.
     BoundariesCovered,
-    /// Line pieces must not lie on polygon boundaries.
-    NotShared,
 }
 
-/// Report primary pieces longer than tolerance that violate the coverage requirement.
-pub(super) fn linework(
+/// Report line pieces longer than tolerance that lie on polygon boundaries.
+pub(super) fn shared(
     t: &Topology,
     spec: RuleSpec,
     other: LayerId,
-    mode: Boundary,
 ) -> Result<Vec<Violation>, Error> {
-    if mode != Boundary::NotShared {
-        return uncovered(t, spec, other, mode);
-    }
-    let (primary, secondary) = if mode == Boundary::BoundariesCovered {
-        (InputMode::PolygonBoundary, InputMode::Linework)
-    } else {
-        (InputMode::Linework, InputMode::PolygonBoundary)
-    };
-    let graph = t.graph_inputs(vec![(spec.layer, primary), (other, secondary)])?;
-    let overlap = mode == Boundary::NotShared;
+    let inputs = vec![
+        (spec.layer, InputMode::Linework),
+        (other, InputMode::PolygonBoundary),
+    ];
+    let graph = t.graph_inputs(inputs)?;
     let mut coverage = vec![Vec::new(); graph.parts.len()];
     for m in graph.matches() {
         let [a, b] = m.sources.map(|s| graph.segment(s));
@@ -59,17 +51,12 @@ pub(super) fn linework(
             continue;
         }
         let targets = &coverage[part_id];
-        let destinations = if overlap {
-            targets
-                .iter()
-                .map(|x| x.2)
-                .collect::<BTreeSet<_>>()
-                .into_iter()
-                .map(Some)
-                .collect::<Vec<_>>()
-        } else {
-            vec![None]
-        };
+        let destinations = targets
+            .iter()
+            .map(|x| x.2)
+            .collect::<BTreeSet<_>>()
+            .into_iter()
+            .collect::<Vec<_>>();
         let original = graph.original(part_id);
         let mut cuts = (0..original.0.len()).map(|i| i as f64).collect::<Vec<_>>();
         cuts.extend(targets.iter().flat_map(|&(a, b, _)| [a, b]));
@@ -89,24 +76,19 @@ pub(super) fn linework(
             let selected = cuts
                 .windows(2)
                 .map(|pair| {
-                    let covered = targets.iter().any(|&(a, b, r)| {
-                        pair[0] >= a && pair[1] <= b && destination.is_none_or(|d| d == r)
-                    });
-                    if overlap { covered } else { !covered }
+                    targets
+                        .iter()
+                        .any(|&(a, b, r)| pair[0] >= a && pair[1] <= b && destination == r)
                 })
                 .collect::<Vec<_>>();
             for piece in selected_pieces(&coords, &selected) {
                 if Euclidean.length(&piece) > t.tolerance() {
                     violations.push(violation(
                         spec,
-                        if overlap {
-                            ViolationKind::Overlap
-                        } else {
-                            ViolationKind::NotCovered
-                        },
+                        ViolationKind::Overlap,
                         piece,
                         Some(part.reference),
-                        destination,
+                        Some(destination),
                     ));
                 }
             }
@@ -115,7 +97,7 @@ pub(super) fn linework(
     Ok(aggregate(violations, Merge::AllDimensions))
 }
 
-fn uncovered(
+pub(super) fn uncovered(
     t: &Topology,
     spec: RuleSpec,
     other: LayerId,

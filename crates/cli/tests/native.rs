@@ -216,3 +216,63 @@ fn precision_failure_never_publishes_an_export_or_successful_summary() {
         "keep existing output"
     );
 }
+
+#[test]
+fn usage_and_input_errors_exit_with_status_two() {
+    let dir = tempfile::tempdir().unwrap();
+    let points = dir.path().join("points.geojson");
+    std::fs::write(
+        &points,
+        json!({"type":"FeatureCollection","features":[{"type":"Feature","properties":{},"geometry":{"type":"Point","coordinates":[5,52]}}]}).to_string(),
+    )
+    .unwrap();
+    let missing = dir.path().join("missing.geojson");
+    let usage = cargo_bin_cmd!("topology-checker")
+        .arg("--no-such-flag")
+        .assert()
+        .code(2)
+        .get_output()
+        .stderr
+        .clone();
+    assert!(String::from_utf8_lossy(&usage).contains("--no-such-flag"));
+    cargo_bin_cmd!("topology-checker")
+        .args(["point", "must-be-covered-by-lines"])
+        .arg(&points)
+        .arg("--other")
+        .arg(&missing)
+        .assert()
+        .code(2);
+    cargo_bin_cmd!("topology-checker")
+        .args(["utilities", "merge-lines"])
+        .arg(&missing)
+        .arg("-o")
+        .arg(dir.path().join("merged.geojson"))
+        .assert()
+        .code(2);
+}
+
+#[test]
+fn utilities_refuse_to_replace_existing_outputs() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("lines.geojson");
+    let layer = DatasetLayer::new(
+        "lines",
+        Some(crs::parse("EPSG:4326").unwrap()),
+        vec![Record {
+            id: Some(1),
+            geometry: Some(LineString::from(vec![(5., 52.), (6., 53.)]).into()),
+            properties: Map::new(),
+        }],
+    );
+    write::dataset(&input, None, false, &[layer]).unwrap();
+    let output = dir.path().join("merged.geojson");
+    std::fs::write(&output, "keep").unwrap();
+    cargo_bin_cmd!("topology-checker")
+        .args(["utilities", "merge-lines"])
+        .arg(&input)
+        .arg("-o")
+        .arg(&output)
+        .assert()
+        .code(2);
+    assert_eq!(std::fs::read_to_string(&output).unwrap(), "keep");
+}

@@ -264,4 +264,24 @@ mod tests {
             Geometry::GeometryCollection(GeometryCollection(Vec::new()))
         );
     }
+
+    #[test]
+    fn convenience_geometries_collect_as_lines_and_polygons() {
+        let line = geo::Line::new(coord! {x: 0., y: 0.}, coord! {x: 1., y: 0.});
+        let triangle = geo::Triangle::new(
+            coord! {x: 0., y: 0.},
+            coord! {x: 1., y: 0.},
+            coord! {x: 0., y: 1.},
+        );
+        let merged = Merge::AllDimensions.geometry([line.into(), triangle.into()]);
+        assert_eq!(
+            merged,
+            Geometry::GeometryCollection(GeometryCollection(vec![
+                Geometry::LineString(line.into()),
+                Geometry::Polygon(triangle.to_polygon()),
+            ]))
+        );
+        let single = Merge::HighestDimension.geometry([line.into()]);
+        assert_eq!(single, Geometry::LineString(line.into()));
+    }
 }

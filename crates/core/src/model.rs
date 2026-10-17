@@ -85,6 +85,11 @@ pub(crate) enum Invalid {
     },
 }
 impl Invalid {
+    /// The feature that failed validation.
+    pub(crate) fn fid(&self) -> i64 {
+        let (Self::DuplicateFid(fid) | Self::NonFinite(fid) | Self::Polygon { fid, .. }) = self;
+        *fid
+    }
     pub(crate) fn at(self, layer: LayerId, name: &str) -> Error {
         let name = name.to_string();
         match self {

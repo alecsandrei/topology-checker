@@ -226,10 +226,6 @@ impl Topology {
             .as_ref()
             .map(|(layer, fid, _)| (*layer, *fid))
     }
-    pub(crate) fn feature_matches(&self, layer: LayerId, fid: i64) -> bool {
-        self.selected_feature()
-            .is_none_or(|selected| selected == (layer, fid))
-    }
     pub(crate) fn full_parts(&self, id: LayerId) -> Result<&Parts, Error> {
         let layer = self.layer(id)?;
         layer.parts().map_err(|e| e.at(id, layer.name()))
