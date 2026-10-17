@@ -152,19 +152,46 @@ fn dbf_json(v: shapefile::dbase::FieldValue) -> Value {
         Memo(v) => v.into(),
     }
 }
+/// The encoding a `.cpg` file names. Like GDAL, only its first line counts, and a file that
+/// is empty or holds an `LDID/n` code names none, leaving the DBF header to decide.
+fn cpg_encoding(bytes: &[u8]) -> Result<Option<&'static encoding_rs::Encoding>> {
+    let text = String::from_utf8_lossy(bytes);
+    let line = text.split(['\r', '\n']).next().unwrap_or_default();
+    let label = line.trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}');
+    let label = label.to_ascii_lowercase();
+    if label.is_empty() || label.starts_with("ldid/") {
+        return Ok(None);
+    }
+    let number = label.strip_prefix("cp").unwrap_or(&label);
+    // `parse` also takes a leading `+`, which GDAL does not
+    let code_page = number
+        .parse::<u32>()
+        .ok()
+        .filter(|_| number.bytes().all(|b| b.is_ascii_digit()));
+    let name = match code_page {
+        Some(65001) => "utf-8".to_owned(),
+        Some(874) => "windows-874".to_owned(),
+        Some(932) => "shift_jis".to_owned(),
+        Some(936) => "gbk".to_owned(),
+        Some(949) => "euc-kr".to_owned(),
+        Some(950) => "big5".to_owned(),
+        Some(n @ 1250..=1258) => format!("windows-{n}"),
+        _ => match label.strip_prefix("8859-") {
+            Some(part) => format!("iso-8859-{part}"),
+            None => label.clone(),
+        },
+    };
+    encoding_rs::Encoding::for_label(name.as_bytes())
+        .map(Some)
+        .context("unsupported Shapefile CPG encoding")
+}
 pub(crate) fn read_shape(path: &Path) -> Result<Vec<RawLayer>> {
     use shapefile::{Reader, Shape, ShapeReader, dbase};
     let mut builder = dbase::ReaderBuilder::new();
     let cpg = path.with_extension("cpg");
-    if cpg.exists() {
-        let label = std::fs::read_to_string(cpg)?;
-        let label = match label.trim() {
-            "65001" => "UTF-8",
-            "1252" => "windows-1252",
-            s => s,
-        };
-        let encoding = encoding_rs::Encoding::for_label(label.as_bytes())
-            .context("unsupported Shapefile CPG encoding")?;
+    if cpg.exists()
+        && let Some(encoding) = cpg_encoding(&std::fs::read(cpg)?)?
+    {
         builder = builder.with_encoding(dbase::encoding::EncodingRs::from(encoding));
     }
     let dbf = builder.open(path.with_extension("dbf"))?;
