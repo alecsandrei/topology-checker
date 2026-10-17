@@ -24,6 +24,7 @@
   <a href="https://alecsandrei.github.io/topology-checker/stable/cli/">CLI</a> ·
   <a href="https://alecsandrei.github.io/topology-checker/stable/rules/">Rules</a> ·
   <a href="https://alecsandrei.github.io/topology-checker/stable/web-app/">Web app</a> ·
+  <a href="https://alecsandrei.github.io/topology-checker/stable/rustgis-plugin/">RustGIS plugin</a> ·
   <a href="https://alecsandrei.github.io/topology-checker/stable/python-usage/">Python usage</a> ·
   <a href="https://alecsandrei.github.io/topology-checker/stable/python-api/">Python API</a> ·
   <a href="https://docs.rs/topology-checker-core/latest/topology_checker_core/">Rust API</a>

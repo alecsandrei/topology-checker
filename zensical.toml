@@ -12,6 +12,7 @@ nav = [
   { CLI = "cli.md" },
   { Rules = "rules.md" },
   { "Web app" = "web-app.md" },
+  { RustGIS = "rustgis-plugin.md" },
   { Python = [
     { Usage = "python-usage.md" },
     { "API reference" = "python-api.md" },

@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/core", "crates/io", "crates/cli", "crates/server", "crates/python"]
+members = ["crates/core", "crates/io", "crates/cli", "crates/server", "crates/python", "crates/rustgis-plugin"]
 resolver = "3"
 
 [workspace.package]
@@ -20,6 +20,15 @@ rayon = "1.10"
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 ts-rs = "12"
+
+# Size-tuned build of the RustGIS plugin module:
+#   cargo build --profile rustgis-plugin --target wasm32-unknown-unknown -p topology-checker-rustgis
+[profile.rustgis-plugin]
+inherits = "release"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
 
 [workspace.lints.rust]
 missing_debug_implementations = "warn"

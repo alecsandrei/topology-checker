@@ -1,0 +1,23 @@
+[package]
+name = "topology-checker-rustgis"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+description = "RustGIS plugin exposing every topology-checker rule as a geoprocessing tool"
+publish = false
+
+[lints]
+workspace = true
+
+# A RustGIS plugin is a WebAssembly module (see the `rustgis-plugin` profile in the workspace Cargo.toml).
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+topology-checker-core.workspace = true
+# The SDK is not on crates.io; pinned to a commit of opengeos/rustgis-plugins (it needs Rust 1.90).
+rustgis-plugin = { git = "https://github.com/opengeos/rustgis-plugins", rev = "96dbc53e02bf6d52b596c6f5ee4816cfcb997b4c" }
+geojson = { version = "0.24", default-features = false, features = ["geo-types"] }
