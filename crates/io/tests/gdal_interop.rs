@@ -928,3 +928,73 @@ fn unsupported_gdal_geometry_types_are_errors() {
         "{error:#}"
     );
 }
+
+#[test]
+fn fallback_coordinate_systems_expose_the_same_helpers() {
+    // Geocentric EPSG:4978 is outside the native horizontal CRS parser.
+    let geocentric = crs::parse("EPSG:4978").unwrap();
+    assert!(!geocentric.is_geographic() && !geocentric.is_projected());
+    assert_eq!(geocentric.linear_units(), 1.);
+    assert_eq!(geocentric.name().as_deref(), Some("WGS 84"));
+    assert!(geocentric.to_projjson().unwrap().contains("WGS 84"));
+    assert_eq!(geocentric, crs::parse("EPSG:4978").unwrap());
+    let geographic = crs::parse("EPSG:4326").unwrap();
+    assert_ne!(geocentric, geographic);
+    assert_ne!(geographic, geocentric);
+    let to_geographic = crs::Transform::new(&geocentric, &geographic).unwrap();
+    assert!(to_geographic.transform_bounds(&[0., 0., 1., 1.], 2).is_ok());
+    // GDAL reports points outside a projection's domain as errors, not infinities.
+    let orthographic = crs::parse("+proj=ortho +lat_0=0 +lon_0=0").unwrap();
+    let operation = crs::Transform::new(&geographic, &orthographic).unwrap();
+    assert!(
+        operation
+            .transform_coords(&mut [180.], &mut [0.], &mut [])
+            .is_err()
+    );
+}
+#[test]
+fn vrt_over_geojson_exposes_list_date_and_nested_geometry_types() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source.geojson");
+    std::fs::write(
+        &source,
+        r#"{"type":"FeatureCollection","features":[
+        {"type":"Feature","properties":{"ints":[1,2],"reals":[1.5],"names":["a","b"],"day":"2024-05-06","moment":"2024-05-06T07:08:09Z","big":9007199254740993},
+         "geometry":{"type":"Polygon","coordinates":[[[0,0],[10,0],[10,10],[0,0]],[[1,1],[2,1],[2,2],[1,1]]]}},
+        {"type":"Feature","properties":{"ints":[3],"reals":[2.5],"names":["c"],"day":"2024-05-07","moment":"2024-05-07T07:08:09Z","big":1},
+         "geometry":{"type":"MultiPolygon","coordinates":[[[[0,0],[1,0],[1,1],[0,0]]]]}},
+        {"type":"Feature","properties":{"ints":[4],"reals":[3.5],"names":["d"],"day":null,"moment":null,"big":2},
+         "geometry":{"type":"MultiLineString","coordinates":[[[0,0],[1,1]],[[2,2],[3,3]]]}},
+        {"type":"Feature","properties":{"ints":[5],"reals":[4.5],"names":["e"],"day":"2024-05-08","moment":"2024-05-08T07:08:09Z","big":3},
+         "geometry":{"type":"MultiPoint","coordinates":[[1,1],[2,2]]}}]}"#,
+    )
+    .unwrap();
+    let vrt = dir.path().join("view.vrt");
+    std::fs::write(
+        &vrt,
+        format!(
+            "<OGRVRTDataSource><OGRVRTLayer name=\"view\"><SrcDataSource>{}</SrcDataSource><SrcLayer>source</SrcLayer></OGRVRTLayer></OGRVRTDataSource>",
+            source.display()
+        ),
+    )
+    .unwrap();
+    let layer = read::read_with_attributes(&vrt, None, "view", true)
+        .unwrap()
+        .remove(0);
+    assert_eq!(layer.layer.len(), 4);
+    assert_eq!(layer.attributes[0]["ints"], json!([1, 2]));
+    assert_eq!(layer.attributes[0]["reals"], json!([1.5]));
+    assert_eq!(layer.attributes[0]["names"], json!(["a", "b"]));
+    assert!(layer.attributes[0]["day"].is_string());
+}
+#[test]
+fn vrt_without_layers_is_reported() {
+    let dir = tempfile::tempdir().unwrap();
+    let vrt = dir.path().join("empty.vrt");
+    std::fs::write(&vrt, "<OGRVRTDataSource></OGRVRTDataSource>").unwrap();
+    let error = read::read(&vrt, None, "x").unwrap_err();
+    assert!(
+        format!("{error:#}").contains("no vector layers"),
+        "{error:#}"
+    );
+}
