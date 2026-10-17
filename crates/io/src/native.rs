@@ -105,10 +105,8 @@ pub(crate) fn write_geojson_source(
         && s.epsg() != Some(4326)
     {
         out.write_all(b",\"crs\":")?;
-        serde_json::to_writer(
-            &mut out,
-            &json!({"type":"name","properties":{"name":s.authority().unwrap_or(s.to_wkt()?)}}),
-        )?;
+        let crs = json!({"type":"name","properties":{"name":s.authority().unwrap_or(s.to_wkt()?)}});
+        serde_json::to_writer(&mut out, &crs)?;
     }
     out.write_all(b",\"features\":[")?;
     for (i, r) in source.records().enumerate() {
@@ -172,9 +170,8 @@ pub(crate) fn read_shape(path: &Path) -> Result<Vec<RawLayer>> {
     let shapes = ShapeReader::from_path(path)?;
     let mut reader = Reader::new(shapes, dbf);
     let srs = if path.with_extension("prj").exists() {
-        Some(crs::parse(&std::fs::read_to_string(
-            path.with_extension("prj"),
-        )?)?)
+        let wkt = std::fs::read_to_string(path.with_extension("prj"))?;
+        Some(crs::parse(&wkt)?)
     } else {
         None
     };
