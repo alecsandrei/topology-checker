@@ -32,7 +32,7 @@
 
 # topology-checker
 
-topology-checker checks map data for duplicate points, gaps, overlaps, and disconnected lines. Use it with Python, the command line, or the local web app.
+topology-checker checks map data for duplicate points, gaps, overlaps, and disconnected lines. Use it with Python, the command line, the local web app, or as a [RustGIS](https://github.com/opengeos/RustGIS) plugin.
 
 ![Validation time for topology-checker, QGIS 4.2, GRASS GIS, PostGIS and gvSIG](benchmarks/gis/results/comparison.png)
 
@@ -159,3 +159,7 @@ cargo run -p topology-checker-web --release --locked
 Open <http://127.0.0.1:8080>, or pass `--port` (or set `TOPOLOGY_WEB_PORT`) to use another port. Release builds embed the frontend, so `target/release/topology-checker-web` runs on its own. Workspaces idle for four hours are discarded. See [Web app](https://alecsandrei.github.io/topology-checker/stable/web-app/).
 
 The TypeScript API types in `web/src/generated` are generated from the server by `cargo test`.
+
+## RustGIS plugin
+
+topology-checker is also a [RustGIS](https://github.com/opengeos/RustGIS) plugin, with a tool for each rule. Install `topology-checker-<version>.rgplugin` from the [latest release](https://github.com/alecsandrei/topology-checker/releases/latest) with Plugin Manager › **Install from File**. See [RustGIS plugin](https://alecsandrei.github.io/topology-checker/stable/rustgis-plugin/).
