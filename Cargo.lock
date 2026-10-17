@@ -3076,6 +3076,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustgis-plugin"
+version = "0.1.0"
+source = "git+https://github.com/opengeos/rustgis-plugins?rev=96dbc53e02bf6d52b596c6f5ee4816cfcb997b4c#96dbc53e02bf6d52b596c6f5ee4816cfcb997b4c"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "rustix"
 version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3789,6 +3797,15 @@ dependencies = [
  "geozero 0.14.0",
  "pyo3",
  "serde_json",
+ "topology-checker-core",
+]
+
+[[package]]
+name = "topology-checker-rustgis"
+version = "0.1.0"
+dependencies = [
+ "geojson",
+ "rustgis-plugin",
  "topology-checker-core",
 ]
 

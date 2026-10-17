@@ -108,8 +108,30 @@ jobs:
           path: THIRD-PARTY-NOTICES.txt
           if-no-files-found: error
 
+  rustgis-plugin:
+    needs: [notices]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: actions/download-artifact@v4
+        with:
+          name: notices
+          path: notices
+      - name: Build and package the plugin
+        run: python3 scripts/package_rustgis_plugin.py --out rustgis-plugin --notices notices/THIRD-PARTY-NOTICES.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rustgis-plugin
+          path: rustgis-plugin/*.rgplugin
+          if-no-files-found: error
+
   release:
-    needs: [build, notices]
+    needs: [build, notices, rustgis-plugin]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -128,7 +150,9 @@ jobs:
             fi
             zip -qr "$dir.zip" "$dir"
           done
-          sha256sum -- *.zip > SHA256SUMS
+          # The RustGIS plugin installs as it is: Plugin Manager > Install from File.
+          cp rustgis-plugin/*.rgplugin .
+          sha256sum -- *.zip *.rgplugin > SHA256SUMS
       - name: Create release
         working-directory: dist
         env:
@@ -138,7 +162,9 @@ jobs:
 
             Also available with `uv add topology-checker` (PyPI) and `cargo install topology-checker` (crates.io). Documentation: https://alecsandrei.github.io/topology-checker/
 
+            RustGIS: install `topology-checker-*.rgplugin` with Plugin Manager > Install from File.
+
             macOS: the binaries are unsigned. If macOS blocks them, run `xattr -dr com.apple.quarantine .` in the unzipped folder.
         run: |
-          gh release create "$TAG" ./*.zip SHA256SUMS --repo "$GITHUB_REPOSITORY" --verify-tag \
+          gh release create "$TAG" ./*.zip ./*.rgplugin SHA256SUMS --repo "$GITHUB_REPOSITORY" --verify-tag \
             --title "topology-checker ${TAG#v}" --notes "$NOTES"

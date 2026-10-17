@@ -1,0 +1,1086 @@
+{
+  "abi": 1,
+  "author": "Alex-Andrei Cuvuliuc",
+  "description": "Checks map data for duplicate points, gaps, overlaps, dangles and other topology errors. One tool per rule; each adds a layer of the violations.",
+  "entry": "plugin.wasm",
+  "homepage": "https://alecsandrei.github.io/topology-checker/",
+  "id": "topology-checker",
+  "license": "MIT",
+  "minRustgisVersion": "0.1.0",
+  "name": "Topology Checker",
+  "permissions": [],
+  "tab": {
+    "groups": [
+      {
+        "items": [
+          {
+            "help": "Rules that check a single layer.",
+            "items": [
+              "tool:point-must-not-overlap"
+            ],
+            "menu": "Points: one layer"
+          },
+          {
+            "help": "Rules that compare two layers.",
+            "items": [
+              "tool:point-must-not-overlap-with",
+              "tool:point-must-be-inside",
+              "tool:point-must-be-covered-by-lines",
+              "tool:point-must-be-covered-by-line-endpoints",
+              "tool:point-must-be-covered-by-polygon-boundaries",
+              "tool:point-must-be-covered-by-polygons",
+              "tool:point-must-not-be-inside-polygons",
+              "tool:point-must-not-intersect-lines",
+              "tool:point-must-not-intersect-polygons"
+            ],
+            "menu": "Points: two layers"
+          }
+        ],
+        "label": "Points"
+      },
+      {
+        "items": [
+          {
+            "help": "Rules that check a single layer.",
+            "items": [
+              "tool:line-must-not-have-dangles",
+              "tool:line-must-not-have-pseudo-nodes",
+              "tool:line-must-not-overlap",
+              "tool:line-must-not-self-overlap",
+              "tool:line-must-not-intersect",
+              "tool:line-must-not-intersect-or-touch-interior",
+              "tool:line-must-not-self-intersect"
+            ],
+            "menu": "Lines: one layer"
+          },
+          {
+            "help": "Rules that compare two layers.",
+            "items": [
+              "tool:line-must-not-overlap-with",
+              "tool:line-must-not-intersect-with",
+              "tool:line-must-not-intersect-or-touch-interior-with",
+              "tool:line-must-be-inside",
+              "tool:line-endpoints-must-be-covered-by-points",
+              "tool:line-must-be-covered-by-polygon-boundaries",
+              "tool:line-must-not-cross-polygon-boundaries",
+              "tool:line-must-be-properly-inside-polygons",
+              "tool:line-must-not-overlap-with-polygons",
+              "tool:line-must-not-overlap-polygon-boundaries",
+              "tool:line-must-not-intersect-polygons",
+              "tool:line-endpoints-must-be-covered-by-polygon-boundaries"
+            ],
+            "menu": "Lines: two layers"
+          }
+        ],
+        "label": "Lines"
+      },
+      {
+        "items": [
+          {
+            "help": "Rules that check a single layer.",
+            "items": [
+              "tool:polygon-must-not-overlap",
+              "tool:polygon-must-not-have-gaps"
+            ],
+            "menu": "Polygons: one layer"
+          },
+          {
+            "help": "Rules that compare two layers.",
+            "items": [
+              "tool:polygon-must-not-overlap-with",
+              "tool:polygon-boundaries-must-be-covered-by-lines",
+              "tool:polygon-must-contain-point",
+              "tool:polygon-must-contain-one-point",
+              "tool:polygon-must-not-contain-points"
+            ],
+            "menu": "Polygons: two layers"
+          }
+        ],
+        "label": "Polygons"
+      },
+      {
+        "items": [
+          {
+            "help": "Rules that check a single layer.",
+            "items": [
+              "tool:geometry-must-not-be-multipart"
+            ],
+            "menu": "Geometry: one layer"
+          },
+          {
+            "help": "Rules that compare two layers.",
+            "items": [
+              "tool:geometry-must-not-be-contained-by"
+            ],
+            "menu": "Geometry: two layers"
+          }
+        ],
+        "label": "Geometry"
+      }
+    ],
+    "label": "Topology"
+  },
+  "tools": [
+    {
+      "id": "point-must-not-overlap",
+      "name": "Point: Must Not Overlap",
+      "params": [
+        {
+          "kind": "pointLayer",
+          "label": "Layer",
+          "name": "layer",
+          "required": true
+        },
+        {
+          "default": 1e-6,
+          "help": "Planar distance tolerance in the layers' coordinate units. RustGIS gives tools longitude/latitude, so this is in degrees (0.00001 is about 1 m at the equator).",
+          "kind": "number",
+          "label": "Tolerance (degrees)",
+          "name": "tolerance",
+          "required": true
+        }
+      ],
+      "summary": "Find duplicate points within the inclusive Euclidean distance tolerance."
+    },
+    {
+      "id": "point-must-not-overlap-with",
+      "name": "Point: Must Not Overlap With",
+      "params": [
+        {
+          "kind": "pointLayer",
+          "label": "Layer",
+          "name": "layer",
+          "required": true
+        },
+        {
+          "kind": "pointLayer",
+          "label": "Second layer",
+          "name": "other",
+          "required": true
+        },
+        {
+          "default": 1e-6,
+          "help": "Planar distance tolerance in the layers' coordinate units. RustGIS gives tools longitude/latitude, so this is in degrees (0.00001 is about 1 m at the equator).",
+          "kind": "number",
+          "label": "Tolerance (degrees)",
+          "name": "tolerance",
+          "required": true
+        }
+      ],
+      "summary": "Find duplicate points across two layers within the inclusive Euclidean distance tolerance."
+    },
+    {
+      "id": "point-must-be-inside",
+      "name": "Point: Must Be Inside",
+      "params": [
+        {
+          "kind": "pointLayer",
+          "label": "Layer",
+          "name": "layer",
+          "required": true
+        },
+        {
+          "kind": "polygonLayer",
+          "label": "Second layer",
+          "name": "other",
+          "required": true
+        },
+        {
+          "default": 1e-6,
+          "help": "Planar distance tolerance in the layers' coordinate units. RustGIS gives tools longitude/latitude, so this is in degrees (0.00001 is about 1 m at the equator).",
+          "kind": "number",
+          "label": "Tolerance (degrees)",
+          "name": "tolerance",
+          "required": true
+        }
+      ],
+      "summary": "Find points outside the polygons, including points on or within the distance tolerance of their edges."
+    },
+    {
+      "id": "line-must-not-have-dangles",
+      "name": "Line: Must Not Have Dangles",
+      "params": [
+        {
+          "kind": "vectorLayer",
+          "label": "Layer",
+          "name": "layer",
+          "required": true
+        },
+        {
+          "default": 1e-6,
+          "help": "Planar distance tolerance in the layers' coordinate units. RustGIS gives tools longitude/latitude, so this is in degrees (0.00001 is about 1 m at the equator).",
+          "kind": "number",
+          "label": "Tolerance (degrees)",
+          "name": "tolerance",
+          "required": true
+        }
+      ],
+      "summary": "Find unconnected line endpoints."
+    },
+    {
+      "id": "line-must-not-have-pseudo-nodes",
+      "name": "Line: Must Not Have Pseudo Nodes",
+      "params": [
+        {
+          "kind": "vectorLayer",
+          "label": "Layer",
+          "name": "layer",
+          "required": true
+        },
+        {
+          "default": 1e-6,
+          "help": "Planar distance tolerance in the layers' coordinate units. RustGIS gives tools longitude/latitude, so this is in degrees (0.00001 is about 1 m at the equator).",
+          "kind": "number",
+          "label": "Tolerance (degrees)",
+          "name": "tolerance",
+          "required": true
+        }
+      ],
+      "summary": "Find joins connecting exactly two distinct features at their endpoints. Closed loops are allowed."
+    },
+    {
+      "id": "line-must-not-overlap",
+      "name": "Line: Must Not Overlap",
+      "params": [
+        {
+          "kind": "vectorLayer",
+          "label": "Layer",
+          "name": "layer",
+          "required": true
+        },
+        {
+          "default": 1e-6,
+          "help": "Planar distance tolerance in the layers' coordinate units. RustGIS gives tools longitude/latitude, so this is in degrees (0.00001 is about 1 m at the equator).",
+          "kind": "number",
+          "label": "Tolerance (degrees)",
+          "name": "tolerance",
+          "required": true
+        }
+      ],
+      "summary": "Find shared line segments between distinct features. Crossings, branches ending within tolerance and overlaps within one feature are excluded."
+    },
+    {
+      "id": "line-must-not-overlap-with",
+      "name": "Line: Must Not Overlap With",
+      "params": [
+        {
+          "kind": "vectorLayer",
+          "label": "Layer",
+          "name": "layer",
+          "required": true
+        },
+        {
+          "kind": "vectorLayer",
+          "label": "Second layer",
+          "name": "other",
+          "required": true
+        },
+        {
+          "default": 1e-6,
+          "help": "Planar distance tolerance in the layers' coordinate units. RustGIS gives tools longitude/latitude, so this is in degrees (0.00001 is about 1 m at the equator).",
+          "kind": "number",
+          "label": "Tolerance (degrees)",
+          "name": "tolerance",
+          "required": true
+        }
+      ],
+      "summary": "Find shared line segments across two layers. Crossings and branches ending within tolerance are excluded."
+    },
+    {
+      "id": "line-must-not-self-overlap",
+      "name": "Line: Must Not Self Overlap",
+      "params": [
+        {
+          "kind": "vectorLayer",
+          "label": "Layer",
+          "name": "layer",
+          "required": true
+        },
+        {
+          "default": 1e-6,
+          "help": "Planar distance tolerance in the layers' coordinate units. RustGIS gives tools longitude/latitude, so this is in degrees (0.00001 is about 1 m at the equator).",
+          "kind": "number",
+          "label": "Tolerance (degrees)",
+          "name": "tolerance",
+          "required": true
+        }
+      ],
+      "summary": "Find line segments traced more than once by the same feature, including across its parts. Parts branching off at an angle are excluded."
+    },
+    {
+      "id": "line-must-not-intersect",
+      "name": "Line: Must Not Intersect",
+      "params": [
+        {
+          "kind": "vectorLayer",
+          "label": "Layer",
+          "name": "layer",
+          "required": true
+        },
+        {
+          "default": 1e-6,
+          "help": "Planar distance tolerance in the layers' coordinate units. RustGIS gives tools longitude/latitude, so this is in degrees (0.00001 is about 1 m at the equator).",
+          "kind": "number",
+          "label": "Tolerance (degrees)",
+          "name": "tolerance",
+          "required": true
+        }
+      ],
+      "summary": "Find overlaps and crossings between distinct features away from their endpoints. Endpoint touches are allowed. A multipart line's endpoints are where an odd number of its parts end."
+    },
+    {
+      "id": "line-must-not-intersect-with",
+      "name": "Line: Must Not Intersect With",
+      "params": [
+        {
+          "kind": "vectorLayer",
+          "label": "Layer",
+          "name": "layer",
+          "required": true
+        },
+        {
+          "kind": "vectorLayer",
+          "label": "Second layer",
+          "name": "other",
+          "required": true
+        },
+        {
+          "default": 1e-6,
+          "help": "Planar distance tolerance in the layers' coordinate units. RustGIS gives tools longitude/latitude, so this is in degrees (0.00001 is about 1 m at the equator).",
+          "kind": "number",
+          "label": "Tolerance (degrees)",
+          "name": "tolerance",
+          "required": true
+        }
+      ],
+      "summary": "Find overlaps and crossings across two layers away from their endpoints. Endpoint touches are allowed. A multipart line's endpoints are where an odd number of its parts end."
+    },
+    {
+      "id": "line-must-not-intersect-or-touch-interior",
+      "name": "Line: Must Not Intersect Or Touch Interior",
+      "params": [
+        {
+          "kind": "vectorLayer",
+          "label": "Layer",
+          "name": "layer",
+          "required": true
+        },
+        {
+          "default": 1e-6,
+          "help": "Planar distance tolerance in the layers' coordinate units. RustGIS gives tools longitude/latitude, so this is in degrees (0.00001 is about 1 m at the equator).",
+          "kind": "number",
+          "label": "Tolerance (degrees)",
+          "name": "tolerance",
+          "required": true
+        }
+      ],
+      "summary": "Find overlaps, crossings and endpoint touches on the interior of another feature. Touches only at both features' endpoints are allowed. A multipart line's endpoints are where an odd number of its parts end."
+    },
+    {
+      "id": "line-must-not-intersect-or-touch-interior-with",
+      "name": "Line: Must Not Intersect Or Touch Interior With",
+      "params": [
+        {
+          "kind": "vectorLayer",
+          "label": "Layer",
+          "name": "layer",
+          "required": true
+        },
+        {
+          "kind": "vectorLayer",
+          "label": "Second layer",
+          "name": "other",
+          "required": true
+        },
+        {
+          "default": 1e-6,
+          "help": "Planar distance tolerance in the layers' coordinate units. RustGIS gives tools longitude/latitude, so this is in degrees (0.00001 is about 1 m at the equator).",
+          "kind": "number",
+          "label": "Tolerance (degrees)",
+          "name": "tolerance",
+          "required": true
+        }
+      ],
+      "summary": "Find overlaps, crossings and endpoint touches on a line's interior across two layers. Touches only at both features' endpoints are allowed. A multipart line's endpoints are where an odd number of its parts end."
+    },
+    {
+      "id": "line-must-not-self-intersect",
+      "name": "Line: Must Not Self Intersect",
+      "params": [
+        {
+          "kind": "vectorLayer",
+          "label": "Layer",
+          "name": "layer",
+          "required": true
+        },
+        {
+          "default": 1e-6,
+          "help": "Planar distance tolerance in the layers' coordinate units. RustGIS gives tools longitude/latitude, so this is in degrees (0.00001 is about 1 m at the equator).",
+          "kind": "number",
+          "label": "Tolerance (degrees)",
+          "name": "tolerance",
+          "required": true
+        }
+      ],
+      "summary": "Find overlaps and crossings within one feature. Closed loops and self-touches are allowed."
+    },
+    {
+      "id": "line-must-be-inside",
+      "name": "Line: Must Be Inside",
+      "params": [
+        {
+          "kind": "vectorLayer",
+          "label": "Layer",
+          "name": "layer",
+          "required": true
+        },
+        {
+          "kind": "polygonLayer",
+          "label": "Second layer",
+          "name": "other",
+          "required": true
+        },
+        {
+          "default": 1e-6,
+          "help": "Planar distance tolerance in the layers' coordinate units. RustGIS gives tools longitude/latitude, so this is in degrees (0.00001 is about 1 m at the equator).",
+          "kind": "number",
+          "label": "Tolerance (degrees)",
+          "name": "tolerance",
+          "required": true
+        }
+      ],
+      "summary": "Find line pieces outside the polygons and farther than the distance tolerance from their exterior or hole edges. Every remaining outside piece is reported, including short tails."
+    },
+    {
+      "id": "polygon-must-not-overlap",
+      "name": "Polygon: Must Not Overlap",
+      "params": [
+        {
+          "kind": "polygonLayer",
+          "label": "Layer",
+          "name": "layer",
+          "required": true
+        },
+        {
+          "default": 1e-6,
+          "help": "Planar distance tolerance in the layers' coordinate units. RustGIS gives tools longitude/latitude, so this is in degrees (0.00001 is about 1 m at the equator).",
+          "kind": "number",
+          "label": "Tolerance (degrees)",
+          "name": "tolerance",
+          "required": true
+        }
+      ],
+      "summary": "Find shared areas between distinct polygon features, ignoring slivers below the tolerance."
+    },
+    {
+      "id": "polygon-must-not-overlap-with",
+      "name": "Polygon: Must Not Overlap With",
+      "params": [
+        {
+          "kind": "polygonLayer",
+          "label": "Layer",
+          "name": "layer",
+          "required": true
+        },
+        {
+          "kind": "polygonLayer",
+          "label": "Second layer",
+          "name": "other",
+          "required": true
+        },
+        {
+          "default": 1e-6,
+          "help": "Planar distance tolerance in the layers' coordinate units. RustGIS gives tools longitude/latitude, so this is in degrees (0.00001 is about 1 m at the equator).",
+          "kind": "number",
+          "label": "Tolerance (degrees)",
+          "name": "tolerance",
+          "required": true
+        }
+      ],
+      "summary": "Find shared polygon areas across two layers, ignoring slivers below the tolerance."
+    },
+    {
+      "id": "polygon-must-not-have-gaps",
+      "name": "Polygon: Must Not Have Gaps",
+      "params": [
+        {
+          "kind": "polygonLayer",
+          "label": "Layer",
+          "name": "layer",
+          "required": true
+        },
+        {
+          "default": 1e-6,
+          "help": "Planar distance tolerance in the layers' coordinate units. RustGIS gives tools longitude/latitude, so this is in degrees (0.00001 is about 1 m at the equator).",
+          "kind": "number",
+          "label": "Tolerance (degrees)",
+          "name": "tolerance",
+          "required": true
+        }
+      ],
+      "summary": "Find enclosed gaps between polygons, ignoring sliver gaps below the tolerance. Also report outer boundaries separately."
+    },
+    {
+      "id": "geometry-must-not-be-multipart",
+      "name": "Geometry: Must Not Be Multipart",
+      "params": [
+        {
+          "kind": "vectorLayer",
+          "label": "Layer",
+          "name": "layer",
+          "required": true
+        },
+        {
+          "default": 1e-6,
+          "help": "Planar distance tolerance in the layers' coordinate units. RustGIS gives tools longitude/latitude, so this is in degrees (0.00001 is about 1 m at the equator).",
+          "kind": "number",
+          "label": "Tolerance (degrees)",
+          "name": "tolerance",
+          "required": true
+        }
+      ],
+      "summary": "Find features with more than one part. A Multi geometry with only one part is allowed."
+    },
+    {
+      "id": "point-must-be-covered-by-lines",
+      "name": "Point: Must Be Covered By Lines",
+      "params": [
+        {
+          "kind": "pointLayer",
+          "label": "Layer",
+          "name": "layer",
+          "required": true
+        },
+        {
+          "kind": "vectorLayer",
+          "label": "Second layer",
+          "name": "other",
+          "required": true
+        },
+        {
+          "default": 1e-6,
+          "help": "Planar distance tolerance in the layers' coordinate units. RustGIS gives tools longitude/latitude, so this is in degrees (0.00001 is about 1 m at the equator).",
+          "kind": "number",
+          "label": "Tolerance (degrees)",
+          "name": "tolerance",
+          "required": true
+        }
+      ],
+      "summary": "Find points without linework within the inclusive distance tolerance, including line endpoints."
+    },
+    {
+      "id": "point-must-be-covered-by-line-endpoints",
+      "name": "Point: Must Be Covered By Line Endpoints",
+      "params": [
+        {
+          "kind": "pointLayer",
+          "label": "Layer",
+          "name": "layer",
+          "required": true
+        },
+        {
+          "kind": "vectorLayer",
+          "label": "Second layer",
+          "name": "other",
+          "required": true
+        },
+        {
+          "default": 1e-6,
+          "help": "Planar distance tolerance in the layers' coordinate units. RustGIS gives tools longitude/latitude, so this is in degrees (0.00001 is about 1 m at the equator).",
+          "kind": "number",
+          "label": "Tolerance (degrees)",
+          "name": "tolerance",
+          "required": true
+        }
+      ],
+      "summary": "Find points without a covering open line endpoint. Line parts closed within tolerance have no endpoints."
+    },
+    {
+      "id": "point-must-be-covered-by-polygon-boundaries",
+      "name": "Point: Must Be Covered By Polygon Boundaries",
+      "params": [
+        {
+          "kind": "pointLayer",
+          "label": "Layer",
+          "name": "layer",
+          "required": true
+        },
+        {
+          "kind": "polygonLayer",
+          "label": "Second layer",
+          "name": "other",
+          "required": true
+        },
+        {
+          "default": 1e-6,
+          "help": "Planar distance tolerance in the layers' coordinate units. RustGIS gives tools longitude/latitude, so this is in degrees (0.00001 is about 1 m at the equator).",
+          "kind": "number",
+          "label": "Tolerance (degrees)",
+          "name": "tolerance",
+          "required": true
+        }
+      ],
+      "summary": "Find points away from polygon edges, including holes and shared parcel edges."
+    },
+    {
+      "id": "line-endpoints-must-be-covered-by-points",
+      "name": "Line: Endpoints Must Be Covered By Points",
+      "params": [
+        {
+          "kind": "vectorLayer",
+          "label": "Layer",
+          "name": "layer",
+          "required": true
+        },
+        {
+          "kind": "pointLayer",
+          "label": "Second layer",
+          "name": "other",
+          "required": true
+        },
+        {
+          "default": 1e-6,
+          "help": "Planar distance tolerance in the layers' coordinate units. RustGIS gives tools longitude/latitude, so this is in degrees (0.00001 is about 1 m at the equator).",
+          "kind": "number",
+          "label": "Tolerance (degrees)",
+          "name": "tolerance",
+          "required": true
+        }
+      ],
+      "summary": "Find open line endpoints without a covering point. Line parts closed within tolerance have no endpoints."
+    },
+    {
+      "id": "line-must-be-covered-by-polygon-boundaries",
+      "name": "Line: Must Be Covered By Polygon Boundaries",
+      "params": [
+        {
+          "kind": "vectorLayer",
+          "label": "Layer",
+          "name": "layer",
+          "required": true
+        },
+        {
+          "kind": "polygonLayer",
+          "label": "Second layer",
+          "name": "other",
+          "required": true
+        },
+        {
+          "default": 1e-6,
+          "help": "Planar distance tolerance in the layers' coordinate units. RustGIS gives tools longitude/latitude, so this is in degrees (0.00001 is about 1 m at the equator).",
+          "kind": "number",
+          "label": "Tolerance (degrees)",
+          "name": "tolerance",
+          "required": true
+        }
+      ],
+      "summary": "Find line pieces farther than tolerance from polygon exterior or hole edges. Report every uncovered portion, including short tails."
+    },
+    {
+      "id": "polygon-boundaries-must-be-covered-by-lines",
+      "name": "Polygon: Boundaries Must Be Covered By Lines",
+      "params": [
+        {
+          "kind": "polygonLayer",
+          "label": "Layer",
+          "name": "layer",
+          "required": true
+        },
+        {
+          "kind": "vectorLayer",
+          "label": "Second layer",
+          "name": "other",
+          "required": true
+        },
+        {
+          "default": 1e-6,
+          "help": "Planar distance tolerance in the layers' coordinate units. RustGIS gives tools longitude/latitude, so this is in degrees (0.00001 is about 1 m at the equator).",
+          "kind": "number",
+          "label": "Tolerance (degrees)",
+          "name": "tolerance",
+          "required": true
+        }
+      ],
+      "summary": "Find polygon exterior or hole edges farther than tolerance from lines. Report every uncovered portion, including short tails."
+    },
+    {
+      "id": "polygon-must-contain-point",
+      "name": "Polygon: Must Contain Point",
+      "params": [
+        {
+          "kind": "polygonLayer",
+          "label": "Layer",
+          "name": "layer",
+          "required": true
+        },
+        {
+          "kind": "pointLayer",
+          "label": "Second layer",
+          "name": "other",
+          "required": true
+        },
+        {
+          "default": 1e-6,
+          "help": "Planar distance tolerance in the layers' coordinate units. RustGIS gives tools longitude/latitude, so this is in degrees (0.00001 is about 1 m at the equator).",
+          "kind": "number",
+          "label": "Tolerance (degrees)",
+          "name": "tolerance",
+          "required": true
+        }
+      ],
+      "summary": "Find polygons without a strictly interior point feature. All parts of a point feature must qualify."
+    },
+    {
+      "id": "polygon-must-contain-one-point",
+      "name": "Polygon: Must Contain One Point",
+      "params": [
+        {
+          "kind": "polygonLayer",
+          "label": "Layer",
+          "name": "layer",
+          "required": true
+        },
+        {
+          "kind": "pointLayer",
+          "label": "Second layer",
+          "name": "other",
+          "required": true
+        },
+        {
+          "default": 1e-6,
+          "help": "Planar distance tolerance in the layers' coordinate units. RustGIS gives tools longitude/latitude, so this is in degrees (0.00001 is about 1 m at the equator).",
+          "kind": "number",
+          "label": "Tolerance (degrees)",
+          "name": "tolerance",
+          "required": true
+        }
+      ],
+      "summary": "Find polygons and point features without a one-to-one interior assignment. Count feature IDs, including multipart features."
+    },
+    {
+      "id": "line-must-not-cross-polygon-boundaries",
+      "name": "Line: Must Not Cross Polygon Boundaries",
+      "params": [
+        {
+          "kind": "vectorLayer",
+          "label": "Layer",
+          "name": "layer",
+          "required": true
+        },
+        {
+          "kind": "polygonLayer",
+          "label": "Second layer",
+          "name": "other",
+          "required": true
+        },
+        {
+          "default": 1e-6,
+          "help": "Planar distance tolerance in the layers' coordinate units. RustGIS gives tools longitude/latitude, so this is in degrees (0.00001 is about 1 m at the equator).",
+          "kind": "number",
+          "label": "Tolerance (degrees)",
+          "name": "tolerance",
+          "required": true
+        }
+      ],
+      "summary": "Find lines entering or leaving polygons through exterior or hole edges. Tangencies, endpoint touches and shared segments are allowed."
+    },
+    {
+      "id": "geometry-must-not-be-contained-by",
+      "name": "Geometry: Must Not Be Contained By",
+      "params": [
+        {
+          "kind": "vectorLayer",
+          "label": "Layer",
+          "name": "layer",
+          "required": true
+        },
+        {
+          "kind": "vectorLayer",
+          "label": "Second layer",
+          "name": "other",
+          "required": true
+        },
+        {
+          "default": 1e-6,
+          "help": "Planar distance tolerance in the layers' coordinate units. RustGIS gives tools longitude/latitude, so this is in degrees (0.00001 is about 1 m at the equator).",
+          "kind": "number",
+          "label": "Tolerance (degrees)",
+          "name": "tolerance",
+          "required": true
+        }
+      ],
+      "summary": "Find whole features contained by an individual feature in the other layer. Equal geometries are allowed. No tolerance buffer is used."
+    },
+    {
+      "id": "point-must-be-covered-by-polygons",
+      "name": "Point: Must Be Covered By Polygons",
+      "params": [
+        {
+          "kind": "pointLayer",
+          "label": "Layer",
+          "name": "layer",
+          "required": true
+        },
+        {
+          "kind": "polygonLayer",
+          "label": "Second layer",
+          "name": "other",
+          "required": true
+        },
+        {
+          "default": 1e-6,
+          "help": "Planar distance tolerance in the layers' coordinate units. RustGIS gives tools longitude/latitude, so this is in degrees (0.00001 is about 1 m at the equator).",
+          "kind": "number",
+          "label": "Tolerance (degrees)",
+          "name": "tolerance",
+          "required": true
+        }
+      ],
+      "summary": "Find points outside polygon areas and farther than the tolerance from their edges. Boundary points are allowed."
+    },
+    {
+      "id": "point-must-not-be-inside-polygons",
+      "name": "Point: Must Not Be Inside Polygons",
+      "params": [
+        {
+          "kind": "pointLayer",
+          "label": "Layer",
+          "name": "layer",
+          "required": true
+        },
+        {
+          "kind": "polygonLayer",
+          "label": "Second layer",
+          "name": "other",
+          "required": true
+        },
+        {
+          "default": 1e-6,
+          "help": "Planar distance tolerance in the layers' coordinate units. RustGIS gives tools longitude/latitude, so this is in degrees (0.00001 is about 1 m at the equator).",
+          "kind": "number",
+          "label": "Tolerance (degrees)",
+          "name": "tolerance",
+          "required": true
+        }
+      ],
+      "summary": "Find points strictly inside polygons. Points on or within tolerance of their edges are allowed."
+    },
+    {
+      "id": "point-must-not-intersect-lines",
+      "name": "Point: Must Not Intersect Lines",
+      "params": [
+        {
+          "kind": "pointLayer",
+          "label": "Layer",
+          "name": "layer",
+          "required": true
+        },
+        {
+          "kind": "vectorLayer",
+          "label": "Second layer",
+          "name": "other",
+          "required": true
+        },
+        {
+          "default": 1e-6,
+          "help": "Planar distance tolerance in the layers' coordinate units. RustGIS gives tools longitude/latitude, so this is in degrees (0.00001 is about 1 m at the equator).",
+          "kind": "number",
+          "label": "Tolerance (degrees)",
+          "name": "tolerance",
+          "required": true
+        }
+      ],
+      "summary": "Find points touching linework anywhere within the inclusive distance tolerance, including endpoints."
+    },
+    {
+      "id": "point-must-not-intersect-polygons",
+      "name": "Point: Must Not Intersect Polygons",
+      "params": [
+        {
+          "kind": "pointLayer",
+          "label": "Layer",
+          "name": "layer",
+          "required": true
+        },
+        {
+          "kind": "polygonLayer",
+          "label": "Second layer",
+          "name": "other",
+          "required": true
+        },
+        {
+          "default": 1e-6,
+          "help": "Planar distance tolerance in the layers' coordinate units. RustGIS gives tools longitude/latitude, so this is in degrees (0.00001 is about 1 m at the equator).",
+          "kind": "number",
+          "label": "Tolerance (degrees)",
+          "name": "tolerance",
+          "required": true
+        }
+      ],
+      "summary": "Find points inside polygons or touching their edges within tolerance."
+    },
+    {
+      "id": "line-must-be-properly-inside-polygons",
+      "name": "Line: Must Be Properly Inside Polygons",
+      "params": [
+        {
+          "kind": "vectorLayer",
+          "label": "Layer",
+          "name": "layer",
+          "required": true
+        },
+        {
+          "kind": "polygonLayer",
+          "label": "Second layer",
+          "name": "other",
+          "required": true
+        },
+        {
+          "default": 1e-6,
+          "help": "Planar distance tolerance in the layers' coordinate units. RustGIS gives tools longitude/latitude, so this is in degrees (0.00001 is about 1 m at the equator).",
+          "kind": "number",
+          "label": "Tolerance (degrees)",
+          "name": "tolerance",
+          "required": true
+        }
+      ],
+      "summary": "Find whole line parts that leave polygon coverage or come within tolerance of its boundary. Gaps narrower than the tolerance are closed, except where polygons face each other only at corners, and may close up to 10% over it where they widen to an open end."
+    },
+    {
+      "id": "line-must-not-overlap-with-polygons",
+      "name": "Line: Must Not Overlap With Polygons",
+      "params": [
+        {
+          "kind": "vectorLayer",
+          "label": "Layer",
+          "name": "layer",
+          "required": true
+        },
+        {
+          "kind": "polygonLayer",
+          "label": "Second layer",
+          "name": "other",
+          "required": true
+        },
+        {
+          "default": 1e-6,
+          "help": "Planar distance tolerance in the layers' coordinate units. RustGIS gives tools longitude/latitude, so this is in degrees (0.00001 is about 1 m at the equator).",
+          "kind": "number",
+          "label": "Tolerance (degrees)",
+          "name": "tolerance",
+          "required": true
+        }
+      ],
+      "summary": "Find line pieces inside polygons or along their edges, longer than tolerance. Isolated contacts are allowed."
+    },
+    {
+      "id": "line-must-not-overlap-polygon-boundaries",
+      "name": "Line: Must Not Overlap Polygon Boundaries",
+      "params": [
+        {
+          "kind": "vectorLayer",
+          "label": "Layer",
+          "name": "layer",
+          "required": true
+        },
+        {
+          "kind": "polygonLayer",
+          "label": "Second layer",
+          "name": "other",
+          "required": true
+        },
+        {
+          "default": 1e-6,
+          "help": "Planar distance tolerance in the layers' coordinate units. RustGIS gives tools longitude/latitude, so this is in degrees (0.00001 is about 1 m at the equator).",
+          "kind": "number",
+          "label": "Tolerance (degrees)",
+          "name": "tolerance",
+          "required": true
+        }
+      ],
+      "summary": "Find line pieces shared with polygon edges, longer than tolerance. Crossings and isolated contacts are allowed."
+    },
+    {
+      "id": "line-must-not-intersect-polygons",
+      "name": "Line: Must Not Intersect Polygons",
+      "params": [
+        {
+          "kind": "vectorLayer",
+          "label": "Layer",
+          "name": "layer",
+          "required": true
+        },
+        {
+          "kind": "polygonLayer",
+          "label": "Second layer",
+          "name": "other",
+          "required": true
+        },
+        {
+          "default": 1e-6,
+          "help": "Planar distance tolerance in the layers' coordinate units. RustGIS gives tools longitude/latitude, so this is in degrees (0.00001 is about 1 m at the equator).",
+          "kind": "number",
+          "label": "Tolerance (degrees)",
+          "name": "tolerance",
+          "required": true
+        }
+      ],
+      "summary": "Find any line contact with polygons, including interior pieces, shared edges and isolated touches within tolerance."
+    },
+    {
+      "id": "line-endpoints-must-be-covered-by-polygon-boundaries",
+      "name": "Line: Endpoints Must Be Covered By Polygon Boundaries",
+      "params": [
+        {
+          "kind": "vectorLayer",
+          "label": "Layer",
+          "name": "layer",
+          "required": true
+        },
+        {
+          "kind": "polygonLayer",
+          "label": "Second layer",
+          "name": "other",
+          "required": true
+        },
+        {
+          "default": 1e-6,
+          "help": "Planar distance tolerance in the layers' coordinate units. RustGIS gives tools longitude/latitude, so this is in degrees (0.00001 is about 1 m at the equator).",
+          "kind": "number",
+          "label": "Tolerance (degrees)",
+          "name": "tolerance",
+          "required": true
+        }
+      ],
+      "summary": "Find open line endpoints away from polygon exterior or hole edges. Line parts closed within tolerance have no endpoints."
+    },
+    {
+      "id": "polygon-must-not-contain-points",
+      "name": "Polygon: Must Not Contain Points",
+      "params": [
+        {
+          "kind": "polygonLayer",
+          "label": "Layer",
+          "name": "layer",
+          "required": true
+        },
+        {
+          "kind": "pointLayer",
+          "label": "Second layer",
+          "name": "other",
+          "required": true
+        },
+        {
+          "default": 1e-6,
+          "help": "Planar distance tolerance in the layers' coordinate units. RustGIS gives tools longitude/latitude, so this is in degrees (0.00001 is about 1 m at the equator).",
+          "kind": "number",
+          "label": "Tolerance (degrees)",
+          "name": "tolerance",
+          "required": true
+        }
+      ],
+      "summary": "Find strictly contained points, with the polygon as the primary feature. Boundary points are allowed."
+    }
+  ],
+  "version": "0.1.0"
+}
