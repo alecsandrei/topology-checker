@@ -41,10 +41,11 @@ jobs:
         run: |
           sudo apt-get update && sudo apt-get install -y ripgrep
           bash .github/workflows/native-dependencies.sh
+      # The RustGIS plugin is a WebAssembly module (built by the rustgis-plugin job); MSVC cannot link it natively.
       - name: Build
-        run: cargo build --workspace --release --locked
+        run: cargo build --workspace --release --locked ${{ runner.os == 'Windows' && '--exclude topology-checker-rustgis' || '' }}
       - name: Test
-        run: cargo test --workspace --release --locked
+        run: cargo test --workspace --release --locked ${{ runner.os == 'Windows' && '--exclude topology-checker-rustgis' || '' }}
       - name: Generated files are current
         if: runner.os == 'Linux'
         run: |
