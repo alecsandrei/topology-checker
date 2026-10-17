@@ -97,22 +97,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: npm
-          cache-dependency-path: web/package-lock.json
-      - name: Frontend build
-        run: |
-          npm ci --prefix web
-          npm run build --prefix web
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: llvm-tools-preview
       - uses: Swatinem/rust-cache@v2
       - uses: taiki-e/install-action@cargo-llvm-cov
       # The build job reports test failures; this job always measures coverage.
-      - run: cargo llvm-cov --workspace --locked --ignore-run-fail --json --summary-only --output-path coverage.json
+      - run: cargo llvm-cov --workspace --locked --ignore-run-fail --exclude topology-checker-web --json --summary-only --output-path coverage.json
       - name: Badge data
         run: |
           jq '.data[0].totals.lines.percent | floor | {
