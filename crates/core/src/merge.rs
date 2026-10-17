@@ -13,11 +13,8 @@ use std::collections::BTreeMap;
 /// Report a line utility input by position. Inputs receive sequential FIDs, so
 /// only the coordinate check can fail.
 fn line_error(invalid: Invalid) -> Error {
-    match invalid {
-        Invalid::Polygon { .. } => unreachable!("line utilities have no polygon parts"),
-        Invalid::NonFinite(fid) | Invalid::DuplicateFid(fid) => Error::NonFiniteLine {
-            index: usize::try_from(fid).unwrap_or_default(),
-        },
+    Error::NonFiniteLine {
+        index: usize::try_from(invalid.fid()).unwrap_or_default(),
     }
 }
 
@@ -100,9 +97,6 @@ pub fn merge_lines(
         let mut minimum_forward = forward;
         loop {
             let (id, direction) = current;
-            if visited[id] {
-                break;
-            }
             visited[id] = true;
             if id < minimum {
                 minimum = id;
@@ -201,9 +195,6 @@ pub(crate) fn merge_edges(coords: &[Coord], edges: &[[usize; 2]]) -> Vec<LineStr
         let mut node = node;
         let mut path = vec![coords[node]];
         loop {
-            if visited[current] {
-                break;
-            }
             visited[current] = true;
             let edge = edges[current];
             node = if edge[0] == node { edge[1] } else { edge[0] };

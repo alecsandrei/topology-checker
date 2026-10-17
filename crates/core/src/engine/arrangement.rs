@@ -79,11 +79,7 @@ pub(super) fn orient(a: &Exact, b: &Exact, c: &Exact) -> Q {
         .sub(by.sub(ay).mul(cx.sub(ax)))
         .sign()
     {
-        return Q::from_integer(match order {
-            Ordering::Less => (-1).into(),
-            Ordering::Greater => 1.into(),
-            Ordering::Equal => 0.into(),
-        });
+        return Q::from_integer(if order.is_gt() { 1 } else { -1 }.into());
     }
     let (ax, ay) = a.xy();
     let (bx, by) = b.xy();
@@ -204,13 +200,12 @@ fn ends(edge: usize, edges: &[Edge]) -> [usize; 2] {
 pub(super) fn angle(a: &Exact, b: &Exact, origin: &Exact) -> Ordering {
     if let (Exact::Input(a), Exact::Input(b), Exact::Input(o)) = (a, b, origin) {
         let half = |p: &Coord| p.y < o.y || p.y == o.y && p.x < o.x;
-        return half(a)
-            .cmp(&half(b))
-            .then_with(|| match RobustKernel::orient2d(*o, *a, *b) {
-                Orientation::Clockwise => Ordering::Greater,
-                Orientation::CounterClockwise => Ordering::Less,
-                Orientation::Collinear => Ordering::Equal,
-            });
+        return half(a).cmp(&half(b)).then_with(|| {
+            let turn = RobustKernel::orient2d(*o, *a, *b);
+            // Collinear rays have no turn and compare equal.
+            i8::from(turn == Orientation::Clockwise)
+                .cmp(&i8::from(turn == Orientation::CounterClockwise))
+        });
     }
     let half = |p: &Exact| {
         let y = certified::compare(p, origin, 1);
@@ -539,10 +534,12 @@ fn component(polygons: &[(&Polygon, usize)], intersection: bool) -> super::preci
                 }
                 cycle.extend(tail);
                 cycle.push(id);
-                match super::precision::area_sign(&nodes, &cycle) {
-                    Ordering::Greater => shells.push(cycle),
-                    Ordering::Less => holes.push(cycle),
-                    Ordering::Equal => {}
+                // A cycle without area bounds no face.
+                let sign = super::precision::area_sign(&nodes, &cycle);
+                if sign.is_gt() {
+                    shells.push(cycle);
+                } else if sign.is_lt() {
+                    holes.push(cycle);
                 }
             } else {
                 positions.insert(id, path.len());

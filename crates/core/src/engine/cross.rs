@@ -197,15 +197,16 @@ impl Feature {
         let Some(area) = &self.area else {
             return Ok(self.geometry.clone());
         };
-        let mut geometries = if let Geometry::GeometryCollection(parts) = &self.geometry {
-            parts
-                .iter()
-                .filter(|g| !matches!(g, Geometry::Polygon(_)))
-                .cloned()
-                .collect::<Vec<_>>()
-        } else {
-            Vec::new()
+        // Several polygon parts are kept as a collection next to any other parts.
+        let parts = match &self.geometry {
+            Geometry::GeometryCollection(parts) => parts.0.as_slice(),
+            single => std::slice::from_ref(single),
         };
+        let mut geometries = parts
+            .iter()
+            .filter(|g| !matches!(g, Geometry::Polygon(_)))
+            .cloned()
+            .collect::<Vec<_>>();
         geometries.push(area.emit(0.)?.into());
         Ok(Merge::AllDimensions.geometry(geometries))
     }

@@ -37,8 +37,8 @@ pub(crate) fn run(t: &Topology, spec: RuleSpec) -> Result<Vec<Violation>, Error>
         Rule::LineMustNotOverlap | Rule::LineMustNotOverlapWith => {
             line::run(t, spec, LineCheck::Overlap)
         }
-        Rule::LineMustNotSelfOverlap => line::run(t, spec, LineCheck::SelfOverlap),
-        Rule::LineMustNotSelfIntersect => line::run(t, spec, LineCheck::SelfIntersect),
+        Rule::LineMustNotSelfOverlap => line::run_self(t, spec, false),
+        Rule::LineMustNotSelfIntersect => line::run_self(t, spec, true),
         Rule::LineMustNotIntersect | Rule::LineMustNotIntersectWith => {
             line::run(t, spec, LineCheck::Intersect { touch: false })
         }
@@ -78,14 +78,12 @@ pub(crate) fn run(t: &Topology, spec: RuleSpec) -> Result<Vec<Violation>, Error>
         }
         Rule::GeometryMustNotBeContainedBy => containment::contained(t, spec, other()?),
         Rule::LineMustBeCoveredByPolygonBoundaries => {
-            boundary::linework(t, spec, other()?, Boundary::LinesCovered)
+            boundary::uncovered(t, spec, other()?, Boundary::LinesCovered)
         }
         Rule::PolygonBoundariesMustBeCoveredByLines => {
-            boundary::linework(t, spec, other()?, Boundary::BoundariesCovered)
+            boundary::uncovered(t, spec, other()?, Boundary::BoundariesCovered)
         }
-        Rule::LineMustNotOverlapPolygonBoundaries => {
-            boundary::linework(t, spec, other()?, Boundary::NotShared)
-        }
+        Rule::LineMustNotOverlapPolygonBoundaries => boundary::shared(t, spec, other()?),
         Rule::LineMustBeProperlyInsidePolygons => line_polygon::properly_inside(t, spec, other()?),
         Rule::LineMustNotCrossPolygonBoundaries => {
             line_polygon::run(t, spec, other()?, LinePolygon::Cross)
