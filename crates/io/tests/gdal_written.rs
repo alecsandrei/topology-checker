@@ -26,7 +26,7 @@ fn gdal_web_mercator_definition_is_epsg_3857() {
 }
 
 #[test]
-fn ellipsoidal_mercator_tagged_as_web_mercator_is_still_rejected() {
+fn ellipsoidal_mercator_tagged_as_web_mercator_is_not_web_mercator() {
     assert!(GDAL_WEB_MERCATOR.contains(SPHERICAL_EXTENSION));
     let ellipsoidal = GDAL_WEB_MERCATOR.replace(SPHERICAL_EXTENSION, "");
     assert_not_web_mercator(&ellipsoidal, "ellipsoidal Mercator");
