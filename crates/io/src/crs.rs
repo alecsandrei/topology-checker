@@ -40,10 +40,40 @@ pub struct Crs {
     definition: String,
     backend: Backend,
 }
+/// `semantically_equivalent` never equates two datums whose path to WGS84 is
+/// unknown, so a custom CRS without a datum shift would differ from itself.
+/// Compare such CRSs by ellipsoid, unit and projection parameters instead.
+fn same_without_datum_shift(a: &proj_core::CrsDef, b: &proj_core::CrsDef) -> bool {
+    use proj_core::{CrsDef, Datum, DatumToWgs84, GeographicCrsDef, ProjectedCrsDef};
+    fn shiftless(def: &CrsDef) -> Option<CrsDef> {
+        let datum = def.datum();
+        if def.epsg() != 0
+            || datum.epsg() != 0
+            || !matches!(datum.to_wgs84(), DatumToWgs84::Unknown)
+        {
+            return None;
+        }
+        let datum = Datum::new(datum.ellipsoid(), DatumToWgs84::Identity).ok()?;
+        match def {
+            CrsDef::Geographic(_) => Some(CrsDef::Geographic(GeographicCrsDef::new(0, datum, ""))),
+            CrsDef::Projected(p) => Some(CrsDef::Projected(ProjectedCrsDef::new(
+                0,
+                datum,
+                p.method(),
+                p.linear_unit(),
+                "",
+            ))),
+            CrsDef::Compound(_) => None,
+        }
+    }
+    matches!((shiftless(a), shiftless(b)), (Some(a), Some(b)) if a.semantically_equivalent(&b))
+}
 impl PartialEq for Crs {
     fn eq(&self, other: &Self) -> bool {
         match (&self.backend, &other.backend) {
-            (Backend::Native(a), Backend::Native(b)) => a.semantically_equivalent(b),
+            (Backend::Native(a), Backend::Native(b)) => {
+                a.semantically_equivalent(b) || same_without_datum_shift(a, b)
+            }
             #[cfg(feature = "gdal-system")]
             _ => {
                 if let (Ok(a), Ok(b)) = (self.to_gdal(), other.to_gdal()) {
@@ -210,9 +240,7 @@ impl Transform {
         if x.len() != y.len() {
             bail!("coordinate array lengths differ");
         }
-        if x.iter().chain(y.iter()).any(|v| !v.is_finite()) {
-            bail!("non-finite input coordinates");
-        }
+        ensure_finite(x, y, "non-finite input coordinates")?;
         match &self.operation {
             Operation::Native(t) => {
                 let result = x
@@ -228,10 +256,11 @@ impl Transform {
             #[cfg(feature = "gdal-system")]
             Operation::Fallback(t) => t.transform_coords(x, y, &mut [])?,
         }
-        if x.iter().chain(y.iter()).any(|v| !v.is_finite()) {
-            bail!("coordinate transformation produced non-finite coordinates");
-        }
-        Ok(())
+        ensure_finite(
+            x,
+            y,
+            "coordinate transformation produced non-finite coordinates",
+        )
     }
     /// # Errors
     /// Returns an error for invalid bounds, excessive densification or transformation failures.
@@ -247,6 +276,13 @@ impl Transform {
             #[cfg(feature = "gdal-system")]
             Operation::Fallback(t) => Ok(t.transform_bounds(bounds, densify)?),
         }
+    }
+}
+fn ensure_finite(x: &[f64], y: &[f64], message: &str) -> Result<()> {
+    if x.iter().chain(y).all(|v| v.is_finite()) {
+        Ok(())
+    } else {
+        bail!("{message}")
     }
 }
 /// Transform every original coordinate, preserving geometry structure.

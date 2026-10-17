@@ -84,3 +84,55 @@ fn coordinate_transformations_reject_invalid_arrays() {
     let bounds = operation.transform_bounds(&[0., 0., 1., 1.], 21).unwrap();
     assert!(bounds[2] > bounds[0] && bounds[3] > bounds[1]);
 }
+
+#[test]
+fn identical_custom_crs_without_a_datum_shift_are_equal() {
+    for definition in [FOOT_UTM, "+proj=utm +zone=33 +units=us-ft"] {
+        let a = crs::parse(definition).unwrap();
+        let b = crs::parse(definition).unwrap();
+        assert_eq!(a, b, "{definition}");
+    }
+    assert_ne!(
+        crs::parse(FOOT_UTM).unwrap(),
+        crs::parse("+proj=utm +zone=33 +units=us-ft").unwrap()
+    );
+}
+
+#[test]
+fn custom_crs_equality_still_distinguishes_every_parameter() {
+    let parse = |d: &str| crs::parse(d).unwrap();
+    let equal = |a: &str, b: &str| parse(a) == parse(b);
+    // Identical definitions without a datum shift, projected and geographic.
+    assert!(equal(
+        "+proj=utm +zone=33 +ellps=GRS80",
+        "+proj=utm +zone=33 +ellps=GRS80"
+    ));
+    assert!(equal(
+        "+proj=longlat +ellps=intl",
+        "+proj=longlat +ellps=intl"
+    ));
+    // Any differing parameter keeps them apart.
+    assert!(!equal(
+        "+proj=utm +zone=33 +ellps=GRS80",
+        "+proj=utm +zone=34 +ellps=GRS80"
+    ));
+    assert!(!equal(
+        "+proj=utm +zone=33 +ellps=GRS80",
+        "+proj=utm +zone=33 +ellps=intl"
+    ));
+    assert!(!equal(
+        "+proj=utm +zone=33 +ellps=GRS80 +units=m",
+        "+proj=utm +zone=33 +ellps=GRS80 +units=ft"
+    ));
+    assert!(!equal(
+        "+proj=longlat +ellps=intl",
+        "+proj=longlat +ellps=bessel"
+    ));
+    // Datum shifts are real differences: only identical shifts are equal.
+    let shifted = |t: &str| format!("+proj=utm +zone=33 +ellps=intl +towgs84={t}");
+    assert!(equal(&shifted("1,2,3"), &shifted("1,2,3")));
+    assert!(!equal(&shifted("1,2,3"), &shifted("1,2,4")));
+    // A custom CRS never equals a coded one.
+    assert!(!equal("+proj=utm +zone=33 +ellps=GRS80", "EPSG:32633"));
+    assert!(!equal("EPSG:32633", "+proj=utm +zone=33 +ellps=GRS80"));
+}
