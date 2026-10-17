@@ -1,0 +1,9 @@
+(function() {
+    const implementors = Object.fromEntries([["topology_checker_core",[["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.99.1/core/convert/trait.From.html\" title=\"trait core::convert::From\">From</a>&lt;&amp;<a class=\"struct\" href=\"topology_checker_core/struct.RuleReport.html\" title=\"struct topology_checker_core::RuleReport\">RuleReport</a>&gt; for <a class=\"struct\" href=\"topology_checker_core/struct.RuleSummary.html\" title=\"struct topology_checker_core::RuleSummary\">RuleSummary</a>",0],["impl&lt;E&gt; <a class=\"trait\" href=\"https://doc.rust-lang.org/1.99.1/core/convert/trait.From.html\" title=\"trait core::convert::From\">From</a>&lt;<a class=\"enum\" href=\"topology_checker_core/enum.Error.html\" title=\"enum topology_checker_core::Error\">Error</a>&gt; for <a class=\"enum\" href=\"topology_checker_core/enum.SinkError.html\" title=\"enum topology_checker_core::SinkError\">SinkError</a>&lt;E&gt;",0]]]]);
+    if (window.register_implementors) {
+        window.register_implementors(implementors);
+    } else {
+        window.pending_implementors = implementors;
+    }
+})()
+//{"start":59,"fragment_lengths":[897]}

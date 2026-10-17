@@ -1,0 +1,1107 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+        <link rel="canonical" href="https://alecsandrei.github.io/topology-checker/stable/rules/">
+      
+      
+      
+        <link rel="prev" href="../cli/">
+      
+      
+        <link rel="next" href="../web-app/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="zensical-0.0.70">
+    
+    
+      
+        <title>Rules - topology-checker</title>
+      
+    
+    
+      
+        
+      
+      <link rel="stylesheet" href="../assets/stylesheets/modern/main.e442bf79.min.css">
+      
+        
+          
+        
+        <link rel="stylesheet" href="../assets/stylesheets/modern/palette.b60ce83d.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Inter:300,300i,400,400i,500,500i,700,700i%7CJetBrains+Mono:400,400i,700,700i&amp;display=fallback">
+        <style>:root{--md-text-font:"Inter";--md-code-font:"JetBrains Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("..",location),__md_scope.pathname.endsWith("/")||(__md_scope=new URL(__md_scope.pathname+"/",location)),__md_hash=e=>[...e].reduce(((e,t)=>(e<<5)-e+t.charCodeAt(0)),0),__md_get=(e,t=localStorage,_=__md_scope)=>JSON.parse(t.getItem(_.pathname+"."+e)),__md_set=(e,t,_=localStorage,a=__md_scope)=>{try{_.setItem(a.pathname+"."+e,JSON.stringify(t))}catch(e){}},document.documentElement.setAttribute("data-platform",navigator.platform)</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer" aria-hidden="true"></label>
+    <div data-md-component="skip">
+      <a href="#__skip" class="md-skip">
+        Skip to content
+      </a>
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="./.." title="topology-checker" class="md-header__button md-logo" aria-label="topology-checker" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-book-open" viewBox="0 0 24 24"><path d="M12 5v16M20.001 19A2 2 0 0 0 22 17V5a2 2 0 0 0-1.999-2L16 3.002A5 5 0 0 0 12 5a5 5 0 0 0-4-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 1.999 2H8a5 5 0 0 1 4 2 5 5 0 0 1 4-2z"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer" aria-label="Navigation">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-menu" viewBox="0 0 24 24"><path d="M4 5h16M4 12h16M4 19h16"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            topology-checker
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Rules
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: light)" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-moon" viewBox="0 0 24 24"><path d="M20.985 12.486a9 9 0 1 1-9.473-9.472c.405-.022.617.46.402.803a6 6 0 0 0 8.268 8.268c.344-.215.825-.004.803.401"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="(prefers-color-scheme: dark)" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search" aria-label="Search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-search" viewBox="0 0 24 24"><path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog" aria-label="Search">
+  <button type="button" class="md-search__button">
+    Search
+  </button>
+</div>
+      
+    
+    <div class="md-header__source">
+      
+        <a href="https://github.com/alecsandrei/topology-checker" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.3.1 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2026 Fonticons, Inc.--><path fill="currentColor" d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      
+    </div>
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="./.." title="topology-checker" class="md-nav__button md-logo" aria-label="topology-checker" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2" class="lucide lucide-book-open" viewBox="0 0 24 24"><path d="M12 5v16M20.001 19A2 2 0 0 0 22 17V5a2 2 0 0 0-1.999-2L16 3.002A5 5 0 0 0 12 5a5 5 0 0 0-4-2H4a2 2 0 0 0-2 2v12a2 2 0 0 0 1.999 2H8a5 5 0 0 1 4 2 5 5 0 0 1 4-2z"/></svg>
+
+    </a>
+    topology-checker
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/alecsandrei/topology-checker" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.3.1 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2026 Fonticons, Inc.--><path fill="currentColor" d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="./.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Home
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../install/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Install
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  CLI
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Rules
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="././" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Rules
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+
+<nav class="md-nav md-nav--secondary" aria-label="On this page">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      On this page
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#points-10" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Points (10)
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#lines-19" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Lines (19)
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#polygons-7" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Polygons (7)
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#all-geometries-2" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        All geometries (2)
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../web-app/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Web app
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../rustgis-plugin/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  RustGIS
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Python
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        
+          <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+            <label class="md-nav__title" for="__nav_7">
+              <span class="md-nav__icon md-icon"></span>
+              
+  
+  Python
+
+            </label>
+            <ul class="md-nav__list" data-md-scrollfix>
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../python-usage/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Usage
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+                
+                  
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../python-api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  API reference
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+                
+              
+            </ul>
+          </nav>
+        
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="https://docs.rs/topology-checker-core/latest/topology_checker_core/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+  Rust API
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  
+                    
+                    
+                    
+                      
+                    
+                    
+                      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+                      <div class="md-sidebar-button__wrapper">
+                        <label class="md-sidebar-button" for="__toc"></label>
+                      </div>
+                    
+                  
+                  <div class="md-sidebar__inner">
+                    
+
+
+<nav class="md-nav md-nav--secondary" aria-label="On this page">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      On this page
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#points-10" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Points (10)
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#lines-19" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Lines (19)
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#polygons-7" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        Polygons (7)
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#all-geometries-2" class="md-nav__link">
+    <span class="md-ellipsis">
+      <span class="md-typeset">
+        All geometries (2)
+      </span>
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                <a id="__skip" tabindex="-1"></a>
+                
+                  
+
+  
+  
+
+
+<h1 id="rules">Rules<a class="headerlink" href="#rules" title="Permanent link">&para;</a></h1>
+<!-- Generated by `cargo test -p topology-checker` from the core rule registry. Do not edit. -->
+
+<p>Run a rule as <code>topology-checker &lt;group&gt; &lt;rule&gt;</code>, or use <code>rule = "&lt;group&gt;/&lt;rule&gt;"</code> in <code>topology.toml</code>. <code>topology-checker &lt;group&gt; &lt;rule&gt; --help</code> prints the exact semantics.</p>
+<h2 id="points-10">Points (10)<a class="headerlink" href="#points-10" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Rule</th>
+<th>Needs</th>
+<th>Description</th>
+<th>ArcGIS</th>
+<th>QGIS</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>point/must-not-overlap</code></td>
+<td>one point layer</td>
+<td>Find duplicate points within the inclusive Euclidean distance tolerance.</td>
+<td>Must Be Disjoint</td>
+<td>Must not have duplicates</td>
+</tr>
+<tr>
+<td><code>point/must-not-overlap-with</code></td>
+<td>two point layers</td>
+<td>Find duplicate points across two layers within the inclusive Euclidean distance tolerance.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>point/must-be-inside</code></td>
+<td>point layer + polygon layer</td>
+<td>Find points outside the polygons, including points on or within the distance tolerance of their edges.</td>
+<td>Must Be Properly Inside Polygons</td>
+<td>Must be inside</td>
+</tr>
+<tr>
+<td><code>point/must-be-covered-by-lines</code></td>
+<td>point layer + line layer</td>
+<td>Find points without linework within the inclusive distance tolerance, including line endpoints.</td>
+<td>Must Be Covered By (Point-Line)</td>
+<td>Must be covered by</td>
+</tr>
+<tr>
+<td><code>point/must-be-covered-by-line-endpoints</code></td>
+<td>point layer + line layer</td>
+<td>Find points without a covering open line endpoint. Line parts closed within tolerance have no endpoints.</td>
+<td>Must Be Covered By Endpoint Of</td>
+<td>Must be covered by endpoints of</td>
+</tr>
+<tr>
+<td><code>point/must-be-covered-by-polygon-boundaries</code></td>
+<td>point layer + polygon layer</td>
+<td>Find points away from polygon edges, including holes and shared parcel edges.</td>
+<td>Must Be Covered By Boundary Of (Point-Area)</td>
+<td></td>
+</tr>
+<tr>
+<td><code>point/must-be-covered-by-polygons</code></td>
+<td>point layer + polygon layer</td>
+<td>Find points outside polygon areas and farther than the tolerance from their edges. Boundary points are allowed.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>point/must-not-be-inside-polygons</code></td>
+<td>point layer + polygon layer</td>
+<td>Find points strictly inside polygons. Points on or within tolerance of their edges are allowed.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>point/must-not-intersect-lines</code></td>
+<td>point layer + line layer</td>
+<td>Find points touching linework anywhere within the inclusive distance tolerance, including endpoints.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>point/must-not-intersect-polygons</code></td>
+<td>point layer + polygon layer</td>
+<td>Find points inside polygons or touching their edges within tolerance.</td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h2 id="lines-19">Lines (19)<a class="headerlink" href="#lines-19" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Rule</th>
+<th>Needs</th>
+<th>Description</th>
+<th>ArcGIS</th>
+<th>QGIS</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>line/must-not-have-dangles</code></td>
+<td>one line layer</td>
+<td>Find unconnected line endpoints.</td>
+<td>Must Not Have Dangles</td>
+<td>Must not have dangles</td>
+</tr>
+<tr>
+<td><code>line/must-not-have-pseudo-nodes</code></td>
+<td>one line layer</td>
+<td>Find joins connecting exactly two distinct features at their endpoints. Closed loops are allowed.</td>
+<td>Must Not Have Pseudo Nodes</td>
+<td>Must not have pseudo nodes</td>
+</tr>
+<tr>
+<td><code>line/must-not-overlap</code></td>
+<td>one line layer</td>
+<td>Find shared line segments between distinct features. Crossings, branches ending within tolerance and overlaps within one feature are excluded.</td>
+<td>Must Not Overlap</td>
+<td></td>
+</tr>
+<tr>
+<td><code>line/must-not-overlap-with</code></td>
+<td>two line layers</td>
+<td>Find shared line segments across two layers. Crossings and branches ending within tolerance are excluded.</td>
+<td>Must Not Overlap With</td>
+<td></td>
+</tr>
+<tr>
+<td><code>line/must-not-self-overlap</code></td>
+<td>one line layer</td>
+<td>Find line segments traced more than once by the same feature, including across its parts. Parts branching off at an angle are excluded.</td>
+<td>Must Not Self-Overlap</td>
+<td></td>
+</tr>
+<tr>
+<td><code>line/must-not-intersect</code></td>
+<td>one line layer</td>
+<td>Find overlaps and crossings between distinct features away from their endpoints. Endpoint touches are allowed. A multipart line's endpoints are where an odd number of its parts end.</td>
+<td>Must Not Intersect</td>
+<td></td>
+</tr>
+<tr>
+<td><code>line/must-not-intersect-with</code></td>
+<td>two line layers</td>
+<td>Find overlaps and crossings across two layers away from their endpoints. Endpoint touches are allowed. A multipart line's endpoints are where an odd number of its parts end.</td>
+<td>Must Not Intersect With</td>
+<td></td>
+</tr>
+<tr>
+<td><code>line/must-not-intersect-or-touch-interior</code></td>
+<td>one line layer</td>
+<td>Find overlaps, crossings and endpoint touches on the interior of another feature. Touches only at both features' endpoints are allowed. A multipart line's endpoints are where an odd number of its parts end.</td>
+<td>Must Not Intersect Or Touch Interior</td>
+<td></td>
+</tr>
+<tr>
+<td><code>line/must-not-intersect-or-touch-interior-with</code></td>
+<td>two line layers</td>
+<td>Find overlaps, crossings and endpoint touches on a line's interior across two layers. Touches only at both features' endpoints are allowed. A multipart line's endpoints are where an odd number of its parts end.</td>
+<td>Must Not Intersect Or Touch Interior With</td>
+<td></td>
+</tr>
+<tr>
+<td><code>line/must-not-self-intersect</code></td>
+<td>one line layer</td>
+<td>Find overlaps and crossings within one feature. Closed loops and self-touches are allowed.</td>
+<td>Must Not Self-Intersect</td>
+<td></td>
+</tr>
+<tr>
+<td><code>line/must-be-inside</code></td>
+<td>line layer + polygon layer</td>
+<td>Find line pieces outside the polygons and farther than the distance tolerance from their exterior or hole edges. Every remaining outside piece is reported, including short tails.</td>
+<td>Must Be Inside</td>
+<td></td>
+</tr>
+<tr>
+<td><code>line/endpoints-must-be-covered-by-points</code></td>
+<td>line layer + point layer</td>
+<td>Find open line endpoints without a covering point. Line parts closed within tolerance have no endpoints.</td>
+<td>Endpoint Must Be Covered By</td>
+<td>End points must be covered by</td>
+</tr>
+<tr>
+<td><code>line/must-be-covered-by-polygon-boundaries</code></td>
+<td>line layer + polygon layer</td>
+<td>Find line pieces farther than tolerance from polygon exterior or hole edges. Report every uncovered portion, including short tails.</td>
+<td>Must Be Covered By Boundary Of (Line-Area)</td>
+<td></td>
+</tr>
+<tr>
+<td><code>line/must-not-cross-polygon-boundaries</code></td>
+<td>line layer + polygon layer</td>
+<td>Find lines entering or leaving polygons through exterior or hole edges. Tangencies, endpoint touches and shared segments are allowed.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>line/must-be-properly-inside-polygons</code></td>
+<td>line layer + polygon layer</td>
+<td>Find whole line parts that leave polygon coverage or come within tolerance of its boundary. Gaps narrower than the tolerance are closed, except where polygons face each other only at corners, and may close up to 10% over it where they widen to an open end.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>line/must-not-overlap-with-polygons</code></td>
+<td>line layer + polygon layer</td>
+<td>Find line pieces inside polygons or along their edges, longer than tolerance. Isolated contacts are allowed.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>line/must-not-overlap-polygon-boundaries</code></td>
+<td>line layer + polygon layer</td>
+<td>Find line pieces shared with polygon edges, longer than tolerance. Crossings and isolated contacts are allowed.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>line/must-not-intersect-polygons</code></td>
+<td>line layer + polygon layer</td>
+<td>Find any line contact with polygons, including interior pieces, shared edges and isolated touches within tolerance.</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>line/endpoints-must-be-covered-by-polygon-boundaries</code></td>
+<td>line layer + polygon layer</td>
+<td>Find open line endpoints away from polygon exterior or hole edges. Line parts closed within tolerance have no endpoints.</td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h2 id="polygons-7">Polygons (7)<a class="headerlink" href="#polygons-7" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Rule</th>
+<th>Needs</th>
+<th>Description</th>
+<th>ArcGIS</th>
+<th>QGIS</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>polygon/must-not-overlap</code></td>
+<td>one polygon layer</td>
+<td>Find shared areas between distinct polygon features, ignoring slivers below the tolerance.</td>
+<td>Must Not Overlap</td>
+<td>Must not overlap</td>
+</tr>
+<tr>
+<td><code>polygon/must-not-overlap-with</code></td>
+<td>two polygon layers</td>
+<td>Find shared polygon areas across two layers, ignoring slivers below the tolerance.</td>
+<td>Must Not Overlap With</td>
+<td>Must not overlap with</td>
+</tr>
+<tr>
+<td><code>polygon/must-not-have-gaps</code></td>
+<td>one polygon layer</td>
+<td>Find enclosed gaps between polygons, ignoring sliver gaps below the tolerance. Also report outer boundaries separately.</td>
+<td>Must Not Have Gaps</td>
+<td>Must not have gaps</td>
+</tr>
+<tr>
+<td><code>polygon/boundaries-must-be-covered-by-lines</code></td>
+<td>polygon layer + line layer</td>
+<td>Find polygon exterior or hole edges farther than tolerance from lines. Report every uncovered portion, including short tails.</td>
+<td>Boundary Must Be Covered By (Area-Line)</td>
+<td></td>
+</tr>
+<tr>
+<td><code>polygon/must-contain-point</code></td>
+<td>polygon layer + point layer</td>
+<td>Find polygons without a strictly interior point feature. All parts of a point feature must qualify.</td>
+<td>Contains Point</td>
+<td>Must contain</td>
+</tr>
+<tr>
+<td><code>polygon/must-contain-one-point</code></td>
+<td>polygon layer + point layer</td>
+<td>Find polygons and point features without a one-to-one interior assignment. Count feature IDs, including multipart features.</td>
+<td>Contains One Point</td>
+<td></td>
+</tr>
+<tr>
+<td><code>polygon/must-not-contain-points</code></td>
+<td>polygon layer + point layer</td>
+<td>Find strictly contained points, with the polygon as the primary feature. Boundary points are allowed.</td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table>
+<h2 id="all-geometries-2">All geometries (2)<a class="headerlink" href="#all-geometries-2" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Rule</th>
+<th>Needs</th>
+<th>Description</th>
+<th>ArcGIS</th>
+<th>QGIS</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>geometry/must-not-be-multipart</code></td>
+<td>one layer of any geometry type</td>
+<td>Find features with more than one part. A Multi geometry with only one part is allowed.</td>
+<td>Must Be Single Part (lines)</td>
+<td>Must not have multi-part geometries</td>
+</tr>
+<tr>
+<td><code>geometry/must-not-be-contained-by</code></td>
+<td>two layers of any geometry type</td>
+<td>Find whole features contained by an individual feature in the other layer. Equal geometries are allowed. No tolerance buffer is used.</td>
+<td></td>
+<td>Check Geometry (Contained)</td>
+</tr>
+</tbody>
+</table>
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://zensical.org/" target="_blank" rel="noopener">
+      Zensical
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog" role="status" aria-atomic="true">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      
+      
+        
+        
+      <script id="__config" type="application/json">{"annotate":null,"base":"..","features":["content.code.copy"],"redirect":null,"search":"../assets/javascripts/workers/search.c47bb847.min.js","tags":null,"translations":{"clipboard.copied":"Copied to clipboard","clipboard.copy":"Copy to clipboard","clipboard.error":"Could not copy to clipboard","search.result.more.one":"1 more on this page","search.result.more.other":"# more on this page","search.result.none":"No matching documents","search.result.one":"1 matching document","search.result.other":"# matching documents","search.result.placeholder":"Type to start searching","search.result.term.missing":"Missing","select.version":"Select version"},"version":{"alias":true,"provider":"mike"}}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.a2388154.min.js"></script>
+      
+    
+  </body>
+</html>

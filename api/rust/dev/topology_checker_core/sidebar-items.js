@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["Error","GeometryKind","LayerInput","Rule","SinkError","ViolationKind","Warning"],"fn":["explode_lines","merge_lines"],"struct":["CancellationToken","FeatureRef","Layer","LayerId","ParseRuleError","Report","ReportSummary","RuleId","RuleReport","RuleSpec","RuleSummary","Topology","Violation"]};
