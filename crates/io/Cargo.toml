@@ -44,6 +44,7 @@ parquet = { version = "56", default-features = false, features = ["arrow", "json
 arrow-array = "56"
 arrow-schema = "56"
 kml = { version = "0.14", default-features = false, features = ["geo-types"] }
+quick-xml = "0.41"
 gpx = "0.10"
 zip = { version = "2.4", default-features = false, features = ["deflate"] }
 tempfile = "3"

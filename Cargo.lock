@@ -3772,6 +3772,7 @@ dependencies = [
  "proj-core",
  "proj-sys",
  "proj-wkt",
+ "quick-xml",
  "serde",
  "serde_json",
  "shapefile",
