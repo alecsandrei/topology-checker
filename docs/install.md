@@ -37,6 +37,10 @@ cargo build -p topology-checker-web --release --locked
 
 The frontend is embedded in `target/release/topology-checker-web`. See [Web app](web-app.md).
 
+## RustGIS plugin
+
+topology-checker is a plugin for [RustGIS](https://github.com/opengeos/RustGIS). Download `topology-checker-<version>.rgplugin` from the [latest release](https://github.com/alecsandrei/topology-checker/releases/latest), then in RustGIS open the Plugin Manager and choose **Install from File**. Do not unzip the file. See [RustGIS plugin](rustgis-plugin.md), which also covers building it from source.
+
 ## Rust library
 
 ```toml
