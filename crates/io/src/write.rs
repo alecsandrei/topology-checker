@@ -227,12 +227,7 @@ pub fn dataset(
     for file in files {
         let target = parent.join(file.file_name().unwrap());
         if target.is_dir() && format.name == "OpenFileGDB" {
-            let backup = staging.path().join("previous-dataset");
-            std::fs::rename(&target, &backup)?;
-            if let Err(error) = std::fs::rename(&file, &target) {
-                std::fs::rename(&backup, &target)?;
-                return Err(error.into());
-            }
+            replace_directory(&file, &target, &staging.path().join("previous-dataset"))?;
             continue;
         }
         std::fs::rename(&file, &target)
@@ -356,6 +351,15 @@ fn group(
         geometry: Some(geometry),
         properties,
     });
+}
+/// Move `source` over the existing directory `destination`, restoring it if the move fails.
+fn replace_directory(source: &Path, destination: &Path, backup: &Path) -> Result<()> {
+    std::fs::rename(destination, backup)?;
+    if let Err(error) = std::fs::rename(source, destination) {
+        std::fs::rename(backup, destination)?;
+        return Err(error.into());
+    }
+    Ok(())
 }
 /// Write violations with the shared report columns, returning the written paths.
 /// Layer names are resolved from the report, so no topology is required.
@@ -506,10 +510,8 @@ fn stored_properties(
     let name = |id| {
         if id == r.spec.layer {
             Some(r.layer.as_str())
-        } else if Some(id) == r.spec.other {
-            r.other.as_deref()
         } else {
-            None
+            r.other.as_deref()
         }
     };
     let mut p = Map::new();
@@ -723,15 +725,94 @@ pub fn stored_report(
     for file in files {
         let destination = parent.join(file.file_name().context("staged filename")?);
         if destination.is_dir() {
-            let backup = staging.path().join("previous-dataset");
-            std::fs::rename(&destination, &backup)?;
-            if let Err(error) = std::fs::rename(&file, &destination) {
-                std::fs::rename(&backup, &destination)?;
-                return Err(error.into());
-            }
+            replace_directory(
+                &file,
+                &destination,
+                &staging.path().join("previous-dataset"),
+            )?;
         } else {
             std::fs::rename(file, destination)?;
         }
     }
     Ok(outputs.into_iter().map(|(p, _)| p).collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use geo::{GeometryCollection, Line, LineString, MultiPoint, Point, Rect, Triangle, polygon};
+
+    #[test]
+    fn violation_geometries_are_grouped_into_multi_families() {
+        let point = Point::new(1., 2.);
+        let line = Line::new((0., 0.), (1., 1.));
+        let square = polygon![(x: 0., y: 0.), (x: 1., y: 0.), (x: 1., y: 1.), (x: 0., y: 0.)];
+        let mut groups = BTreeMap::new();
+        for geometry in [
+            Geometry::from(point),
+            MultiPoint(vec![point]).into(),
+            line.into(),
+            LineString::from(line).into(),
+            MultiLineString(vec![line.into()]).into(),
+            square.clone().into(),
+            MultiPolygon(vec![square]).into(),
+            Rect::new((0., 0.), (1., 1.)).into(),
+            Triangle::new((0., 0.).into(), (1., 0.).into(), (1., 1.).into()).into(),
+            Geometry::GeometryCollection(GeometryCollection(vec![point.into(), line.into()])),
+        ] {
+            group(&geometry, Map::new(), &mut groups);
+        }
+        assert_eq!(groups["point"].len(), 3);
+        assert_eq!(groups["line"].len(), 4);
+        assert_eq!(groups["polygon"].len(), 4);
+        for (family, records) in &groups {
+            assert!(records.iter().all(|r| matches!(
+                (*family, &r.geometry),
+                ("point", Some(Geometry::MultiPoint(_)))
+                    | ("line", Some(Geometry::MultiLineString(_)))
+                    | ("polygon", Some(Geometry::MultiPolygon(_)))
+            )));
+        }
+    }
+
+    #[test]
+    fn mixed_property_types_widen_to_real_or_text() {
+        let record = |value: serde_json::Value| Record {
+            id: None,
+            geometry: None,
+            properties: Map::from_iter([("value".to_string(), value)]),
+        };
+        let kind = |values: Vec<serde_json::Value>| {
+            DatasetLayer::new("mixed", None, values.into_iter().map(record).collect()).fields[0]
+                .kind
+        };
+        assert_eq!(kind(vec![json!(1), json!(2.5)]), FieldType::Real);
+        assert_eq!(kind(vec![json!(2.5), json!(1)]), FieldType::Real);
+        assert_eq!(kind(vec![json!(1), json!("one")]), FieldType::Text);
+        assert_eq!(kind(vec![json!(true), json!(1)]), FieldType::Text);
+        assert_eq!(kind(vec![json!(null), json!(true)]), FieldType::Boolean);
+    }
+
+    #[test]
+    fn failed_directory_replacement_restores_the_previous_dataset() {
+        let dir = tempfile::tempdir().unwrap();
+        let destination = dir.path().join("data.gdb");
+        std::fs::create_dir(&destination).unwrap();
+        std::fs::write(destination.join("table"), "old").unwrap();
+        let backup = dir.path().join("backup");
+        assert!(replace_directory(&dir.path().join("missing"), &destination, &backup).is_err());
+        assert_eq!(
+            std::fs::read_to_string(destination.join("table")).unwrap(),
+            "old"
+        );
+
+        let staged = dir.path().join("staged");
+        std::fs::create_dir(&staged).unwrap();
+        std::fs::write(staged.join("table"), "new").unwrap();
+        replace_directory(&staged, &destination, &backup).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(destination.join("table")).unwrap(),
+            "new"
+        );
+    }
 }

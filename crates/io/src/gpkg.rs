@@ -12,6 +12,12 @@ use turso_core::{
     Connection, Database, Numeric, OpenFlags, OpenOptions, PlatformIO, SqliteDialect, Value,
 };
 
+const ORDINARY_TABLES: &str =
+    "SELECT sql, rootpage FROM sqlite_schema WHERE type = 'table' AND rootpage > 0";
+const INSERT_SRS: &str = "INSERT INTO gpkg_spatial_ref_sys VALUES (?, ?, ?, ?, ?, NULL)";
+const INSERT_GEOMETRY_COLUMN: &str =
+    "INSERT INTO gpkg_geometry_columns VALUES (?, 'geom', ?, ?, 0, 0)";
+
 pub(crate) struct Sqlite {
     connection: Arc<Connection>,
     _database: Arc<Database>,
@@ -110,10 +116,7 @@ pub(crate) fn read(path: &Path) -> Result<Vec<RawLayer>> {
     // Turso's catalog loader stops at virtual tables whose modules are absent.
     // Register ordinary B-trees through the engine's SQLite schema parser.
     // No spatial-index module is used, and the source remains read-only.
-    let tables = db.query(
-        "SELECT sql, rootpage FROM sqlite_schema WHERE type = 'table' AND rootpage > 0",
-        &[],
-    )?;
+    let tables = db.query(ORDINARY_TABLES, &[])?;
     for table in tables {
         use turso_core::dialect::Dialect;
         let parsed =
@@ -157,10 +160,8 @@ pub(crate) fn read(path: &Path) -> Result<Vec<RawLayer>> {
             if wkt != "undefined" {
                 Some(crs::parse(wkt)?)
             } else if get_text(&definition[0])?.eq_ignore_ascii_case("EPSG") {
-                Some(crs::parse(&format!(
-                    "EPSG:{}",
-                    get_integer(&definition[1])?
-                ))?)
+                let code = get_integer(&definition[1])?;
+                Some(crs::parse(&format!("EPSG:{code}"))?)
             } else {
                 bail!("unsupported GeoPackage CRS definition")
             }
@@ -186,15 +187,13 @@ pub(crate) fn read(path: &Path) -> Result<Vec<RawLayer>> {
         for c in &attributes {
             select.push(ident(c)?);
         }
-        let rows = db.query(
-            &format!(
-                "SELECT {} FROM {} ORDER BY {}",
-                select.join(","),
-                ident(&name)?,
-                ident(pk)?
-            ),
-            &[],
-        )?;
+        let sql = format!(
+            "SELECT {} FROM {} ORDER BY {}",
+            select.join(","),
+            ident(&name)?,
+            ident(pk)?
+        );
+        let rows = db.query(&sql, &[])?;
         let mut features = Vec::new();
         for row in rows {
             let id = Some(get_integer(&row[0])?);
@@ -252,10 +251,9 @@ fn sql_value(value: Option<&Json>) -> Result<Value> {
         Some(Json::Number(n)) => {
             if let Some(i) = n.as_i64() {
                 integer(i)
-            } else if let Some(f) = n.as_f64() {
-                Value::from_f64(f)
             } else {
-                bail!("unsupported numeric value")
+                // Without arbitrary precision every JSON number converts to f64.
+                Value::from_f64(n.as_f64().unwrap_or(f64::NAN))
             }
         }
         Some(Json::String(s)) => text(s),
@@ -287,10 +285,8 @@ pub(crate) fn write_sources(path: &Path, layers: &[&dyn crate::write::RecordSour
         } else {
             wkt.into()
         };
-        db.exec(
-            "INSERT INTO gpkg_spatial_ref_sys VALUES (?, ?, ?, ?, ?, NULL)",
-            &[text(name), integer(id), text(org), integer(id), text(wkt)],
-        )?;
+        let row = [text(name), integer(id), text(org), integer(id), text(wkt)];
+        db.exec(INSERT_SRS, &row)?;
     }
     let mut srids = BTreeSet::from([-1, 0, 4326]);
     let mut next_custom = 100_000_i32;
@@ -313,16 +309,14 @@ pub(crate) fn write_sources(path: &Path, layers: &[&dyn crate::write::RecordSour
         };
         if srids.insert(srs_id) {
             let s = layer.srs.as_ref().context("missing custom CRS")?;
-            db.exec(
-                "INSERT INTO gpkg_spatial_ref_sys VALUES (?, ?, ?, ?, ?, NULL)",
-                &[
-                    text(s.name().unwrap_or("Custom CRS".into())),
-                    integer(srs_id.into()),
-                    text(if s.epsg().is_some() { "EPSG" } else { "NONE" }),
-                    integer(s.epsg().unwrap_or(srs_id as u32).into()),
-                    text(s.to_wkt()?),
-                ],
-            )?;
+            let row = [
+                text(s.name().unwrap_or("Custom CRS".into())),
+                integer(srs_id.into()),
+                text(if s.epsg().is_some() { "EPSG" } else { "NONE" }),
+                integer(s.epsg().unwrap_or(srs_id as u32).into()),
+                text(s.to_wkt()?),
+            ];
+            db.exec(INSERT_SRS, &row)?;
         }
         let mut columns = vec!["fid INTEGER PRIMARY KEY".into(), "geom BLOB".into()];
         for field in &layer.fields {
@@ -343,14 +337,12 @@ pub(crate) fn write_sources(path: &Path, layers: &[&dyn crate::write::RecordSour
                 }
             ));
         }
-        db.exec(
-            &format!(
-                "CREATE TABLE {} ({})",
-                ident(&layer.name)?,
-                columns.join(",")
-            ),
-            &[],
-        )?;
+        let sql = format!(
+            "CREATE TABLE {} ({})",
+            ident(&layer.name)?,
+            columns.join(",")
+        );
+        db.exec(&sql, &[])?;
         let mut bounds = None::<[f64; 4]>;
         for record in source.records() {
             let record = record?;
@@ -375,10 +367,8 @@ pub(crate) fn write_sources(path: &Path, layers: &[&dyn crate::write::RecordSour
         }
         db.exec("INSERT INTO gpkg_contents (table_name,data_type,identifier,srs_id,min_x,min_y,max_x,max_y) VALUES (?, 'features', ?, ?, ?, ?, ?, ?)",&metadata)?;
         let ty = layer.geometry_type.as_deref().unwrap_or("GEOMETRY");
-        db.exec(
-            "INSERT INTO gpkg_geometry_columns VALUES (?, 'geom', ?, ?, 0, 0)",
-            &[text(&layer.name), text(ty), integer(srs_id.into())],
-        )?;
+        let row = [text(&layer.name), text(ty), integer(srs_id.into())];
+        db.exec(INSERT_GEOMETRY_COLUMN, &row)?;
         let insert = format!(
             "INSERT INTO {} VALUES ({})",
             ident(&layer.name)?,

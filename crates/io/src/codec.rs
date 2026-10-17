@@ -268,6 +268,18 @@ fn line(b: &mut Vec<u8>, l: &LineString) -> Result<()> {
     }
     Ok(())
 }
+fn polygon(b: &mut Vec<u8>, p: &Polygon) -> Result<()> {
+    if p.exterior().0.is_empty() {
+        uint(b, 0)?;
+    } else {
+        uint(b, 1 + p.interiors().len())?;
+        line(b, p.exterior())?;
+        for r in p.interiors() {
+            line(b, r)?;
+        }
+    }
+    Ok(())
+}
 fn encode_into(b: &mut Vec<u8>, g: &Geometry, depth: usize) -> Result<()> {
     ensure!(depth <= 64, "geometry nesting exceeds 64 levels");
     b.push(1);
@@ -275,17 +287,10 @@ fn encode_into(b: &mut Vec<u8>, g: &Geometry, depth: usize) -> Result<()> {
     match g {
         Geometry::Point(p) => coord(b, p.0),
         Geometry::LineString(l) => line(b, l)?,
-        Geometry::Polygon(p) => {
-            if p.exterior().0.is_empty() {
-                uint(b, 0)?;
-            } else {
-                uint(b, 1 + p.interiors().len())?;
-                line(b, p.exterior())?;
-                for r in p.interiors() {
-                    line(b, r)?;
-                }
-            }
-        }
+        Geometry::Line(l) => line(b, &(*l).into())?,
+        Geometry::Polygon(p) => polygon(b, p)?,
+        Geometry::Rect(r) => polygon(b, &r.to_polygon())?,
+        Geometry::Triangle(t) => polygon(b, &t.to_polygon())?,
         Geometry::MultiPoint(p) => {
             uint(b, p.0.len())?;
             for p in &p.0 {
@@ -310,13 +315,12 @@ fn encode_into(b: &mut Vec<u8>, g: &Geometry, depth: usize) -> Result<()> {
                 encode_into(b, p, depth + 1)?;
             }
         }
-        _ => unreachable!("normalized geometry"),
     }
     Ok(())
 }
 pub(crate) fn encode(g: &Geometry) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
-    encode_into(&mut bytes, &normalize(g), 0)?;
+    encode_into(&mut bytes, g, 0)?;
     Ok(bytes)
 }
 pub(crate) fn decode_gpkg(data: &[u8], srs: i32) -> Result<Decoded> {
@@ -430,5 +434,83 @@ mod tests {
         for end in 0..b.len() {
             assert!(decode(&b[..end]).is_err());
         }
+    }
+    fn wkb(code: u32, payload: &[u8]) -> Vec<u8> {
+        let mut b = vec![1];
+        b.extend(code.to_le_bytes());
+        b.extend(payload);
+        b
+    }
+    fn point(x: f64, y: f64) -> Vec<u8> {
+        wkb(1, &[x.to_le_bytes(), y.to_le_bytes()].concat())
+    }
+    fn multi(code: u32, children: &[Vec<u8>]) -> Vec<u8> {
+        let mut payload = (children.len() as u32).to_le_bytes().to_vec();
+        payload.extend(children.concat());
+        wkb(code, &payload)
+    }
+    #[test]
+    fn invalid_headers_and_mismatched_children_are_errors() {
+        let mut bad_order = point(1., 2.);
+        bad_order[0] = 7;
+        assert!(decode(&bad_order).is_err());
+        assert!(decode(&wkb(8, &[])).is_err());
+        let line = encode(&LineString::from(vec![(0., 0.), (1., 1.)]).into()).unwrap();
+        for (code, message) in [(4, "multipoint"), (6, "multipolygon")] {
+            let error = decode(&multi(code, std::slice::from_ref(&line))).unwrap_err();
+            assert!(error.to_string().contains(message), "{error}");
+        }
+        let error = decode(&multi(5, &[point(1., 2.)])).unwrap_err();
+        assert!(error.to_string().contains("multiline"), "{error}");
+        // The EWKB SRID flag is followed by a four-byte identifier.
+        let mut ewkb = vec![1];
+        ewkb.extend((1u32 | 0x2000_0000).to_le_bytes());
+        ewkb.extend(4326u32.to_le_bytes());
+        ewkb.extend([5f64.to_le_bytes(), 52f64.to_le_bytes()].concat());
+        assert_eq!(decode(&ewkb).unwrap().geometry, Point::new(5., 52.).into());
+        // Envelope indicator 5 is reserved.
+        let mut gpkg = vec![b'G', b'P', 0, 5 << 1];
+        gpkg.extend(0i32.to_le_bytes());
+        gpkg.extend([0; 64]);
+        let error = decode_gpkg(&gpkg, 0).unwrap_err();
+        assert!(error.to_string().contains("envelope"), "{error}");
+    }
+    #[test]
+    fn polygons_with_holes_roundtrip() {
+        let polygon = Polygon::new(
+            LineString::from(vec![(0., 0.), (10., 0.), (10., 10.), (0., 0.)]),
+            vec![LineString::from(vec![
+                (1., 1.),
+                (2., 1.),
+                (2., 2.),
+                (1., 1.),
+            ])],
+        );
+        let geometry = Geometry::from(polygon);
+        assert_eq!(
+            decode(&encode(&geometry).unwrap()).unwrap().geometry,
+            geometry
+        );
+    }
+    #[test]
+    fn convenience_geometries_encode_like_their_general_forms() {
+        use geo::{Line, Rect, Triangle};
+        let line = Line::new((0., 0.), (1., 1.));
+        let rect = Rect::new((0., 0.), (1., 1.));
+        let triangle = Triangle::new((0., 0.).into(), (1., 0.).into(), (1., 1.).into());
+        for (convenience, general) in [
+            (Geometry::Line(line), Geometry::from(LineString::from(line))),
+            (Geometry::Rect(rect), rect.to_polygon().into()),
+            (Geometry::Triangle(triangle), triangle.to_polygon().into()),
+        ] {
+            assert_eq!(encode(&convenience).unwrap(), encode(&general).unwrap());
+            assert!(!empty(&convenience));
+            assert_eq!(normalize(&convenience), general);
+        }
+        let nested = Geometry::GeometryCollection(GeometryCollection(vec![rect.into()]));
+        assert_eq!(
+            decode(&encode(&nested).unwrap()).unwrap().geometry,
+            Geometry::GeometryCollection(GeometryCollection(vec![rect.to_polygon().into()]))
+        );
     }
 }

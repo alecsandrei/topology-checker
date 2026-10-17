@@ -32,16 +32,11 @@ pub(crate) fn initialize() -> anyhow::Result<()> {
                 let directory = tempfile::Builder::new()
                     .prefix("topology-proj-")
                     .tempdir()?;
-                std::fs::write(
-                    directory.path().join("proj.db"),
-                    include_bytes!(env!("TOPOLOGY_PROJ_DATABASE")),
-                )?;
-                let path = std::ffi::CString::new(
-                    directory
-                        .path()
-                        .to_str()
-                        .ok_or_else(|| anyhow::anyhow!("invalid PROJ data path"))?,
-                )?;
+                let database = include_bytes!(env!("TOPOLOGY_PROJ_DATABASE"));
+                std::fs::write(directory.path().join("proj.db"), database)?;
+                let text = directory.path().to_str();
+                let text = text.ok_or_else(|| anyhow::anyhow!("invalid PROJ data path"))?;
+                let path = std::ffi::CString::new(text)?;
                 let paths = [path.as_ptr(), std::ptr::null()];
                 // SAFETY: OSR copies the null-terminated paths. Initialization is
                 // serialized, and the directory survives until process exit.

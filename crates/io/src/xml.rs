@@ -10,7 +10,7 @@ use serde_json::{Map, Value, json};
 use std::{
     collections::HashMap,
     fs::File,
-    io::{BufReader, BufWriter, Read, Write},
+    io::{BufRead, BufReader, BufWriter, Read, Write},
     path::Path,
 };
 fn wgs84(
@@ -105,8 +105,7 @@ fn kml_zm(g: &kml::types::Geometry) -> bool {
         _ => false,
     }
 }
-fn extended(elements: &[kml::types::Element], f: &mut RawFeature, depth: usize) -> Result<()> {
-    ensure!(depth <= 64, "KML attribute nesting exceeds 64 levels");
+fn extended(elements: &[kml::types::Element], f: &mut RawFeature) -> Result<()> {
     for e in elements {
         if e.name == "Data" || e.name == "SimpleData" {
             if let Some(name) = e.attrs.get("name") {
@@ -126,28 +125,27 @@ fn extended(elements: &[kml::types::Element], f: &mut RawFeature, depth: usize) 
                 f.properties.insert(name.clone(), value.into());
             }
         } else {
-            extended(&e.children, f, depth + 1)?;
+            extended(&e.children, f)?;
         }
     }
     Ok(())
 }
-fn kml_features(k: &kml::Kml, features: &mut Vec<RawFeature>, depth: usize) -> Result<()> {
-    ensure!(depth <= 64, "KML nesting exceeds 64 levels");
+fn kml_features(k: &kml::Kml, features: &mut Vec<RawFeature>) -> Result<()> {
     use kml::Kml::*;
     match k {
         KmlDocument(d) => {
             for k in &d.elements {
-                kml_features(k, features, depth + 1)?;
+                kml_features(k, features)?;
             }
         }
         Document { elements, .. } => {
             for k in elements {
-                kml_features(k, features, depth + 1)?;
+                kml_features(k, features)?;
             }
         }
         Folder(d) => {
             for k in &d.elements {
-                kml_features(k, features, depth + 1)?;
+                kml_features(k, features)?;
             }
         }
         Placemark(p) => {
@@ -164,12 +162,35 @@ fn kml_features(k: &kml::Kml, features: &mut Vec<RawFeature>, depth: usize) -> R
                 properties,
                 zm: p.geometry.as_ref().is_some_and(kml_zm),
             };
-            extended(&p.children, &mut f, 0)?;
+            extended(&p.children, &mut f)?;
             features.push(f);
         }
         _ => {}
     }
     Ok(())
+}
+/// Deepest element nesting accepted; the `kml` parser recurses once per level and would
+/// otherwise overflow the stack on hostile input before any later check could run.
+const MAX_KML_DEPTH: usize = 24;
+fn check_depth(reader: impl BufRead) -> Result<()> {
+    let mut xml = quick_xml::Reader::from_reader(reader);
+    let mut buffer = Vec::new();
+    let mut depth = 0usize;
+    loop {
+        match xml.read_event_into(&mut buffer)? {
+            quick_xml::events::Event::Start(_) => {
+                depth += 1;
+                ensure!(
+                    depth <= MAX_KML_DEPTH,
+                    "KML nesting exceeds {MAX_KML_DEPTH} levels"
+                );
+            }
+            quick_xml::events::Event::End(_) => depth = depth.saturating_sub(1),
+            quick_xml::events::Event::Eof => return Ok(()),
+            _ => {}
+        }
+        buffer.clear();
+    }
 }
 pub(crate) fn read_kml(path: &Path) -> Result<Vec<RawLayer>> {
     let mut features = Vec::new();
@@ -209,15 +230,17 @@ pub(crate) fn read_kml(path: &Path) -> Result<Vec<RawLayer>> {
             .take(size + 1)
             .read_to_end(&mut data)?;
         ensure!(data.len() as u64 == size, "KMZ entry length mismatch");
+        check_depth(&data[..])?;
         kml::KmlReader::<_, f64>::from_reader(std::io::Cursor::new(data)).read()?
     } else {
+        check_depth(BufReader::new(File::open(path)?))?;
         kml::KmlReader::<_, f64>::from_path(path)?.read()?
     };
     ensure!(
         matches!(document, kml::Kml::KmlDocument(_)),
         "KML input must have a kml root element"
     );
-    kml_features(&document, &mut features, 0)?;
+    kml_features(&document, &mut features)?;
     Ok(vec![RawLayer {
         name: stem(path),
         srs: Some(crs::parse("EPSG:4326")?),
@@ -239,11 +262,9 @@ pub(crate) fn write_kml_source(path: &Path, source: &dyn crate::write::RecordSou
     };
     if crate::registry::extension(path) == "kmz" {
         let mut zip = zip::ZipWriter::new(File::create(path)?);
-        zip.start_file(
-            "doc.kml",
-            zip::write::SimpleFileOptions::default()
-                .compression_method(zip::CompressionMethod::Deflated),
-        )?;
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        zip.start_file("doc.kml", options)?;
         write(&mut zip)?;
         zip.finish()?;
     } else {

@@ -108,6 +108,15 @@ fn has_zm(g: &gdal::vector::Geometry, depth: usize) -> Result<bool> {
     Ok(zm)
 }
 
+/// Convert child `i` of `g` into a specific geometry type.
+fn part<T>(g: &gdal::vector::Geometry, i: usize, depth: usize) -> Result<T>
+where
+    T: TryFrom<Geometry>,
+    T::Error: std::error::Error + Send + Sync + 'static,
+{
+    Ok(T::try_from(convert(&g.get_geometry(i), depth + 1)?)?)
+}
+
 /// Read XY directly, avoiding the GDAL converter's assumptions about empty rings and Z/M types.
 ///
 /// # Errors
@@ -135,28 +144,15 @@ fn convert(g: &gdal::vector::Geometry, depth: usize) -> Result<Geometry> {
         }
         wkbLineString | wkbLinearRing => LineString(coordinates()).into(),
         wkbPolygon => {
-            if g.geometry_count() == 0 {
-                Polygon::empty().into()
-            } else {
-                let mut rings = (0..g.geometry_count()).map(|i| {
-                    let ring = g.get_geometry(i);
-                    if !matches!(
-                        geometry_type_flatten(ring.geometry_type()),
-                        wkbLineString | wkbLinearRing
-                    ) {
-                        bail!("polygon contains a non-linear ring");
-                    }
-                    let coords = (0..ring.point_count())
-                        .map(|j| {
-                            let (x, y, _) = ring.get_point(j as i32);
-                            Coord { x, y }
-                        })
-                        .collect();
-                    Ok(LineString(coords))
-                });
-                let exterior = rings.next().expect("nonempty polygon")?;
-                Polygon::new(exterior, rings.collect::<Result<Vec<_>>>()?).into()
+            let rings = (0..g.geometry_count())
+                .map(|i| part::<LineString>(g, i, depth))
+                .collect::<Result<Vec<_>>>()?;
+            let mut rings = rings.into_iter();
+            match rings.next() {
+                None => Polygon::empty(),
+                Some(exterior) => Polygon::new(exterior, rings.collect()),
             }
+            .into()
         }
         wkbMultiPoint => {
             let mut parts = Vec::new();
@@ -165,30 +161,21 @@ fn convert(g: &gdal::vector::Geometry, depth: usize) -> Result<Geometry> {
                 if child.is_empty() {
                     continue;
                 }
-                let Geometry::Point(p) = convert(&child, depth + 1)? else {
-                    bail!("invalid multipoint part");
-                };
-                parts.push(p);
+                parts.push(Point::try_from(convert(&child, depth + 1)?)?);
             }
             MultiPoint(parts).into()
         }
         wkbMultiLineString => {
             let mut parts = Vec::new();
             for i in 0..g.geometry_count() {
-                let Geometry::LineString(p) = convert(&g.get_geometry(i), depth + 1)? else {
-                    bail!("invalid multiline part");
-                };
-                parts.push(p);
+                parts.push(part::<LineString>(g, i, depth)?);
             }
             MultiLineString(parts).into()
         }
         wkbMultiPolygon => {
             let mut parts = Vec::new();
             for i in 0..g.geometry_count() {
-                let Geometry::Polygon(p) = convert(&g.get_geometry(i), depth + 1)? else {
-                    bail!("invalid multipolygon part");
-                };
-                parts.push(p);
+                parts.push(part::<Polygon>(g, i, depth)?);
             }
             MultiPolygon(parts).into()
         }

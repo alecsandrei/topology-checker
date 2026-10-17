@@ -109,24 +109,24 @@ pub(crate) fn write_sources(
             ty,
             options: (!options.is_empty()).then_some(options.as_slice()),
         })?;
-        layer.create_defn_fields(
-            &l.fields
-                .iter()
-                .enumerate()
-                .map(|(i, f)| {
-                    (
-                        f.name.as_str(),
-                        match f.kind {
-                            FieldType::Boolean => OGRFieldType::OFTInteger,
-                            FieldType::Integer if !integer64[i] => OGRFieldType::OFTInteger,
-                            FieldType::Integer => OGRFieldType::OFTInteger64,
-                            FieldType::Real => OGRFieldType::OFTReal,
-                            FieldType::Text => OGRFieldType::OFTString,
-                        },
-                    )
-                })
-                .collect::<Vec<_>>(),
-        )?;
+        let definitions = l
+            .fields
+            .iter()
+            .enumerate()
+            .map(|(i, f)| {
+                (
+                    f.name.as_str(),
+                    match f.kind {
+                        FieldType::Boolean => OGRFieldType::OFTInteger,
+                        FieldType::Integer if !integer64[i] => OGRFieldType::OFTInteger,
+                        FieldType::Integer => OGRFieldType::OFTInteger64,
+                        FieldType::Real => OGRFieldType::OFTReal,
+                        FieldType::Text => OGRFieldType::OFTString,
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
+        layer.create_defn_fields(&definitions)?;
         for r in source.records() {
             let r = r?;
             let mut f = Feature::new(layer.defn())?;
@@ -148,19 +148,17 @@ pub(crate) fn write_sources(
                     FieldType::Integer => {
                         f.set_field_integer64(i, v.as_i64().context("integer attribute required")?)?
                     }
-                    FieldType::Boolean => f.set_field_integer64(
-                        i,
-                        i64::from(v.as_bool().context("boolean attribute required")?),
-                    )?,
+                    FieldType::Boolean => {
+                        let flag = i64::from(v.as_bool().context("boolean attribute required")?);
+                        f.set_field_integer64(i, flag)?
+                    }
                     FieldType::Real => {
                         f.set_field_double(i, v.as_f64().context("numeric attribute required")?)?
                     }
-                    FieldType::Text => f.set_field_string(
-                        i,
-                        &v.as_str()
-                            .map(str::to_string)
-                            .unwrap_or_else(|| v.to_string()),
-                    )?,
+                    FieldType::Text => {
+                        let text = v.as_str().map_or_else(|| v.to_string(), str::to_string);
+                        f.set_field_string(i, &text)?
+                    }
                 }
             }
             f.create(&layer)?;

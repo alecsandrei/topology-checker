@@ -18,6 +18,12 @@ struct Metadata {
     origin: Option<(usize, i64, Option<u32>)>,
     destination: Option<(usize, i64, Option<u32>)>,
 }
+fn sink_error(error: topology_checker_core::SinkError<anyhow::Error>) -> anyhow::Error {
+    match error {
+        topology_checker_core::SinkError::Core(e) => anyhow::Error::new(e),
+        topology_checker_core::SinkError::Consumer(e) => e,
+    }
+}
 fn reference(r: Option<FeatureRef>) -> Option<(usize, i64, Option<u32>)> {
     r.map(|r| (r.layer.index(), r.fid, r.part))
 }
@@ -64,10 +70,7 @@ impl DiskReport {
                     .context("report offset overflow")?;
                 Ok(())
             })
-            .map_err(|e| match e {
-                topology_checker_core::SinkError::Core(e) => anyhow::Error::new(e),
-                topology_checker_core::SinkError::Consumer(e) => e,
-            })?;
+            .map_err(sink_error)?;
         rows.flush()?;
         offsets.flush()?;
         Ok(Self {
@@ -91,11 +94,10 @@ impl DiskReport {
     pub fn row(&self, index: usize) -> Result<(usize, Violation)> {
         ensure!(index < self.violation_count(), "unknown violation");
         let mut offsets = File::open(self.storage.path().join("offsets.bin"))?;
-        offsets.seek(SeekFrom::Start(
-            (index as u64)
-                .checked_mul(8)
-                .context("row index overflow")?,
-        ))?;
+        let position = (index as u64)
+            .checked_mul(8)
+            .context("row index overflow")?;
+        offsets.seek(SeekFrom::Start(position))?;
         let mut bytes = [0; 8];
         offsets.read_exact(&mut bytes)?;
         let mut rows = File::open(self.storage.path().join("rows.bin"))?;
@@ -149,5 +151,19 @@ impl DiskReport {
             Ok(input) => self.read_row(input),
             Err(e) => Err(anyhow::anyhow!("opening report: {e}")),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use topology_checker_core::{Error, SinkError};
+
+    #[test]
+    fn sink_errors_keep_their_original_message() {
+        let consumer = sink_error(SinkError::Consumer(anyhow::anyhow!("disk full")));
+        assert_eq!(consumer.to_string(), "disk full");
+        let core = sink_error(SinkError::Core(Error::Cancelled));
+        assert_eq!(core.to_string(), "validation cancelled");
     }
 }

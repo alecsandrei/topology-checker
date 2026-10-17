@@ -822,3 +822,245 @@ fn native_shapefile_writer_and_gdal_encoding_inputs() {
         "café"
     );
 }
+fn create_with_wkt(path: &Path, driver: &str, wkts: &[&str]) {
+    let mut ds = DriverManager::get_driver_by_name(driver)
+        .unwrap()
+        .create_vector_only(path)
+        .unwrap();
+    let l = ds
+        .create_layer(LayerOptions {
+            name: "mixed",
+            ty: OGRwkbGeometryType::wkbUnknown,
+            ..Default::default()
+        })
+        .unwrap();
+    l.create_defn_fields(&[
+        ("label", OGRFieldType::OFTString),
+        ("size", OGRFieldType::OFTReal),
+        ("count", OGRFieldType::OFTInteger),
+        ("big", OGRFieldType::OFTInteger64),
+        ("day", OGRFieldType::OFTDate),
+        ("moment", OGRFieldType::OFTDateTime),
+    ])
+    .unwrap();
+    for (i, wkt) in wkts.iter().enumerate() {
+        let mut f = Feature::new(l.defn()).unwrap();
+        f.set_field_string(0, &i.to_string()).unwrap();
+        f.set_field_double(1, 1.5).unwrap();
+        f.set_field_integer(2, 7).unwrap();
+        f.set_field_integer64(3, 9007199254740993).unwrap();
+        f.set_field_string(4, "2024-05-06").unwrap();
+        f.set_field_string(5, "2024-05-06 07:08:09").unwrap();
+        f.set_geometry(gdal::vector::Geometry::from_wkt(wkt).unwrap())
+            .unwrap();
+        f.create(&l).unwrap();
+    }
+}
+#[test]
+fn additional_drivers_convert_every_geometry_kind_and_field_type() {
+    let dir = tempfile::tempdir().unwrap();
+    let wkts = [
+        "POINT (1 2)",
+        "LINESTRING (0 0, 1 1)",
+        "POLYGON ((0 0, 10 0, 10 10, 0 0), (1 1, 2 1, 2 2, 1 1))",
+        "MULTILINESTRING ((0 0, 1 1), (2 2, 3 3))",
+        "MULTIPOLYGON (((0 0, 1 0, 1 1, 0 0)), ((5 5, 6 5, 6 6, 5 5)))",
+    ];
+    let path = dir.path().join("mixed.tab");
+    create_with_wkt(&path, "MapInfo File", &wkts);
+    let imported = read::read_with_attributes(&path, None, "mixed", true).unwrap();
+    assert_eq!(imported[0].layer.len(), wkts.len());
+    let first = &imported[0].attributes[0];
+    assert_eq!(first["size"], 1.5);
+    assert_eq!(first["count"], 7);
+    assert_eq!(first["big"], "9007199254740993");
+    assert_eq!(first["day"], "2024-05-06");
+    assert!(
+        first["moment"]
+            .as_str()
+            .unwrap()
+            .starts_with("2024-05-06 07:08:09")
+    );
+}
+fn wkt_csv(dir: &Path, name: &str, wkts: &[String]) -> std::path::PathBuf {
+    let path = dir.join(name);
+    let rows = wkts
+        .iter()
+        .enumerate()
+        .map(|(i, wkt)| format!("\"{wkt}\",{i}\n"))
+        .collect::<String>();
+    std::fs::write(&path, format!("WKT,label\n{rows}")).unwrap();
+    path
+}
+#[test]
+fn wkt_csv_exercises_empty_multi_and_collection_geometries() {
+    let dir = tempfile::tempdir().unwrap();
+    let wkts = [
+        "POINT (1 2)",
+        "POINT EMPTY",
+        "POLYGON EMPTY",
+        "MULTIPOINT ((1 1), (2 2))",
+        "MULTIPOINT (EMPTY, (3 3))",
+        "GEOMETRYCOLLECTION (POINT (1 1), POINT EMPTY, LINESTRING (0 0, 1 1))",
+        "GEOMETRYCOLLECTION (MULTIPOINT ((1 1)), GEOMETRYCOLLECTION (POLYGON ((0 0, 1 0, 1 1, 0 0))))",
+        "POLYGON Z ((0 0 1, 10 0 1, 10 10 1, 0 0 1), (1 1 1, 2 1 1, 2 2 1, 1 1 1))",
+    ]
+    .map(String::from);
+    let path = wkt_csv(dir.path(), "kinds.csv", &wkts);
+    let imported = read::read_with_attributes(&path, None, "kinds", true)
+        .unwrap()
+        .remove(0);
+    assert!(imported.layer.len() >= 5, "{:?}", imported.warnings);
+    assert!(imported.warnings.iter().any(|w| w.contains("empty")));
+    assert!(imported.warnings.iter().any(|w| w.contains("Z/M")));
+}
+#[test]
+fn unsupported_gdal_geometry_types_are_errors() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = wkt_csv(
+        dir.path(),
+        "curve.csv",
+        &["CIRCULARSTRING (0 0, 1 1, 2 0)".to_string()],
+    );
+    let error = read::read(&path, None, "curve").unwrap_err();
+    assert!(
+        format!("{error:#}").contains("unsupported GDAL geometry"),
+        "{error:#}"
+    );
+}
+
+#[test]
+fn fallback_coordinate_systems_expose_the_same_helpers() {
+    // Geocentric EPSG:4978 is outside the native horizontal CRS parser.
+    let geocentric = crs::parse("EPSG:4978").unwrap();
+    assert!(!geocentric.is_geographic() && !geocentric.is_projected());
+    assert_eq!(geocentric.linear_units(), 1.);
+    assert_eq!(geocentric.name().as_deref(), Some("WGS 84"));
+    assert!(geocentric.to_projjson().unwrap().contains("WGS 84"));
+    assert_eq!(geocentric, crs::parse("EPSG:4978").unwrap());
+    let geographic = crs::parse("EPSG:4326").unwrap();
+    assert_ne!(geocentric, geographic);
+    assert_ne!(geographic, geocentric);
+    let to_geographic = crs::Transform::new(&geocentric, &geographic).unwrap();
+    assert!(to_geographic.transform_bounds(&[0., 0., 1., 1.], 2).is_ok());
+    // GDAL reports points outside a projection's domain as errors, not infinities.
+    let orthographic = crs::parse("+proj=ortho +lat_0=0 +lon_0=0").unwrap();
+    let operation = crs::Transform::new(&geographic, &orthographic).unwrap();
+    assert!(
+        operation
+            .transform_coords(&mut [180.], &mut [0.], &mut [])
+            .is_err()
+    );
+}
+#[test]
+fn vrt_over_geojson_exposes_list_date_and_nested_geometry_types() {
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source.geojson");
+    std::fs::write(
+        &source,
+        r#"{"type":"FeatureCollection","features":[
+        {"type":"Feature","properties":{"ints":[1,2],"reals":[1.5],"names":["a","b"],"day":"2024-05-06","moment":"2024-05-06T07:08:09Z","big":9007199254740993,"bigs":[9007199254740993,2]},
+         "geometry":{"type":"Polygon","coordinates":[[[0,0],[10,0],[10,10],[0,0]],[[1,1],[2,1],[2,2],[1,1]]]}},
+        {"type":"Feature","properties":{"ints":[3],"reals":[2.5],"names":["c"],"day":"2024-05-07","moment":"2024-05-07T07:08:09Z","big":1,"bigs":[3]},
+         "geometry":{"type":"MultiPolygon","coordinates":[[[[0,0],[1,0],[1,1],[0,0]]]]}},
+        {"type":"Feature","properties":{"ints":[4],"reals":[3.5],"names":["d"],"day":null,"moment":null,"big":2,"bigs":[4]},
+         "geometry":{"type":"MultiLineString","coordinates":[[[0,0],[1,1]],[[2,2],[3,3]]]}},
+        {"type":"Feature","properties":{"ints":[5],"reals":[4.5],"names":["e"],"day":"2024-05-08","moment":"2024-05-08T07:08:09Z","big":3,"bigs":[5]},
+         "geometry":{"type":"MultiPoint","coordinates":[[1,1],[2,2]]}}]}"#,
+    )
+    .unwrap();
+    let vrt = dir.path().join("view.vrt");
+    std::fs::write(
+        &vrt,
+        format!(
+            "<OGRVRTDataSource><OGRVRTLayer name=\"view\"><SrcDataSource>{}</SrcDataSource><SrcLayer>source</SrcLayer></OGRVRTLayer></OGRVRTDataSource>",
+            source.display()
+        ),
+    )
+    .unwrap();
+    let layer = read::read_with_attributes(&vrt, None, "view", true)
+        .unwrap()
+        .remove(0);
+    assert_eq!(layer.layer.len(), 4);
+    assert_eq!(layer.attributes[0]["ints"], json!([1, 2]));
+    assert_eq!(layer.attributes[0]["reals"], json!([1.5]));
+    assert_eq!(layer.attributes[0]["names"], json!(["a", "b"]));
+    assert!(layer.attributes[0]["day"].is_string());
+    assert_eq!(layer.attributes[0]["bigs"], json!(["9007199254740993", 2]));
+}
+#[test]
+fn vrt_without_layers_is_reported() {
+    let dir = tempfile::tempdir().unwrap();
+    let vrt = dir.path().join("empty.vrt");
+    std::fs::write(&vrt, "<OGRVRTDataSource></OGRVRTDataSource>").unwrap();
+    let error = read::read(&vrt, None, "x").unwrap_err();
+    assert!(
+        format!("{error:#}").contains("no vector layers"),
+        "{error:#}"
+    );
+}
+
+#[test]
+fn reports_replace_existing_filegdb_directories_and_map_declared_geometry_types() {
+    use topology_checker_core::{Layer, Rule, Topology};
+    let dir = tempfile::tempdir().unwrap();
+    let mut topology = Topology::new(0.).unwrap();
+    let points = topology.add_layer(Layer::from_features(
+        "points",
+        [1, 2].map(|fid| (fid, Point::new(5., 52.).into())),
+    ));
+    topology
+        .add_rule(Rule::PointMustNotOverlap, points, None)
+        .unwrap();
+    let stored = DiskReport::validate(&topology, Some(dir.path())).unwrap();
+    let srs = crs::parse("EPSG:4326").unwrap();
+    let path = dir.path().join("report.gdb");
+    for _ in 0..2 {
+        write::stored_report(
+            &path,
+            Some("OpenFileGDB"),
+            true,
+            Some(&srs),
+            &stored,
+            write::ReportLayout::Complete,
+        )
+        .unwrap();
+    }
+    assert!(path.is_dir());
+
+    // Declared geometry types win over what the records would suggest.
+    let line = LineString::from(vec![(5., 52.), (6., 53.)]);
+    let square = polygon![(x:5.,y:52.),(x:6.,y:52.),(x:6.,y:53.),(x:5.,y:52.)];
+    for (declared, geometry) in [
+        (
+            "MULTILINESTRING",
+            MultiLineString(vec![line.clone()]).into(),
+        ),
+        ("MULTIPOLYGON", MultiPolygon(vec![square.clone()]).into()),
+        (
+            "GEOMETRYCOLLECTION",
+            Geometry::GeometryCollection(GeometryCollection(vec![Point::new(5., 52.).into()])),
+        ),
+    ] {
+        let mut declared_layer = layer(vec![geometry]);
+        declared_layer.geometry_type = Some(declared.into());
+        // FileGDB stores multi-part types; CSV keeps collections as text.
+        let (driver, extension) = if declared == "GEOMETRYCOLLECTION" {
+            ("CSV", "csv")
+        } else {
+            ("OpenFileGDB", "gdb")
+        };
+        let path = dir.path().join(format!("{declared}.{extension}"));
+        write::dataset(&path, Some(driver), false, &[declared_layer])
+            .unwrap_or_else(|e| panic!("{declared} via {driver}: {e:#}"));
+        assert!(
+            !read::read(&path, None, "x").unwrap().is_empty(),
+            "{declared}"
+        );
+    }
+    // Mixed record types fall back to an unknown layer type.
+    let mixed = layer(vec![Point::new(5., 52.).into(), line.into()]);
+    let path = dir.path().join("mixed.csv");
+    write::dataset(&path, Some("CSV"), false, &[mixed]).unwrap();
+    assert!(!read::read(&path, None, "x").unwrap().is_empty());
+}
