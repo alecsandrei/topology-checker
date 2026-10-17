@@ -132,6 +132,8 @@ fn custom_crs_equality_still_distinguishes_every_parameter() {
     let shifted = |t: &str| format!("+proj=utm +zone=33 +ellps=intl +towgs84={t}");
     assert!(equal(&shifted("1,2,3"), &shifted("1,2,3")));
     assert!(!equal(&shifted("1,2,3"), &shifted("1,2,4")));
+    // An explicit zero shift is not the same statement as an unknown one.
+    assert!(!equal("+proj=utm +zone=33 +ellps=intl", &shifted("0,0,0")));
     // A custom CRS never equals a coded one.
     assert!(!equal("+proj=utm +zone=33 +ellps=GRS80", "EPSG:32633"));
     assert!(!equal("EPSG:32633", "+proj=utm +zone=33 +ellps=GRS80"));

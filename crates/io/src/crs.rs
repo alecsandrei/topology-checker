@@ -63,6 +63,7 @@ fn same_without_datum_shift(a: &proj_core::CrsDef, b: &proj_core::CrsDef) -> boo
                 p.linear_unit(),
                 "",
             ))),
+            // A compound CRS keeps its vertical part, whose datum is always coded.
             CrsDef::Compound(_) => None,
         }
     }
