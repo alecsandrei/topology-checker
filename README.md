@@ -162,4 +162,4 @@ The TypeScript API types in `web/src/generated` are generated from the server by
 
 ## RustGIS plugin
 
-topology-checker is also a plugin for [RustGIS](https://github.com/opengeos/RustGIS), the open-source desktop GIS. It adds a tool for each of the 38 rules on a Topology ribbon tab. Download `topology-checker-<version>.rgplugin` from the [latest release](https://github.com/alecsandrei/topology-checker/releases/latest) without unzipping it, then choose Plugins › Plugin Manager › **Install from File** in RustGIS. See [RustGIS plugin](https://alecsandrei.github.io/topology-checker/stable/rustgis-plugin/).
+topology-checker is also a [RustGIS](https://github.com/opengeos/RustGIS) plugin, with a tool for each rule. Install `topology-checker-<version>.rgplugin` from the [latest release](https://github.com/alecsandrei/topology-checker/releases/latest) with Plugin Manager › **Install from File**. See [RustGIS plugin](https://alecsandrei.github.io/topology-checker/stable/rustgis-plugin/).
