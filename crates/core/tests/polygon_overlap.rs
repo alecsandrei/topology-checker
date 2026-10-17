@@ -100,6 +100,20 @@ fn parallel_diagonal_lines_never_cross_a_boundary_they_do_not_reach() {
     // 1.2 / sqrt(2) = 0.85 from the hypotenuse, inside its bounding box.
     let parallel: Geometry = LineString::from(vec![(0., 1.2), (8., 9.2)]).into();
     let crossing: Geometry = LineString::from(vec![(2., 5.), (8., 1.)]).into();
+    // Perpendicular to a horizontal edge, past its end but within the tolerance box.
+    let past_the_end: Geometry = LineString::from(vec![(10.2, -9.), (10.2, 0.3)]).into();
+    let square = polygon(&[(0., 0.), (10., 0.), (10., 10.), (0., 10.), (0., 0.)]);
+    let mut topology = Topology::new(0.5).unwrap();
+    let lines = topology.add_layer(Layer::from_geometries("lines", [past_the_end]));
+    let polygons = topology.add_layer(Layer::from_geometries("polygons", [square]));
+    topology
+        .add_rule(
+            Rule::LineMustNotCrossPolygonBoundaries,
+            lines,
+            Some(polygons),
+        )
+        .unwrap();
+    assert_eq!(topology.validate().unwrap().violation_count(), 0);
     for (tolerance, line, crossings) in [
         (0.5, &parallel, 0),
         (1., &parallel, 0),
