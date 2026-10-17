@@ -240,3 +240,27 @@ fn third_party_gpx_waypoints_routes_and_tracks_are_read() {
     assert!(ids.contains(&-9) && ids.contains(&4) && ids.contains(&5));
     assert!(data.warnings.iter().any(|w| w.contains("Z/M")));
 }
+
+#[test]
+fn gpx_tracks_hold_multilines_and_reject_polygons() {
+    use topology_checker_core::geo::{Geometry, LineString, MultiLineString};
+    use topology_checker_io::{
+        crs,
+        write::{self, DatasetLayer, Record},
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("tracks.gpx");
+    let line = |x: f64| LineString::from(vec![(x, 52.), (x + 1., 53.)]);
+    let layer = DatasetLayer::new(
+        "tracks",
+        Some(crs::parse("EPSG:4326").unwrap()),
+        vec![Record {
+            id: Some(1),
+            geometry: Some(Geometry::from(MultiLineString(vec![line(5.), line(7.)]))),
+            properties: Default::default(),
+        }],
+    );
+    write::dataset(&path, None, false, &[layer]).unwrap();
+    let read = read::read(&path, None, "x").unwrap();
+    assert_eq!(read[0].layer.len(), 1);
+}
