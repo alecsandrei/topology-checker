@@ -25,10 +25,11 @@ pub(super) fn shared(
     spec: RuleSpec,
     other: LayerId,
 ) -> Result<Vec<Violation>, Error> {
-    let graph = t.graph_inputs(vec![
+    let inputs = vec![
         (spec.layer, InputMode::Linework),
         (other, InputMode::PolygonBoundary),
-    ])?;
+    ];
+    let graph = t.graph_inputs(inputs)?;
     let mut coverage = vec![Vec::new(); graph.parts.len()];
     for m in graph.matches() {
         let [a, b] = m.sources.map(|s| graph.segment(s));

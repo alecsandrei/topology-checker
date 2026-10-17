@@ -175,7 +175,11 @@ impl Parameter {
         self.exact.get_or_init(|| match self.kind {
             Kind::Start => Q::zero(),
             Kind::End => Q::one(),
-            Kind::On => {
+            Kind::On | Kind::Crossing => {
+                debug_assert!(
+                    self.kind == Kind::On,
+                    "crossings store their rational parameter"
+                );
                 let (dx, dy) = (
                     q(self.line.end.x) - q(self.line.start.x),
                     q(self.line.end.y) - q(self.line.start.y),
@@ -184,7 +188,6 @@ impl Parameter {
                     + (q(self.point.y) - q(self.line.start.y)) * &dy)
                     / (&dx * &dx + &dy * &dy)
             }
-            Kind::Crossing => unreachable!("crossings store their rational parameter"),
         })
     }
     /// Order along the line part: segment, then exact parameter.

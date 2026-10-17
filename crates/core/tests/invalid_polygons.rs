@@ -28,24 +28,21 @@ fn rejection(geometry: Geometry) -> Option<Error> {
         .and_then(|_| topology.validate().map(|_| ()))
         .err()
 }
-fn reason(geometry: Geometry) -> (Option<usize>, String) {
-    match rejection(geometry) {
-        Some(Error::InvalidPolygon { ring, reason, .. }) => (ring, reason),
-        other => panic!("expected an invalid polygon, got {other:?}"),
-    }
+fn message(geometry: Geometry) -> String {
+    rejection(geometry).expect("a rejected polygon").to_string()
 }
 
 #[test]
 fn rings_that_cross_themselves_are_rejected() {
     let bowtie = ring(&[(0., 0.), (2., 2.), (2., 0.), (0., 2.), (0., 0.)]);
-    assert_eq!(
-        reason(polygon(bowtie, vec![])),
-        (Some(0), "self-intersection or closing spike".into())
+    assert!(
+        message(polygon(bowtie, vec![]))
+            .ends_with("ring Some(0): invalid polygon: self-intersection or closing spike")
     );
     let spike = ring(&[(0., 0.), (4., 0.), (4., 4.), (4., 0.), (0., 0.)]);
-    assert_eq!(
-        reason(polygon(spike, vec![])),
-        (Some(0), "self-intersection or closing spike".into())
+    assert!(
+        message(polygon(spike, vec![]))
+            .ends_with("ring Some(0): invalid polygon: self-intersection or closing spike")
     );
 }
 
@@ -88,9 +85,12 @@ fn holes_must_sit_inside_the_shell_without_touching_each_other() {
         ),
     ];
     for (name, holes, expected) in cases {
-        let (hole, reason) = reason(polygon(shell(), holes));
-        assert!(hole.is_some(), "{name}");
-        assert_eq!(reason, expected, "{name}");
+        let message = message(polygon(shell(), holes));
+        assert!(
+            message.contains("ring Some(")
+                && message.contains(&format!("invalid polygon: {expected}")),
+            "{name}: {message}"
+        );
     }
 }
 
@@ -102,8 +102,11 @@ fn holes_that_enclose_part_of_the_interior_are_rejected() {
         ring(&[(8., 2.), (5., 5.), (8., 8.), (8., 2.)]),
         ring(&[(2., 2.), (8., 2.), (5., 4.), (2., 2.)]),
     ];
-    let (_, reason) = reason(polygon(square(0., 0., 10.), holes));
-    assert_eq!(reason, "disconnected interior");
+    let message = message(polygon(square(0., 0., 10.), holes));
+    assert!(
+        message.ends_with("invalid polygon: disconnected interior"),
+        "{message}"
+    );
 }
 
 #[test]
@@ -112,12 +115,14 @@ fn multipolygon_parts_must_not_overlap() {
         Polygon::new(square(0., 0., 4.), vec![]),
         Polygon::new(square(2., 2., 4.), vec![]),
     ]);
-    let (ring, text) = reason(overlapping.into());
-    assert_eq!(ring, None);
-    assert!(text.starts_with("invalid multipart"), "{text}");
+    let text = message(overlapping.into());
+    assert!(
+        text.contains("ring None: invalid polygon: invalid multipart"),
+        "{text}"
+    );
     let nested = MultiPolygon::new(vec![
         Polygon::new(square(0., 0., 10.), vec![]),
         Polygon::new(square(2., 2., 2.), vec![]),
     ]);
-    assert_eq!(reason(nested.into()).1, text);
+    assert!(message(nested.into()).contains("ring None: invalid polygon: invalid multipart"));
 }

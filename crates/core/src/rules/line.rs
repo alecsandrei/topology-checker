@@ -219,9 +219,7 @@ fn overlaps(
         let (xp, yp) = (g.segment(x).part, g.segment(y).part);
         let (xr, yr) = (g.parts[xp].reference, g.parts[yp].reference);
         let (a, b) = if self_rule {
-            if xr.feature() != yr.feature() {
-                continue;
-            }
+            // Self rules run on one isolated feature, so both sides share it.
             let mut a = xr;
             a.aggregate(yr);
             (a, None)

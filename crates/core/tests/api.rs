@@ -431,27 +431,18 @@ fn boundary_rules_see_holes_of_source_and_cleaned_polygons() {
     let holed =
         |x: f64, repeat: bool| Polygon::new(ring(x, 10., repeat), vec![ring(x + 2., 4., false)]);
     // Each case has the polygons' shells (perimeter 40) and holes (perimeter 16).
+    let single = Polygon::new(ring(0., 10., false), vec![ring(2., 4., false)]);
     let cases = [
-        (
-            Polygon::new(ring(0., 10., false), vec![ring(2., 4., false)]).into(),
-            1,
-        ),
+        (single.into(), 1, vec![ring(2., 4., false)]),
         (
             MultiPolygon(vec![holed(0., false), holed(20., true)]).into(),
             2,
+            vec![ring(2., 4., false), ring(22., 4., false)],
         ),
-        (holed(0., true).into(), 1),
+        (holed(0., true).into(), 1, vec![ring(2., 4., false)]),
     ];
-    for (geometry, polygons) in cases {
+    for (geometry, polygons, holes) in cases {
         let geometry: Geometry = geometry;
-        let holes = match &geometry {
-            Geometry::Polygon(p) => vec![p.clone()],
-            Geometry::MultiPolygon(m) => m.0.clone(),
-            _ => unreachable!(),
-        }
-        .into_iter()
-        .flat_map(|p| p.interiors().to_vec())
-        .collect::<Vec<_>>();
         for (covering, boundary_length) in [(holes, 40.), (vec![], 56.)] {
             let mut t = Topology::new(0.).unwrap();
             let areas = t.add_layer(Layer::from_geometries("areas", [geometry.clone()]));

@@ -60,3 +60,24 @@ pub enum SinkError<E> {
     #[error("validation consumer failed: {0}")]
     Consumer(E),
 }
+impl From<SinkError<std::convert::Infallible>> for Error {
+    fn from(error: SinkError<std::convert::Infallible>) -> Self {
+        match error {
+            SinkError::Core(error) => error,
+            SinkError::Consumer(never) => match never {},
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sinks_without_a_consumer_error_convert_back_to_core_errors() {
+        let error = Error::from(SinkError::<std::convert::Infallible>::Core(
+            Error::Cancelled,
+        ));
+        assert!(matches!(error, Error::Cancelled));
+    }
+}

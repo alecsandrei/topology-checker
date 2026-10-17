@@ -95,21 +95,44 @@ fn polygons_leaving_a_concave_container_through_its_vertices_overlap_it() {
 }
 
 #[test]
-fn parallel_diagonal_lines_beyond_the_tolerance_do_not_touch_a_boundary() {
+fn parallel_diagonal_lines_never_cross_a_boundary_they_do_not_reach() {
     let triangle = polygon(&[(0., 0.), (10., 0.), (10., 10.), (0., 0.)]);
-    let line: Geometry = LineString::from(vec![(0., 1.2), (8., 9.2)]).into();
-    // The line is 1.2 / sqrt(2) = 0.85 from the hypotenuse, inside its bounding box.
-    for (tolerance, touching) in [(0.5, 0), (1., 1)] {
+    // 1.2 / sqrt(2) = 0.85 from the hypotenuse, inside its bounding box.
+    let parallel: Geometry = LineString::from(vec![(0., 1.2), (8., 9.2)]).into();
+    let crossing: Geometry = LineString::from(vec![(2., 5.), (8., 1.)]).into();
+    for (tolerance, line, crossings) in [
+        (0.5, &parallel, 0),
+        (1., &parallel, 0),
+        (0.5, &crossing, 1),
+        (1., &crossing, 1),
+    ] {
         let mut topology = Topology::new(tolerance).unwrap();
         let lines = topology.add_layer(Layer::from_geometries("lines", [line.clone()]));
         let polygons = topology.add_layer(Layer::from_geometries("polygons", [triangle.clone()]));
         topology
-            .add_rule(Rule::LineMustNotIntersectPolygons, lines, Some(polygons))
+            .add_rule(
+                Rule::LineMustNotCrossPolygonBoundaries,
+                lines,
+                Some(polygons),
+            )
             .unwrap();
         assert_eq!(
             topology.validate().unwrap().violation_count(),
-            touching,
+            crossings,
             "tolerance {tolerance}"
         );
+    }
+}
+
+#[test]
+fn containment_is_certified_next_to_a_diagonal_edge() {
+    let triangle = polygon(&[(0., 0.), (10., 0.), (10., 10.), (0., 0.)]);
+    // The inner hypotenuse runs parallel to the container's within its bounding box.
+    let inner = polygon(&[(6., 1.), (9., 1.), (9., 4.), (6., 1.)]);
+    for (a, b) in [
+        (inner.clone(), triangle.clone()),
+        (triangle.clone(), inner.clone()),
+    ] {
+        assert_eq!(overlaps(Rule::PolygonMustNotOverlapWith, a, b), 1);
     }
 }
