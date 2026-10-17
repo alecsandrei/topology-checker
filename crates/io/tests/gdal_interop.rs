@@ -959,13 +959,13 @@ fn vrt_over_geojson_exposes_list_date_and_nested_geometry_types() {
     std::fs::write(
         &source,
         r#"{"type":"FeatureCollection","features":[
-        {"type":"Feature","properties":{"ints":[1,2],"reals":[1.5],"names":["a","b"],"day":"2024-05-06","moment":"2024-05-06T07:08:09Z","big":9007199254740993},
+        {"type":"Feature","properties":{"ints":[1,2],"reals":[1.5],"names":["a","b"],"day":"2024-05-06","moment":"2024-05-06T07:08:09Z","big":9007199254740993,"bigs":[9007199254740993,2]},
          "geometry":{"type":"Polygon","coordinates":[[[0,0],[10,0],[10,10],[0,0]],[[1,1],[2,1],[2,2],[1,1]]]}},
-        {"type":"Feature","properties":{"ints":[3],"reals":[2.5],"names":["c"],"day":"2024-05-07","moment":"2024-05-07T07:08:09Z","big":1},
+        {"type":"Feature","properties":{"ints":[3],"reals":[2.5],"names":["c"],"day":"2024-05-07","moment":"2024-05-07T07:08:09Z","big":1,"bigs":[3]},
          "geometry":{"type":"MultiPolygon","coordinates":[[[[0,0],[1,0],[1,1],[0,0]]]]}},
-        {"type":"Feature","properties":{"ints":[4],"reals":[3.5],"names":["d"],"day":null,"moment":null,"big":2},
+        {"type":"Feature","properties":{"ints":[4],"reals":[3.5],"names":["d"],"day":null,"moment":null,"big":2,"bigs":[4]},
          "geometry":{"type":"MultiLineString","coordinates":[[[0,0],[1,1]],[[2,2],[3,3]]]}},
-        {"type":"Feature","properties":{"ints":[5],"reals":[4.5],"names":["e"],"day":"2024-05-08","moment":"2024-05-08T07:08:09Z","big":3},
+        {"type":"Feature","properties":{"ints":[5],"reals":[4.5],"names":["e"],"day":"2024-05-08","moment":"2024-05-08T07:08:09Z","big":3,"bigs":[5]},
          "geometry":{"type":"MultiPoint","coordinates":[[1,1],[2,2]]}}]}"#,
     )
     .unwrap();
@@ -986,6 +986,7 @@ fn vrt_over_geojson_exposes_list_date_and_nested_geometry_types() {
     assert_eq!(layer.attributes[0]["reals"], json!([1.5]));
     assert_eq!(layer.attributes[0]["names"], json!(["a", "b"]));
     assert!(layer.attributes[0]["day"].is_string());
+    assert_eq!(layer.attributes[0]["bigs"], json!(["9007199254740993", 2]));
 }
 #[test]
 fn vrt_without_layers_is_reported() {
@@ -997,4 +998,69 @@ fn vrt_without_layers_is_reported() {
         format!("{error:#}").contains("no vector layers"),
         "{error:#}"
     );
+}
+
+#[test]
+fn reports_replace_existing_filegdb_directories_and_map_declared_geometry_types() {
+    use topology_checker_core::{Layer, Rule, Topology};
+    let dir = tempfile::tempdir().unwrap();
+    let mut topology = Topology::new(0.).unwrap();
+    let points = topology.add_layer(Layer::from_features(
+        "points",
+        [1, 2].map(|fid| (fid, Point::new(5., 52.).into())),
+    ));
+    topology
+        .add_rule(Rule::PointMustNotOverlap, points, None)
+        .unwrap();
+    let stored = DiskReport::validate(&topology, Some(dir.path())).unwrap();
+    let srs = crs::parse("EPSG:4326").unwrap();
+    let path = dir.path().join("report.gdb");
+    for _ in 0..2 {
+        write::stored_report(
+            &path,
+            Some("OpenFileGDB"),
+            true,
+            Some(&srs),
+            &stored,
+            write::ReportLayout::Complete,
+        )
+        .unwrap();
+    }
+    assert!(path.is_dir());
+
+    // Declared geometry types win over what the records would suggest.
+    let line = LineString::from(vec![(5., 52.), (6., 53.)]);
+    let square = polygon![(x:5.,y:52.),(x:6.,y:52.),(x:6.,y:53.),(x:5.,y:52.)];
+    for (declared, geometry) in [
+        (
+            "MULTILINESTRING",
+            MultiLineString(vec![line.clone()]).into(),
+        ),
+        ("MULTIPOLYGON", MultiPolygon(vec![square.clone()]).into()),
+        (
+            "GEOMETRYCOLLECTION",
+            Geometry::GeometryCollection(GeometryCollection(vec![Point::new(5., 52.).into()])),
+        ),
+    ] {
+        let mut declared_layer = layer(vec![geometry]);
+        declared_layer.geometry_type = Some(declared.into());
+        // FileGDB stores multi-part types; CSV keeps collections as text.
+        let (driver, extension) = if declared == "GEOMETRYCOLLECTION" {
+            ("CSV", "csv")
+        } else {
+            ("OpenFileGDB", "gdb")
+        };
+        let path = dir.path().join(format!("{declared}.{extension}"));
+        write::dataset(&path, Some(driver), false, &[declared_layer])
+            .unwrap_or_else(|e| panic!("{declared} via {driver}: {e:#}"));
+        assert!(
+            !read::read(&path, None, "x").unwrap().is_empty(),
+            "{declared}"
+        );
+    }
+    // Mixed record types fall back to an unknown layer type.
+    let mixed = layer(vec![Point::new(5., 52.).into(), line.into()]);
+    let path = dir.path().join("mixed.csv");
+    write::dataset(&path, Some("CSV"), false, &[mixed]).unwrap();
+    assert!(!read::read(&path, None, "x").unwrap().is_empty());
 }

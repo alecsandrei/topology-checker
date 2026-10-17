@@ -160,10 +160,8 @@ pub(crate) fn read(path: &Path) -> Result<Vec<RawLayer>> {
             if wkt != "undefined" {
                 Some(crs::parse(wkt)?)
             } else if get_text(&definition[0])?.eq_ignore_ascii_case("EPSG") {
-                Some(crs::parse(&format!(
-                    "EPSG:{}",
-                    get_integer(&definition[1])?
-                ))?)
+                let code = get_integer(&definition[1])?;
+                Some(crs::parse(&format!("EPSG:{code}"))?)
             } else {
                 bail!("unsupported GeoPackage CRS definition")
             }
@@ -253,10 +251,9 @@ fn sql_value(value: Option<&Json>) -> Result<Value> {
         Some(Json::Number(n)) => {
             if let Some(i) = n.as_i64() {
                 integer(i)
-            } else if let Some(f) = n.as_f64() {
-                Value::from_f64(f)
             } else {
-                bail!("unsupported numeric value")
+                // Without arbitrary precision every JSON number converts to f64.
+                Value::from_f64(n.as_f64().unwrap_or(f64::NAN))
             }
         }
         Some(Json::String(s)) => text(s),

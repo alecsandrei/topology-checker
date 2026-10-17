@@ -476,6 +476,23 @@ mod tests {
         assert!(error.to_string().contains("envelope"), "{error}");
     }
     #[test]
+    fn polygons_with_holes_roundtrip() {
+        let polygon = Polygon::new(
+            LineString::from(vec![(0., 0.), (10., 0.), (10., 10.), (0., 0.)]),
+            vec![LineString::from(vec![
+                (1., 1.),
+                (2., 1.),
+                (2., 2.),
+                (1., 1.),
+            ])],
+        );
+        let geometry = Geometry::from(polygon);
+        assert_eq!(
+            decode(&encode(&geometry).unwrap()).unwrap().geometry,
+            geometry
+        );
+    }
+    #[test]
     fn convenience_geometries_encode_like_their_general_forms() {
         use geo::{Line, Rect, Triangle};
         let line = Line::new((0., 0.), (1., 1.));

@@ -444,15 +444,9 @@ pub(crate) fn read_fgb(path: &Path) -> Result<Vec<RawLayer>> {
         } else {
             Some(i64::try_from(features.len())?)
         };
-        let geometry = if feature.geometry().is_none_or(|g| {
-            g.type_() == flatgeobuf::GeometryType::Unknown
-                && g.xy().is_none_or(|xy| xy.is_empty())
-                && g.parts().is_none_or(|p| p.is_empty())
-        }) {
-            None
-        } else {
-            let g = feature.geometry().unwrap();
-            Some(read_fgb_geometry(g, geometry_type, 0)?)
+        let geometry = match feature.geometry() {
+            Some(g) if !fgb_is_empty(&g) => Some(read_fgb_geometry(g, geometry_type, 0)?),
+            _ => None,
         };
         features.push(RawFeature {
             id,
@@ -703,6 +697,12 @@ pub(crate) fn write_fgb_source(path: &Path, source: &dyn crate::write::RecordSou
     Ok(())
 }
 
+/// Features without coordinates or parts and an unknown type carry no geometry.
+fn fgb_is_empty(g: &flatgeobuf::Geometry<'_>) -> bool {
+    g.type_() == flatgeobuf::GeometryType::Unknown
+        && g.xy().is_none_or(|xy| xy.is_empty())
+        && g.parts().is_none_or(|p| p.is_empty())
+}
 fn header_crs(wkt: Option<&str>, org: Option<&str>, code: i32) -> Result<crs::Crs> {
     match wkt {
         Some(wkt) => crs::parse(wkt),
@@ -791,16 +791,13 @@ fn read_fgb_geometry(
         GeometryType::MultiPolygon | GeometryType::GeometryCollection => {
             let mut children = Vec::new();
             if let Some(parts) = g.parts() {
+                let child_type = if ty == GeometryType::MultiPolygon {
+                    GeometryType::Polygon
+                } else {
+                    GeometryType::Unknown
+                };
                 for child in parts {
-                    children.push(read_fgb_geometry(
-                        child,
-                        if ty == GeometryType::MultiPolygon {
-                            GeometryType::Polygon
-                        } else {
-                            GeometryType::Unknown
-                        },
-                        depth + 1,
-                    )?);
+                    children.push(read_fgb_geometry(child, child_type, depth + 1)?);
                 }
             }
             if ty == GeometryType::MultiPolygon {
@@ -926,6 +923,42 @@ mod tests {
                 ..Default::default()
             },
         )
+    }
+
+    #[test]
+    fn geometry_without_type_coordinates_or_parts_is_empty() {
+        let mut builder = FlatBufferBuilder::new();
+        let root = Fgb::create(&mut builder, &GeometryArgs::default());
+        builder.finish_minimal(root);
+        let geometry = flatbuffers::root::<Fgb>(builder.finished_data()).unwrap();
+        assert!(fgb_is_empty(&geometry));
+
+        let mut builder = FlatBufferBuilder::new();
+        let xy = builder.create_vector(&[1., 2.]);
+        let root = Fgb::create(
+            &mut builder,
+            &GeometryArgs {
+                xy: Some(xy),
+                ..Default::default()
+            },
+        );
+        builder.finish_minimal(root);
+        let geometry = flatbuffers::root::<Fgb>(builder.finished_data()).unwrap();
+        assert!(!fgb_is_empty(&geometry));
+
+        let mut builder = FlatBufferBuilder::new();
+        let child = simple(&mut builder, GeometryType::Point, &[1., 2.], None);
+        let parts = builder.create_vector(&[child]);
+        let root = Fgb::create(
+            &mut builder,
+            &GeometryArgs {
+                parts: Some(parts),
+                ..Default::default()
+            },
+        );
+        builder.finish_minimal(root);
+        let geometry = flatbuffers::root::<Fgb>(builder.finished_data()).unwrap();
+        assert!(!fgb_is_empty(&geometry));
     }
 
     #[test]

@@ -79,6 +79,16 @@ mod tampered {
 
         edit(
             &path,
+            &["UPDATE gpkg_spatial_ref_sys SET organization_coordsys_id = 'x' WHERE srs_id = 4326"],
+        );
+        let error = read::read(&path, None, "x").unwrap_err();
+        assert!(
+            format!("{error:#}").contains("expected integer"),
+            "{error:#}"
+        );
+
+        edit(
+            &path,
             &["UPDATE gpkg_spatial_ref_sys SET organization = 'NONE' WHERE srs_id = 4326"],
         );
         let error = read::read(&path, None, "x").unwrap_err();

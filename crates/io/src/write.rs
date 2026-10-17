@@ -510,10 +510,8 @@ fn stored_properties(
     let name = |id| {
         if id == r.spec.layer {
             Some(r.layer.as_str())
-        } else if Some(id) == r.spec.other {
-            r.other.as_deref()
         } else {
-            None
+            r.other.as_deref()
         }
     };
     let mut p = Map::new();

@@ -108,6 +108,15 @@ fn has_zm(g: &gdal::vector::Geometry, depth: usize) -> Result<bool> {
     Ok(zm)
 }
 
+/// Convert child `i` of `g` into a specific geometry type.
+fn part<T>(g: &gdal::vector::Geometry, i: usize, depth: usize) -> Result<T>
+where
+    T: TryFrom<Geometry>,
+    T::Error: std::error::Error + Send + Sync + 'static,
+{
+    Ok(T::try_from(convert(&g.get_geometry(i), depth + 1)?)?)
+}
+
 /// Read XY directly, avoiding the GDAL converter's assumptions about empty rings and Z/M types.
 ///
 /// # Errors
@@ -136,12 +145,7 @@ fn convert(g: &gdal::vector::Geometry, depth: usize) -> Result<Geometry> {
         wkbLineString | wkbLinearRing => LineString(coordinates()).into(),
         wkbPolygon => {
             let rings = (0..g.geometry_count())
-                .map(|i| {
-                    Ok(LineString::try_from(convert(
-                        &g.get_geometry(i),
-                        depth + 1,
-                    )?)?)
-                })
+                .map(|i| part::<LineString>(g, i, depth))
                 .collect::<Result<Vec<_>>>()?;
             let mut rings = rings.into_iter();
             match rings.next() {
@@ -164,17 +168,14 @@ fn convert(g: &gdal::vector::Geometry, depth: usize) -> Result<Geometry> {
         wkbMultiLineString => {
             let mut parts = Vec::new();
             for i in 0..g.geometry_count() {
-                parts.push(LineString::try_from(convert(
-                    &g.get_geometry(i),
-                    depth + 1,
-                )?)?);
+                parts.push(part::<LineString>(g, i, depth)?);
             }
             MultiLineString(parts).into()
         }
         wkbMultiPolygon => {
             let mut parts = Vec::new();
             for i in 0..g.geometry_count() {
-                parts.push(Polygon::try_from(convert(&g.get_geometry(i), depth + 1)?)?);
+                parts.push(part::<Polygon>(g, i, depth)?);
             }
             MultiPolygon(parts).into()
         }

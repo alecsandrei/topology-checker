@@ -262,11 +262,9 @@ pub(crate) fn write_kml_source(path: &Path, source: &dyn crate::write::RecordSou
     };
     if crate::registry::extension(path) == "kmz" {
         let mut zip = zip::ZipWriter::new(File::create(path)?);
-        zip.start_file(
-            "doc.kml",
-            zip::write::SimpleFileOptions::default()
-                .compression_method(zip::CompressionMethod::Deflated),
-        )?;
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Deflated);
+        zip.start_file("doc.kml", options)?;
         write(&mut zip)?;
         zip.finish()?;
     } else {

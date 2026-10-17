@@ -46,6 +46,19 @@ fn removed_report_rows_surface_as_errors() {
         std::fs::remove_file(entry.unwrap().path().join("rows.bin")).unwrap();
     }
     assert!(report.row(0).is_err());
+    let out = root.path().join("lost.geojson");
+    assert!(
+        topology_checker_io::write::stored_report(
+            &out,
+            None,
+            false,
+            None,
+            &report,
+            topology_checker_io::write::ReportLayout::Complete
+        )
+        .is_err()
+    );
+    assert!(!out.exists());
     let rows = report.rows().collect::<Vec<_>>();
     assert_eq!(rows.len(), count);
     assert!(rows.iter().all(|row| row.is_err()));

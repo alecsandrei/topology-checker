@@ -223,11 +223,10 @@ impl Transform {
             Err(_error) => {
                 #[cfg(feature = "gdal-system")]
                 {
+                    let (from, to) = (from.to_gdal()?, to.to_gdal()?);
+                    let operation = gdal::spatial_ref::CoordTransform::new(&from, &to)?;
                     Ok(Self {
-                        operation: Operation::Fallback(gdal::spatial_ref::CoordTransform::new(
-                            &from.to_gdal()?,
-                            &to.to_gdal()?,
-                        )?),
+                        operation: Operation::Fallback(operation),
                     })
                 }
                 #[cfg(not(feature = "gdal-system"))]

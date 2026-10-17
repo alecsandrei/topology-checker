@@ -55,8 +55,8 @@ pub fn read_with_attributes(
         "FlatGeobuf" => crate::native::read_fgb(path)?,
         "GeoParquet" => crate::parquet::read(path)?,
         "KML" => crate::xml::read_kml(path)?,
-        "GPX" => crate::xml::read_gpx(path)?,
-        _ => unreachable!(),
+        // Every other native format is GPX.
+        _ => crate::xml::read_gpx(path)?,
     };
     let mut raw = raw
         .into_iter()
