@@ -41,11 +41,10 @@ pub(crate) fn read_geojson(path: &Path) -> Result<Vec<RawLayer>> {
     let root: Value = serde_json::from_reader(BufReader::new(File::open(path)?))?;
     let srs = match root.get("crs") {
         None | Some(Value::Null) => Some(crs::parse("EPSG:4326")?),
-        Some(c) => Some(crs::parse(
-            c.pointer("/properties/name")
-                .and_then(Value::as_str)
-                .context("unsupported GeoJSON CRS")?,
-        )?),
+        Some(c) => {
+            let name = c.pointer("/properties/name").and_then(Value::as_str);
+            Some(crs::parse(name.context("unsupported GeoJSON CRS")?)?)
+        }
     };
     let source = match root.get("type").and_then(Value::as_str) {
         Some("FeatureCollection") => root["features"]
@@ -416,13 +415,7 @@ pub(crate) fn read_fgb(path: &Path) -> Result<Vec<RawLayer>> {
         .unwrap_or_else(|| stem(path));
     let srs = header
         .crs()
-        .map(|s| {
-            if let Some(wkt) = s.wkt() {
-                crs::parse(wkt)
-            } else {
-                crs::parse(&format!("{}:{}", s.org().unwrap_or("EPSG"), s.code()))
-            }
-        })
+        .map(|s| header_crs(s.wkt(), s.org(), s.code()))
         .transpose()?;
     let zm = header.has_z() || header.has_m();
     let geometry_type = header.geometry_type();
@@ -458,11 +451,8 @@ pub(crate) fn read_fgb(path: &Path) -> Result<Vec<RawLayer>> {
         }) {
             None
         } else {
-            Some(read_fgb_geometry(
-                feature.geometry().unwrap(),
-                geometry_type,
-                0,
-            )?)
+            let g = feature.geometry().unwrap();
+            Some(read_fgb_geometry(g, geometry_type, 0)?)
         };
         features.push(RawFeature {
             id,
@@ -713,6 +703,12 @@ pub(crate) fn write_fgb_source(path: &Path, source: &dyn crate::write::RecordSou
     Ok(())
 }
 
+fn header_crs(wkt: Option<&str>, org: Option<&str>, code: i32) -> Result<crs::Crs> {
+    match wkt {
+        Some(wkt) => crs::parse(wkt),
+        None => crs::parse(&format!("{}:{code}", org.unwrap_or("EPSG"))),
+    }
+}
 fn read_fgb_geometry(
     g: flatgeobuf::Geometry<'_>,
     declared: flatgeobuf::GeometryType,
@@ -808,17 +804,12 @@ fn read_fgb_geometry(
                 }
             }
             if ty == GeometryType::MultiPolygon {
+                // Children are read as polygons, so the conversion cannot fail.
                 MultiPolygon(
                     children
                         .into_iter()
-                        .map(|g| {
-                            if let Geometry::Polygon(p) = g {
-                                Ok(p)
-                            } else {
-                                bail!("invalid FlatGeobuf multipolygon child")
-                            }
-                        })
-                        .collect::<Result<_>>()?,
+                        .map(Polygon::try_from)
+                        .collect::<Result<_, _>>()?,
                 )
                 .into()
             } else {
@@ -827,4 +818,189 @@ fn read_fgb_geometry(
         }
         _ => bail!("unsupported FlatGeobuf geometry type {ty:?}"),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flatbuffers::FlatBufferBuilder;
+    use flatgeobuf::{Geometry as Fgb, GeometryArgs, GeometryType};
+    use geozero::{ColumnValue, PropertyProcessor};
+    use shapefile::dbase::{Date, DateTime, FieldValue, Time};
+
+    #[test]
+    fn dbase_values_map_to_json() {
+        let date = Date::new(7, 3, 2024).unwrap();
+        let cases = [
+            (FieldValue::Character(None), Value::Null),
+            (FieldValue::Character(Some("a".into())), json!("a")),
+            (FieldValue::Numeric(Some(1.5)), json!(1.5)),
+            (FieldValue::Numeric(None), Value::Null),
+            (FieldValue::Float(Some(2.5)), json!(2.5)),
+            (FieldValue::Float(None), Value::Null),
+            (FieldValue::Logical(Some(true)), json!(true)),
+            (FieldValue::Logical(None), Value::Null),
+            (FieldValue::Integer(3), json!(3)),
+            (FieldValue::Double(4.5), json!(4.5)),
+            (FieldValue::Currency(5.5), json!(5.5)),
+            (FieldValue::Date(Some(date)), json!("2024-03-07")),
+            (FieldValue::Date(None), Value::Null),
+            (
+                FieldValue::DateTime(DateTime::new(date, Time::new(1, 2, 3).unwrap())),
+                json!("2024-03-07T01:02:03"),
+            ),
+            (FieldValue::Memo("note".into()), json!("note")),
+        ];
+        for (field, expected) in cases {
+            assert_eq!(dbf_json(field), expected);
+        }
+    }
+
+    #[test]
+    fn flatgeobuf_column_values_map_to_json() {
+        let mut properties = Properties::default();
+        let values = [
+            ColumnValue::Byte(-1),
+            ColumnValue::UByte(1),
+            ColumnValue::Bool(true),
+            ColumnValue::Short(-2),
+            ColumnValue::UShort(2),
+            ColumnValue::Int(-3),
+            ColumnValue::UInt(3),
+            ColumnValue::Long(-4),
+            ColumnValue::ULong(4),
+            ColumnValue::Float(1.5),
+            ColumnValue::Double(2.5),
+            ColumnValue::String("s"),
+            ColumnValue::DateTime("2024-03-07T00:00:00Z"),
+            ColumnValue::Json("{\"a\":[1]}"),
+            ColumnValue::Binary(&[1, 2]),
+        ];
+        for (i, value) in values.iter().enumerate() {
+            assert!(!properties.property(i, &format!("c{i}"), value).unwrap());
+        }
+        assert_eq!(properties.0["c0"], -1);
+        assert_eq!(properties.0["c8"], 4);
+        assert_eq!(properties.0["c13"], json!({"a": [1]}));
+        assert_eq!(properties.0["c14"], json!([1, 2]));
+        assert!(
+            properties
+                .property(0, "bad", &ColumnValue::Json("{"))
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn flatgeobuf_headers_without_wkt_use_the_authority_code() {
+        assert_eq!(
+            header_crs(None, Some("EPSG"), 4326).unwrap().epsg(),
+            Some(4326)
+        );
+        assert_eq!(header_crs(None, None, 3857).unwrap().epsg(), Some(3857));
+    }
+
+    fn read(
+        declared: GeometryType,
+        build: impl for<'a> FnOnce(&mut FlatBufferBuilder<'a>) -> flatbuffers::WIPOffset<Fgb<'a>>,
+    ) -> Result<geo::Geometry> {
+        let mut builder = FlatBufferBuilder::new();
+        let root = build(&mut builder);
+        builder.finish_minimal(root);
+        let geometry = flatbuffers::root::<Fgb>(builder.finished_data()).unwrap();
+        read_fgb_geometry(geometry, declared, 0)
+    }
+    fn simple<'a>(
+        builder: &mut FlatBufferBuilder<'a>,
+        ty: GeometryType,
+        xy: &[f64],
+        ends: Option<&[u32]>,
+    ) -> flatbuffers::WIPOffset<Fgb<'a>> {
+        let xy = builder.create_vector(xy);
+        let ends = ends.map(|e| builder.create_vector(e));
+        Fgb::create(
+            builder,
+            &GeometryArgs {
+                xy: Some(xy),
+                ends,
+                type_: ty,
+                ..Default::default()
+            },
+        )
+    }
+
+    #[test]
+    fn flatgeobuf_geometry_edge_cases() {
+        // Empty points are stored as NaN coordinates.
+        let empty = read(GeometryType::Point, |b| {
+            simple(b, GeometryType::Point, &[f64::NAN, f64::NAN], None)
+        })
+        .unwrap();
+        assert!(codec::empty(&empty));
+        assert!(
+            read(GeometryType::LineString, |b| {
+                simple(b, GeometryType::LineString, &[f64::NAN, 0.], None)
+            })
+            .is_err()
+        );
+        assert!(
+            read(GeometryType::LineString, |b| {
+                simple(b, GeometryType::LineString, &[1., 2., 3.], None)
+            })
+            .is_err()
+        );
+        // A polygon without ring offsets is a single exterior ring.
+        let polygon = read(GeometryType::Polygon, |b| {
+            simple(
+                b,
+                GeometryType::Polygon,
+                &[0., 0., 1., 0., 1., 1., 0., 0.],
+                None,
+            )
+        })
+        .unwrap();
+        assert!(matches!(polygon, geo::Geometry::Polygon(p) if p.exterior().0.len() == 4));
+        // Collections and multipolygons read their parts recursively.
+        let collection = read(GeometryType::GeometryCollection, |b| {
+            let point = simple(b, GeometryType::Point, &[1., 2.], None);
+            let line = simple(b, GeometryType::LineString, &[0., 0., 1., 1.], None);
+            let parts = b.create_vector(&[point, line]);
+            Fgb::create(
+                b,
+                &GeometryArgs {
+                    type_: GeometryType::GeometryCollection,
+                    parts: Some(parts),
+                    ..Default::default()
+                },
+            )
+        })
+        .unwrap();
+        assert!(matches!(collection, geo::Geometry::GeometryCollection(c) if c.0.len() == 2));
+        let multi = read(GeometryType::MultiPolygon, |b| {
+            let square = simple(
+                b,
+                GeometryType::Polygon,
+                &[0., 0., 1., 0., 1., 1., 0., 0.],
+                Some(&[4]),
+            );
+            let parts = b.create_vector(&[square, square]);
+            Fgb::create(
+                b,
+                &GeometryArgs {
+                    type_: GeometryType::MultiPolygon,
+                    parts: Some(parts),
+                    ..Default::default()
+                },
+            )
+        })
+        .unwrap();
+        assert!(matches!(multi, geo::Geometry::MultiPolygon(m) if m.0.len() == 2));
+        let error = read(GeometryType::Unknown, |b| {
+            simple(b, GeometryType::CircularString, &[0., 0., 1., 1.], None)
+        })
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("unsupported FlatGeobuf"),
+            "{error}"
+        );
+    }
 }

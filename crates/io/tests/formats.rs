@@ -167,3 +167,46 @@ fn shapefiles_skip_deleted_rows_and_write_without_a_crs() {
     let after = read::read(&path, None, "x").unwrap();
     assert_eq!(after[0].layer.len(), 1);
 }
+
+#[test]
+fn shapefile_null_shapes_become_null_geometries() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("null.shp");
+    write::dataset(
+        &path,
+        None,
+        false,
+        &[layer(
+            None,
+            vec![Point::new(1., 2.).into(), Point::new(3., 4.).into()],
+        )],
+    )
+    .unwrap();
+    // Replace the first record with a null shape, which other tools write as a bare
+    // shape type of zero, and rebuild the index to match.
+    let original = std::fs::read(&path).unwrap();
+    let mut shp = original[..100].to_vec();
+    shp.extend(1u32.to_be_bytes());
+    shp.extend(2u32.to_be_bytes());
+    shp.extend(0u32.to_le_bytes());
+    shp.extend(&original[128..156]);
+    let words = (shp.len() / 2) as u32;
+    shp[24..28].copy_from_slice(&words.to_be_bytes());
+    let mut shx = std::fs::read(path.with_extension("shx")).unwrap()[..100].to_vec();
+    for (offset, length) in [(50u32, 2u32), (56, 10)] {
+        shx.extend(offset.to_be_bytes());
+        shx.extend(length.to_be_bytes());
+    }
+    let words = (shx.len() / 2) as u32;
+    shx[24..28].copy_from_slice(&words.to_be_bytes());
+    std::fs::write(&path, shp).unwrap();
+    std::fs::write(path.with_extension("shx"), shx).unwrap();
+    let read = read::read(&path, None, "x").unwrap();
+    assert_eq!(read[0].layer.len(), 1);
+    assert!(
+        read[0]
+            .warnings
+            .iter()
+            .any(|w| w.contains("null geometries"))
+    );
+}
