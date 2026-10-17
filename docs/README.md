@@ -7,6 +7,7 @@
 - [CLI](cli.md): commands, `topology.toml`, tolerance, output files
 - [Rules](rules.md): all 38 rules
 - [Web app](web-app.md)
+- [RustGIS plugin](rustgis-plugin.md): install from a file, a tool for each of the 38 rules, tolerance
 - [Python usage](python-usage.md)
 - [Python API](python-api.md)
 - [Rust API](https://docs.rs/topology-checker-core/latest/topology_checker_core/)

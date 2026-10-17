@@ -1,6 +1,6 @@
 # RustGIS plugin
 
-topology-checker runs inside [RustGIS](https://github.com/opengeos/RustGIS) as a sandboxed WebAssembly plugin. It adds one tool for each of the [38 rules](rules.md).
+topology-checker is available as a plugin for [RustGIS](https://github.com/opengeos/RustGIS), the open-source desktop GIS. It runs as a sandboxed WebAssembly [plugin](https://github.com/opengeos/RustGIS/blob/main/docs/plugins.md) built on the same engine as the CLI and Python, and adds one tool for each of the [38 rules](rules.md).
 
 ## Install
 
