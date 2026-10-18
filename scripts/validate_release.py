@@ -42,7 +42,12 @@ def project_config(root: Path) -> tuple[dict[str, Any], str]:
     """Read Python metadata and the binding crate's single version source."""
     project = tomllib.loads((root / "pyproject.toml").read_text())["project"]
     crate = tomllib.loads((root / "crates/python/Cargo.toml").read_text())
-    version = str(crate["package"]["version"])
+    version = crate["package"]["version"]
+    if isinstance(version, dict):
+        # `version.workspace = true`: the version of the workspace
+        workspace = tomllib.loads((root / "Cargo.toml").read_text())
+        version = workspace["workspace"]["package"]["version"]
+    version = str(version)
     require(project.get("dynamic") == ["version"], "version must be dynamic")
     require(not Version(version).is_prerelease, "release must have a stable version")
     return project, version

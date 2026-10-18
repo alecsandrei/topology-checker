@@ -3793,7 +3793,7 @@ dependencies = [
 
 [[package]]
 name = "topology-checker-python"
-version = "0.1.0"
+version = "0.2.1"
 dependencies = [
  "geozero 0.14.0",
  "pyo3",
