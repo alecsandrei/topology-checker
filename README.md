@@ -120,26 +120,7 @@ topology-checker --json validate topology.toml -o errors.gpkg
 
 ## QGIS plugin
 
-The Topology Rules plugin adds a Processing tool for each rule and a panel where you queue several rules, run them in one pass and browse the errors. It runs the CLI (0.2.0 or newer), so install that first, then the plugin in **Plugins > Manage and Install Plugins** with experimental plugins shown. See [QGIS plugin](https://alecsandrei.github.io/topology-checker/stable/qgis-plugin/).
-
-### Plugin development
-
-Lint needs no QGIS: in `qgis_plugin/`, `uv sync`, then `uv run ruff check .` and `uv run ruff format --check .`.
-
-pyright and the tests need a QGIS Python. With Docker, as CI does (`--platform` makes it work on ARM machines too):
-
-```sh
-docker run --rm --platform linux/amd64 -v "$PWD":/src -w /src rust:1 cargo build --release -p topology-checker --target-dir target/linux
-docker run --rm --platform linux/amd64 -v "$PWD":/src -w /src/qgis_plugin -e TOPOLOGY_CHECKER=/src/target/linux/release/topology-checker -e UV_PROJECT_ENVIRONMENT=/tmp/venv qgis/qgis:stable \
-  bash -c 'pip install --break-system-packages uv && uv venv /tmp/venv --system-site-packages --python /usr/bin/python3 && uv sync --locked && uv run pyright && uv run pytest'
-```
-
-Tests that need the tool skip without `TOPOLOGY_CHECKER`. With a local QGIS, run `cargo build --release` and point `TOPOLOGY_CHECKER` at `target/release/topology-checker`:
-
-- macOS (checked), with your QGIS app, e.g. `/Applications/QGIS-final-4_2_2.app`: `uv pip install --target /tmp/qgis-pytest pytest pytest-qgis`, then `APP=/Applications/QGIS-final-4_2_2.app/Contents; PYTHONHOME=$APP/Frameworks PYTHONPATH=/tmp/qgis-pytest QT_QPA_PLATFORM=offscreen TOPOLOGY_CHECKER=<absolute path to target/release/topology-checker> $APP/MacOS/python3.12 -m pytest`. pyright does not run on that Python; use Docker.
-- Linux and Windows (not checked here): `uv venv --system-site-packages --python <QGIS's python>` (`/usr/bin/python3`, or `python` in the OSGeo4W shell), `uv sync --locked`, then `uv run pytest` and `uv run pyright`.
-
-The modules are listed in `topology_rules/__init__.py`.
+The Topology Rules plugin adds a Processing tool for each rule and a panel where you queue several rules, run them in one pass and browse the errors. It runs the CLI (0.2.0 or newer), so install that first, then the plugin in **Plugins > Manage and Install Plugins**. See [QGIS plugin](https://alecsandrei.github.io/topology-checker/stable/qgis-plugin/).
 
 ## Rust API
 

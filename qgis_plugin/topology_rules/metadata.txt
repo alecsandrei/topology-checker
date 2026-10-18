@@ -20,7 +20,7 @@ dateTime=
 tags=topology, validation, geometry, quality, dangles, overlaps, gaps
 category=Vector
 
-experimental=True
+experimental=False
 
 homepage=https://alecsandrei.github.io/topology-checker/
 repository=https://github.com/alecsandrei/topology-checker

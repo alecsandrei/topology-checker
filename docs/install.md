@@ -27,7 +27,7 @@ Python 3.10 to 3.14. See [Python usage](python-usage.md).
 
 ## QGIS
 
-Install the [CLI](#cli) (0.2.0 or newer) first; the plugin runs it and does not include it. Then install **Topology Rules** in **Plugins > Manage and Install Plugins** (QGIS 3.34 or newer; tick **Show also experimental plugins** in the Settings tab). See [QGIS plugin](qgis-plugin.md).
+Install the [CLI](#cli) (0.2.0 or newer) first; the plugin runs it and does not include it. Then install **Topology Rules** in **Plugins > Manage and Install Plugins** (QGIS 3.34 or newer). See [QGIS plugin](qgis-plugin.md).
 
 ## Web app
 
