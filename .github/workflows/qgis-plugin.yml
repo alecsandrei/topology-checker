@@ -237,6 +237,18 @@ jobs:
       - name: Install QGIS
         run: conda install -y "qgis=${{ matrix.qgis }}" pyyaml
 
+      # On Windows conda-forge puts the Python package of QGIS, and its
+      # plugins such as Processing, under Library\python and not in
+      # site-packages, so the later steps are told where they are
+      - name: Point Python at QGIS
+        run: |
+          prefix=$(cygpath -w "${CONDA_PREFIX:-$CONDA/envs/qgis}")
+          {
+            printf 'PYTHONPATH=%s\\Library\\python;%s\\Library\\python\\plugins\n' "$prefix" "$prefix"
+            printf 'QGIS_PREFIX_PATH=%s\\Library\n' "$prefix"
+          } >> "$GITHUB_ENV"
+          printf '%s\\Library\\bin\n' "$prefix" >> "$GITHUB_PATH"
+
       - name: Install the test dependencies
         run: python -m pip install pytest==9.1.1 pytest-qgis==5.0.1
 
