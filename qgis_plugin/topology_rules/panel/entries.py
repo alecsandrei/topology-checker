@@ -54,7 +54,7 @@ class Entry:
         """The rule, and the other layer of the rules that take two."""
         if self.other is None:
             return self.rule.short_name
-        return named_with(self.rule.short_name, self.other_name)
+        return named_with(self.rule.plain_name, self.other_name)
 
     @property
     def missing(self) -> bool:
