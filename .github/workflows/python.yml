@@ -1,7 +1,27 @@
 name: Python packages
 on:
   push:
+    paths:
+      - '**'
+      - '!docs/**'
+      - '!**/*.md'
+      - '!zensical.toml'
+      - 'docs/rules.md'
+      - 'README.md'
+      - 'python/README.md'
+      - 'docs/python-usage.md'
+      - '.github/workflows/python.yml'
   pull_request:
+    paths:
+      - '**'
+      - '!docs/**'
+      - '!**/*.md'
+      - '!zensical.toml'
+      - 'docs/rules.md'
+      - 'README.md'
+      - 'python/README.md'
+      - 'docs/python-usage.md'
+      - '.github/workflows/python.yml'
   workflow_dispatch:
 
 permissions:
