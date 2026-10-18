@@ -29,6 +29,9 @@ CHAIN = ('LINESTRING(0 0, 10 0)', 'LINESTRING(10 0, 20 0)')
 LONG_NAME = 'Northern district road network of Cluj A'
 WIDER_NAME = f'{LONG_NAME} and the county roads of Alba'
 VIEWS = ['rules_tree', 'results_view']
+# The sizes in pixels are those of the font of a user
+pytestmark = pytest.mark.usefixtures('real_font')
+
 # Widgets whose smallest width is more than this are reported when a dock is
 # wider than it was told to be
 NARROW = 250

@@ -18,6 +18,7 @@ import pytest
 from qgis.core import QgsApplication, QgsProject, QgsSettings
 from qgis.gui import QgisInterface
 from qgis.PyQt.QtCore import QSettings
+from qgis.PyQt.QtGui import QFontInfo
 from qgis.PyQt.QtWidgets import QApplication, QMainWindow
 
 from topology_rules.core import binary
@@ -50,18 +51,42 @@ def pytest_configure(config: pytest.Config) -> None:
 UI_TEXT_PIXELS = 12
 
 
+# The family of the text of QGIS on Windows
+WINDOWS_FONT = 'Segoe UI'
+
+
 @pytest.fixture(autouse=True, scope='session')
-def ui_font(qgis_app: QgsApplication) -> None:
-    """Gives the widgets the size of text that a user has. Without a window
-    system a platform picks a font of its own: Windows without a screen has
-    Helvetica at 12 points and 100 dpi, a third larger than anything that a
-    person uses, which makes a panel wider than it is for them. A size in
-    pixels does not depend on the dpi, so what the layout tests measure is the
-    same on Linux, macOS and Windows. The family is the one of the system. The
-    tests of a large font set their own."""
+def ui_font(qgis_app: QgsApplication) -> str | None:
+    """Gives the widgets the text that a user has. Without a window system a
+    platform picks a font of its own: Windows without a screen has Helvetica,
+    which it does not have, at 12 points and 100 dpi, and Qt then draws with a
+    much wider font, which makes a panel wider than it is for a person. So the
+    family is the one of QGIS on Windows, and elsewhere that of the system, and
+    the size is in pixels, which do not depend on the dpi: 12 of them are 9
+    points at 96 dpi. What the layout tests measure is then much the same on
+    Linux, macOS and Windows. The tests of a large font set their own size.
+
+    Returns why the font is not the one that was asked for, or none. The
+    tests of the layout in pixels are skipped for a font that is not there."""
     font = QApplication.font()
+    if sys.platform == 'win32':
+        font.setFamily(WINDOWS_FONT)
     font.setPixelSize(UI_TEXT_PIXELS)
     QApplication.setFont(font)
+    if sys.platform != 'win32':
+        return None
+    drawn = QFontInfo(QApplication.font())
+    if drawn.family() == WINDOWS_FONT and drawn.exactMatch():
+        return None
+    return f'{WINDOWS_FONT} is not here, and {drawn.family()} is drawn instead'
+
+
+@pytest.fixture
+def real_font(ui_font: str | None) -> None:
+    """Skips a test of the layout in pixels when the font is not the one of
+    the user, as the measures of another font say nothing about the panel."""
+    if ui_font is not None:
+        pytest.skip(ui_font)
 
 
 def forget_options_box(settings: QgsSettings) -> None:
