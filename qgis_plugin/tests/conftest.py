@@ -18,7 +18,7 @@ import pytest
 from qgis.core import QgsApplication, QgsProject, QgsSettings
 from qgis.gui import QgisInterface
 from qgis.PyQt.QtCore import QSettings
-from qgis.PyQt.QtWidgets import QMainWindow
+from qgis.PyQt.QtWidgets import QApplication, QMainWindow
 
 from topology_rules.core import binary
 from topology_rules.enums import Setting
@@ -43,6 +43,25 @@ def pytest_configure(config: pytest.Config) -> None:
     QSettings.setPath(
         QSettings.Format.IniFormat, QSettings.Scope.UserScope, folder
     )
+
+
+# The size of the text of a user interface, in pixels: 9 points at 96 dpi,
+# which is what QGIS has on Windows, Linux and macOS
+UI_TEXT_PIXELS = 12
+
+
+@pytest.fixture(autouse=True, scope='session')
+def ui_font(qgis_app: QgsApplication) -> None:
+    """Gives the widgets the size of text that a user has. Without a window
+    system a platform picks a font of its own: Windows without a screen has
+    Helvetica at 12 points and 100 dpi, a third larger than anything that a
+    person uses, which makes a panel wider than it is for them. A size in
+    pixels does not depend on the dpi, so what the layout tests measure is the
+    same on Linux, macOS and Windows. The family is the one of the system. The
+    tests of a large font set their own."""
+    font = QApplication.font()
+    font.setPixelSize(UI_TEXT_PIXELS)
+    QApplication.setFont(font)
 
 
 def forget_options_box(settings: QgsSettings) -> None:
