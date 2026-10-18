@@ -21,7 +21,15 @@ from ..core.inputs import prepare
 from ..core.layers import Input, require_kind
 from ..core.runner import error_message, execute
 from ..utils import QgsProcessingException, not_none, source_type
-from .base import INPUT, OUTPUT, Planned, executable_path, failures, scratch
+from .base import (
+    INPUT,
+    OUTPUT,
+    Planned,
+    executable_path,
+    failures,
+    refuse_overwrite,
+    scratch,
+)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -94,6 +102,10 @@ class UtilityAlgorithm(Planned):
                 )
             item = Input(layer.name(), source, layer)
             require_kind(item, 'line')
+            refuse_overwrite(
+                [self.parameterAsOutputLayer(parameters, OUTPUT, context)],
+                [item],
+            )
             self.plan = Plan(executable_path(), item)
 
         return self.prepare_with(prepare)

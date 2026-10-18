@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import dataclasses
-import tomllib
 import typing as t
 from pathlib import Path
 
@@ -11,6 +10,7 @@ from ..exceptions import RunError
 from ..utils import not_none
 from .binary import Rule
 from .layers import plain_dataset, same_file
+from .toml import TomlUnavailable, loads
 
 TOP = {'tolerance', 'layers', 'rules'}
 LAYER_KEYS = {'path', 'layer'}
@@ -56,12 +56,14 @@ def read_definition(path: Path, known: dict[str, Rule]) -> Imported:
     """Reads and checks a definition, so that nothing has to be undone: the
     layers are not added to the project here."""
     try:
-        config = tomllib.loads(path.read_text(encoding='utf-8'))
+        config = loads(path.read_text(encoding='utf-8'))
     except OSError as error:
         raise DefinitionError(
             f'Cannot read {path}: {error.strerror}'
         ) from error
-    except (tomllib.TOMLDecodeError, UnicodeDecodeError) as error:
+    except TomlUnavailable as error:
+        raise DefinitionError(str(error)) from error
+    except (ValueError, UnicodeDecodeError) as error:
         raise DefinitionError(
             f'{path.name} is not valid TOML: {error}'
         ) from error

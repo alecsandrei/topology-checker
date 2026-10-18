@@ -11,6 +11,7 @@ from qgis.core import (
 from qgis.PyQt import sip
 from qgis.PyQt.QtGui import QIcon
 
+from . import probing
 from .algorithms import (
     CheckDefinition,
     CheckRulesAlgorithm,
@@ -19,10 +20,10 @@ from .algorithms import (
     RuleAlgorithm,
 )
 from .core import binary
+from .core.binary import Rule
 from .enums import PROVIDER_ID, Asset
 from .enums import Setting as PluginSetting
 from .exceptions import ExecutableError
-from .utils import named, not_none
 
 SETTING_NAME = PluginSetting.EXECUTABLE.value.rsplit('/', 1)[-1]
 
@@ -99,36 +100,23 @@ class Provider(QgsProcessingProvider):
         if self.probing == (path, modified):
             return
         self.probing = (path, modified)
-        self.task = named(QgsTask, 'fromFunction')(
-            'Checking topology-checker',
-            lambda task: probe(path, modified),
-            on_finished=lambda error, result: self.answered(
-                (path, modified), error, result
-            ),
+        self.task = probing.ask_in_task(
+            path,
+            modified,
+            lambda rules, error: self.answered((path, modified), rules, error),
         )
-        not_none(QgsApplication.taskManager()).addTask(self.task)
 
     def answered(
         self,
         asked: tuple[str, int],
+        rules: tuple[Rule, ...] | None,
         error: Exception | None,
-        result: object,
     ) -> None:
         """The answer of the executable, back on the main thread."""
         if sip.isdeleted(self) or self.probing != asked:
             return
         self.probing = self.task = None
-        failure = error or (result if isinstance(result, Exception) else None)
-        if failure is not None or result is None:
-            self.log(str(failure or 'topology-checker gave no answer'))
+        if rules is None:
+            self.log(str(error or 'topology-checker gave no answer'))
             return
         self.refreshAlgorithms()
-
-
-def probe(path: str, modified: int) -> object:
-    """The rules, or the error that is the answer: QGIS 4 does not call back
-    a task whose function raised."""
-    try:
-        return binary.probe(path, modified)
-    except Exception as error:
-        return error

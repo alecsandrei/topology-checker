@@ -3,10 +3,10 @@ is written checks what the dock checks, for layers that are files too."""
 
 from __future__ import annotations
 
-import tomllib
 from pathlib import Path
 
 import pytest
+import tomllib
 from qgis.core import QgsProject, QgsVectorLayer
 
 from topology_rules.panel.dock import Dock

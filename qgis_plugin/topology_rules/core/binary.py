@@ -7,6 +7,7 @@ import shutil
 import sys
 import threading
 import typing as t
+from concurrent.futures import Future
 from pathlib import Path
 
 from qgis.core import QgsSettings
@@ -184,20 +185,39 @@ class Probe:
 
     def __init__(self) -> None:
         self.done: dict[tuple[str, int], tuple[Rule, ...]] = {}
+        # The versions that are being asked, for a second request to share
+        self.pending: dict[tuple[str, int], Future[tuple[Rule, ...]]] = {}
         # The answers are read on the main thread and written by the thread
         # that asked
         self.lock = threading.Lock()
 
     def __call__(self, path: str, modified: int) -> tuple[Rule, ...]:
-        found = self.peek(path, modified)
-        if found is None:
+        key = (path, modified)
+        with self.lock:
+            found = self.done.get(key)
+            if found is not None:
+                return found
+            future = self.pending.get(key)
+            asking = future is None
+            if future is None:
+                future = self.pending[key] = Future()
+        if not asking:
+            return future.result()
+        try:
             # Not under the lock, as the answer can take seconds
             found = self.ask(path)
+        except BaseException as error:
             with self.lock:
-                self.done[(path, modified)] = found
-                # A few versions are enough, as the path changes by hand
-                while len(self.done) > MAX_VERSIONS:
-                    del self.done[next(iter(self.done))]
+                del self.pending[key]
+            future.set_exception(error)
+            raise
+        with self.lock:
+            self.done[key] = found
+            del self.pending[key]
+            # A few versions are enough, as the path changes by hand
+            while len(self.done) > MAX_VERSIONS:
+                del self.done[next(iter(self.done))]
+        future.set_result(found)
         return found
 
     def peek(self, path: str, modified: int) -> tuple[Rule, ...] | None:

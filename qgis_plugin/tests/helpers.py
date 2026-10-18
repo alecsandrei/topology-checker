@@ -156,6 +156,34 @@ def probe_executable(
     return path
 
 
+def counting_executable(
+    directory: Path, log: Path, name: str = 'topology-checker'
+) -> Path:
+    """The real tool, behind a script that writes the arguments of each call
+    to the log file, a line for each."""
+    real = real_executable()
+    assert real is not None, 'set TOPOLOGY_CHECKER'
+    path = directory / name
+    path.write_text(
+        '#!/usr/bin/env python3\n'
+        'import os, sys\n'
+        f'with open({str(log)!r}, "a") as log:\n'
+        '    log.write(" ".join(sys.argv[1:]) + "\\n")\n'
+        f'os.execv({real!r}, [{real!r}, *sys.argv[1:]])\n'
+    )
+    path.chmod(path.stat().st_mode | stat.S_IXUSR)
+    return path
+
+
+def calls(log: Path, command: str) -> list[str]:
+    """The calls of a counting tool with the command: 'rules', 'validate'."""
+    if not log.exists():
+        return []
+    return [
+        line for line in log.read_text().splitlines() if command in line.split()
+    ]
+
+
 def gated_executable(
     directory: Path, gate: Path, started: Path, name: str = 'topology-checker'
 ) -> Path:

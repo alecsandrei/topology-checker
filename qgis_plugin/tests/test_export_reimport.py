@@ -7,7 +7,7 @@ import typing as t
 from pathlib import Path
 
 import pytest
-from qgis.core import Qgis, QgsProject, QgsVectorLayer
+from qgis.core import Qgis, QgsFeature, QgsGeometry, QgsProject, QgsVectorLayer
 from qgis.PyQt.QtWidgets import QMessageBox
 
 from topology_rules.panel.dock import Dock
@@ -104,3 +104,51 @@ def test_an_export_that_leaves_the_file_as_it_was_says_why(
             *bar.get_messages(Qgis.MessageLevel.Critical),
         ]
         assert warned, message_text(bar)
+
+
+def edit_without_saving(layer: QgsVectorLayer) -> None:
+    """Adds a line to the layer in its edit buffer."""
+    assert layer.startEditing()
+    feature = QgsFeature(layer.fields())
+    feature.setGeometry(QgsGeometry.fromWkt('LINESTRING(0 9, 1 9)'))
+    assert layer.addFeature(feature)
+
+
+def scratch_layer() -> QgsVectorLayer:
+    return t.cast(
+        QgsVectorLayer, QgsProject.instance().mapLayersByName('scratch')[0]
+    )
+
+
+def test_the_data_file_has_the_unsaved_edits_after_the_export(
+    dock: Dock, imported: Path, tmp_path: Path
+):
+    edit_without_saving(scratch_layer())
+    dock.export_rules(imported)
+    layer = stored(tmp_path / 'topology_data.gpkg', 'scratch')
+    assert layer.isValid()
+    assert layer.featureCount() == COUNT + 1
+
+
+def test_the_layer_that_was_edited_keeps_its_features_after_the_export(
+    dock: Dock, imported: Path
+):
+    layer = scratch_layer()
+    edit_without_saving(layer)
+    dock.export_rules(imported)
+    assert layer.isValid()
+    assert layer.featureCount() == COUNT + 1
+    assert layer.isModified()
+
+
+def test_the_rules_exported_with_unsaved_edits_check_the_edits(
+    dock: Dock, imported: Path
+):
+    edit_without_saving(scratch_layer())
+    dock.export_rules(imported)
+    QgsProject.instance().clear()
+    dock.import_rules(imported)
+    (entry,) = dock.entries
+    layer = QgsProject.instance().mapLayer(entry.layer)
+    assert isinstance(layer, QgsVectorLayer)
+    assert layer.featureCount() == COUNT + 1

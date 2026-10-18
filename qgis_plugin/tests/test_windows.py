@@ -14,12 +14,12 @@ import os
 import shutil
 import subprocess
 import sys
-import tomllib
 import types
 import typing as t
 from pathlib import Path, PureWindowsPath
 
 import pytest
+import tomllib
 
 from topology_rules.core import binary, commands, runner
 from topology_rules.core.binary import Rule

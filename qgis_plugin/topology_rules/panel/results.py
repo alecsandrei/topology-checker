@@ -30,7 +30,7 @@ from ..utils import not_none, tr
 from .entries import project_layer
 from .focus import Focus
 from .hint import Hint
-from .ignored import Ignored
+from .ignored import Ignored, stamp
 from .rows import Row
 from .tree import ROLE, errors_under, fill
 from .wrapping import wrap_long_text
@@ -117,7 +117,8 @@ class ResultsPanel(QWidget):
         found them, in the order of the list, and by kind of error."""
         self.focus.clear()
         self.layers = layers
-        self.rows = rows
+        self.rows = stamp(rows, layers)
+        rows = self.rows
         self.grouping = grouping or rule_grouping()
         self.labels = labels or {}
         self.show_ignored.setText(
@@ -143,7 +144,7 @@ class ResultsPanel(QWidget):
         self.show_rows(self.rows, self.layers, self.grouping, self.labels)
 
     def is_ignored(self, row: Row) -> bool:
-        return self.ignored.has(row, self.layers)
+        return self.ignored.has(row)
 
     def is_shown(self, row: Row) -> bool:
         return self.show_ignored.isChecked() or not self.is_ignored(row)
@@ -161,11 +162,11 @@ class ResultsPanel(QWidget):
         return errors_under(self.model.itemFromIndex(self.current()))
 
     def ignore(self) -> None:
-        self.ignored.add(self.leaves(), self.layers)
+        self.ignored.add(self.leaves())
         self.changed()
 
     def restore(self) -> None:
-        self.ignored.remove(self.leaves(), self.layers)
+        self.ignored.remove(self.leaves())
         self.changed()
 
     def changed(self) -> None:

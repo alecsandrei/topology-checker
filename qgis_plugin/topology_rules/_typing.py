@@ -3,7 +3,7 @@ from __future__ import annotations
 import typing as t
 
 # What Processing hands over: the stubs differ in the type of the keys
-Parameters: t.TypeAlias = dict[t.Any, t.Any]  # noqa: UP040
+Parameters: t.TypeAlias = dict[t.Any, t.Any]
 
 
 class RuleJson(t.TypedDict):

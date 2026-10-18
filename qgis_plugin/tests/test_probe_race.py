@@ -10,11 +10,19 @@ from pathlib import Path
 
 import pytest
 from qgis.core import QgsApplication
+from qgis.gui import QgisInterface
 
 from topology_rules.core import binary
 from topology_rules.panel.dock import Dock
+from topology_rules.plugin import TopologyRules
 
-from .helpers import RULES, probe_executable, wait_for
+from .helpers import (
+    RULES,
+    calls,
+    counting_executable,
+    probe_executable,
+    wait_for,
+)
 
 FIRST, SECOND = (rule['name'] for rule in RULES)
 # What a thread does with the cache of answers, and how often
@@ -122,3 +130,29 @@ def test_threads_that_ask_together_do_not_fail_when_old_answers_are_dropped(
     finally:
         sys.setswitchinterval(interval)
     assert errors == []
+
+
+# The tool is started once when the plugin starts
+
+
+def test_the_tool_is_asked_for_its_rules_once_when_the_plugin_starts(
+    qgis_iface: QgisInterface,
+    qgis_processing: None,
+    executable: str,
+    configure: c.Callable[[str | Path], None],
+    tmp_path: Path,
+):
+    log = tmp_path / 'calls'
+    configure(counting_executable(tmp_path, log))
+    plugin = TopologyRules(qgis_iface)
+    plugin.initGui()
+    dock = plugin.dock
+    assert dock is not None
+    # What the dock does when it is shown
+    dock.refresh()
+    wait_for(lambda: dock.available)
+    wait_for(lambda: not QgsApplication.taskManager().activeTasks(), 30)
+    for _ in range(50):
+        QgsApplication.processEvents()
+    plugin.unload()
+    assert len(calls(log, 'rules')) == 1

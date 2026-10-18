@@ -5,11 +5,11 @@ next to the TOML, as they are in the project."""
 from __future__ import annotations
 
 import os
-import tomllib
 import typing as t
 from pathlib import Path
 
 import pytest
+import tomllib
 from qgis.core import Qgis, QgsFeature, QgsGeometry, QgsProject, QgsVectorLayer
 from qgis.PyQt.QtWidgets import QMessageBox
 

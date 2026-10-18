@@ -73,6 +73,9 @@ class Row:
     key: str = ''
     # Tells the geometry of the error from another one
     shape: str = ''
+    # What the error is told by when the user ignores it, worked out once
+    # the layers of the run are known
+    mark: str = dataclasses.field(default='', compare=False)
 
     @property
     def group(self) -> str:

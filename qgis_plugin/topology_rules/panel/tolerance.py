@@ -7,10 +7,21 @@ from ..utils import tr
 from .entries import Entry, project_layer
 
 
+class ToleranceBox(QgsDoubleSpinBox):
+    """A box whose lowest value, the default, is a mark and not a number: a
+    step up from it goes to zero, not to a value just above the mark."""
+
+    def stepBy(self, steps: int) -> None:
+        if self.value() == self.minimum() and steps > 0:
+            self.setValue((steps - 1) * self.singleStep())
+        else:
+            super().stepBy(steps)
+
+
 def tolerance_box() -> QgsDoubleSpinBox:
     """A box for the tolerance, which starts at the default of the tool: the
     lowest value, shown as the word."""
-    box = QgsDoubleSpinBox()
+    box = ToleranceBox()
     box.setDecimals(10)
     box.setRange(-1.0, 1e12)
     box.setSingleStep(0.001)
@@ -18,6 +29,13 @@ def tolerance_box() -> QgsDoubleSpinBox:
     box.setClearValueMode(QgsDoubleSpinBox.ClearValueMode.MinimumValue)
     box.setShowClearButton(True)
     box.setValue(box.minimum())
+
+    def snap(value: float) -> None:
+        # Below zero there is only the default: no tolerance is negative
+        if box.minimum() < value < 0:
+            box.setValue(box.minimum())
+
+    box.valueChanged.connect(snap)
     return box
 
 

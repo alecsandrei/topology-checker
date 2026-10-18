@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import tomllib
 import typing as t
 from pathlib import Path
 
 import pytest
+import tomllib
 from qgis.core import QgsFeature, QgsGeometry, QgsProject, QgsVectorLayer
 from qgis.PyQt.QtWidgets import QFileDialog
 

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import dataclasses
-import tomllib
 from pathlib import Path
 
 from qgis.core import (
@@ -17,6 +16,7 @@ from qgis.core import (
 from .._typing import Parameters
 from ..core.commands import ERROR_LAYERS, rule_counts, validate_command
 from ..core.runner import execute
+from ..core.toml import TomlUnavailable, loads
 from ..utils import QgsProcessingException, double_type, not_none
 from .base import (
     COUNT,
@@ -46,7 +46,9 @@ def data_files(definition: Path) -> list[str]:
     """The files that the layers of a definition are read from. A file that
     cannot be read names none: the tool says what is wrong with it."""
     try:
-        config = tomllib.loads(definition.read_text(encoding='utf-8'))
+        config = loads(definition.read_text(encoding='utf-8'))
+    except TomlUnavailable as error:
+        raise QgsProcessingException(str(error)) from error
     except (OSError, ValueError):
         return []
     layers = config.get('layers')

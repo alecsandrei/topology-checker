@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import collections.abc as c
+import os
 import typing as t
 from pathlib import Path
 
@@ -9,7 +10,13 @@ from qgis.PyQt.QtWidgets import QFileDialog, QMessageBox
 
 from ..core.commands import Check, write_config
 from ..core.definition import DefinitionError, read_definition
-from ..core.layers import Dataset, plain_dataset, project_layer, same_file
+from ..core.layers import (
+    Dataset,
+    plain_dataset,
+    project_layer,
+    same_file,
+    uri_parts,
+)
 from ..exceptions import RunError
 from ..utils import not_none, tr
 from .entries import Entry, unit_of
@@ -134,59 +141,101 @@ def has_layers(path: Path) -> bool:
         return False
 
 
-def in_use(path: Path, datasets: c.Iterable[Dataset]) -> set[str]:
-    """The names of the layers of the file that the project or the export
-    reads from it."""
-    used = {d.layer for d in datasets if same_file(d.path, str(path))}
+def tables_read(path: Path) -> dict[str, set[str]]:
+    """The tables of the file that layers of the project read, with the ids
+    of those layers, whatever is done to a layer (a filter, edits)."""
+    found: dict[str, set[str]] = {}
     for layer in not_none(QgsProject.instance()).mapLayers().values():
-        if not isinstance(layer, QgsVectorLayer):
+        if (
+            not isinstance(layer, QgsVectorLayer)
+            or layer.providerType() != 'ogr'
+        ):
             continue
-        try:
-            found = plain_dataset(layer)
-        except RunError:
-            continue
-        if found is not None and same_file(found.path, str(path)):
-            used.add(found.layer)
-    return {name for name in used if name}
+        parts = uri_parts(layer)
+        where = str(parts.get('path') or '')
+        table = parts.get('layerName')
+        if table and where and same_file(where, str(path)):
+            found.setdefault(str(table), set()).add(layer.id())
+    return found
+
+
+def write_layer(
+    layer: QgsVectorLayer,
+    path: Path,
+    name: str,
+    first: bool,
+    selected: bool = False,
+    attributes: bool = False,
+) -> None:
+    """Writes a layer to the GeoPackage as a table of the name, in a new
+    file if it is the first."""
+    options = QgsVectorFileWriter.SaveVectorOptions()
+    options.driverName = 'GPKG'
+    options.fileEncoding = 'UTF-8'
+    options.layerName = name
+    options.skipAttributeCreation = not attributes
+    # Without a selection, nothing: the panel checks nothing there
+    options.onlySelectedFeatures = selected
+    options.actionOnExistingFile = (
+        QgsVectorFileWriter.ActionOnExistingFile.CreateOrOverwriteFile
+        if first
+        else QgsVectorFileWriter.ActionOnExistingFile.CreateOrOverwriteLayer
+    )
+    error, message, *_ = QgsVectorFileWriter.writeAsVectorFormatV3(
+        layer,
+        str(path),
+        not_none(QgsProject.instance()).transformContext(),
+        options,
+    )
+    if error != QgsVectorFileWriter.WriterError.NoError:
+        raise DefinitionError(f'Could not save {layer.name()}: {message}')
 
 
 def save_layers(
-    layers: c.Sequence[QgsVectorLayer],
-    path: Path,
-    selected: bool,
-    keep: c.Collection[str] = (),
+    layers: c.Sequence[QgsVectorLayer], path: Path, selected: bool
 ) -> dict[str, Dataset]:
     """Writes the layers as they are in the project to a GeoPackage, one
-    layer each, and returns where each one is. The layers that the file has
-    already stay, those of the keep names with their data, the others
-    unless a layer is written over them."""
+    layer each, and returns where each one is.
+
+    The file is made beside the old one and put in its place when it is
+    whole, so that a failure leaves the old one. It has the tables that other
+    layers read from the old file, as they were, and the layers; a layer
+    that was read from a table of the file takes the place of that table.
+    """
     found: dict[str, Dataset] = {}
-    taken: set[str] = set(keep)
-    transform = not_none(QgsProject.instance()).transformContext()
-    for layer in layers:
-        name, index = layer.name(), 1
-        while name in taken:
-            index += 1
-            name = f'{layer.name()}_{index}'
-        taken.add(name)
-        options = QgsVectorFileWriter.SaveVectorOptions()
-        options.driverName = 'GPKG'
-        options.fileEncoding = 'UTF-8'
-        options.layerName = name
-        options.skipAttributeCreation = True
-        # Without a selection, nothing: the panel checks nothing there
-        options.onlySelectedFeatures = selected
-        options.actionOnExistingFile = (
-            QgsVectorFileWriter.ActionOnExistingFile.CreateOrOverwriteLayer
-            if found or has_layers(path)
-            else QgsVectorFileWriter.ActionOnExistingFile.CreateOrOverwriteFile
-        )
-        error, message, *_ = QgsVectorFileWriter.writeAsVectorFormatV3(
-            layer, str(path), transform, options
-        )
-        if error != QgsVectorFileWriter.WriterError.NoError:
-            raise DefinitionError(f'Could not save {layer.name()}: {message}')
-        found[layer.id()] = Dataset(str(path), name)
+    reading = tables_read(path) if has_layers(path) else {}
+    saving = {layer.id() for layer in layers}
+    kept = [table for table, ids in reading.items() if ids - saving]
+    taken: set[str] = set(kept)
+    partial = path.with_name(f'.{path.stem}.partial.gpkg')
+    partial.unlink(missing_ok=True)
+    try:
+        first = True
+        for table in kept:
+            old = QgsVectorLayer(f'{path}|layername={table}', table, 'ogr')
+            if old.isValid():
+                write_layer(old, partial, table, first, attributes=True)
+                first = False
+        for layer in layers:
+            own = next(
+                (t for t, ids in reading.items() if layer.id() in ids), None
+            )
+            name, index = own if own and own not in taken else layer.name(), 1
+            while name in taken:
+                index += 1
+                name = f'{layer.name()}_{index}'
+            taken.add(name)
+            write_layer(layer, partial, name, first, selected)
+            first = False
+            found[layer.id()] = Dataset(str(path), name)
+        try:
+            os.replace(partial, path)
+        except OSError as error:
+            raise DefinitionError(
+                f'Could not replace {path.name}: {error.strerror}'
+            ) from error
+    finally:
+        partial.unlink(missing_ok=True)
     return found
 
 
@@ -234,11 +283,7 @@ def export_definition(
     if unreadable:
         if data.exists() and not overwrite(data):
             raise DefinitionError('Export canceled.')
-        # What the export keeps reading from the file stays in it
-        keep = in_use(data, datasets.values()) if has_layers(data) else set()
-        datasets.update(
-            save_layers(list(unreadable.values()), data, selected, keep)
-        )
+        datasets.update(save_layers(list(unreadable.values()), data, selected))
         saved = {
             layer.name(): why_saved(layer, layer_id in readable)
             for layer_id, layer in unreadable.items()

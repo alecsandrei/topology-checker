@@ -24,7 +24,7 @@ from .commands import (
     write_config,
 )
 from .inputs import Prepared, prepare
-from .invalid import Invalid, Rejected, parse_failure
+from .invalid import REJECTED, Invalid, Rejected, parse_failure
 from .layers import Input
 from .runner import execute
 
@@ -102,9 +102,14 @@ def run_jobs(
             )
         except Rejected as rejected:
             # The first feature that was named is the one that is reported
+            # when skipping features does not help; when the tool stops on
+            # something else, that is what stopped the run. The features
+            # that were left out before are in the log
             first = first or rejected
             if not rejected.skippable:
-                raise first from rejected
+                if rejected.reason.startswith(REJECTED):
+                    raise first from rejected
+                raise
             if direct:
                 direct = False
             elif rejected.fid in skips.get(rejected.key, {}):
@@ -113,6 +118,7 @@ def run_jobs(
                 skips.setdefault(rejected.key, {})[rejected.fid] = (
                     rejected.reason
                 )
+                feedback.pushInfo(f'Left out of the run: {rejected}')
             continue
         if outcome.invalid:
             feedback.pushWarning(

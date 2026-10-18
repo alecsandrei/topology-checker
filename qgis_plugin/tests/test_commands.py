@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import json
-import tomllib
 from pathlib import Path
 
 import pytest
+import tomllib
 
 from topology_rules.core.binary import Rule
 from topology_rules.core.commands import (

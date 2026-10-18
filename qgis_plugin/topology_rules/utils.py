@@ -41,7 +41,7 @@ V = t.TypeVar('V')
 
 
 # Not a type parameter list, which needs a newer Python than QGIS may have
-def not_none(value: V | None) -> V:  # noqa: UP047
+def not_none(value: V | None) -> V:
     """The value, which the QGIS stubs type as optional but is set."""
     if value is None:
         raise ValueError('Did not expect None')

@@ -119,6 +119,11 @@ class Planned(QgsProcessingAlgorithm):
                 action()
         except QgsProcessingException as error:
             self.failure = error
+        except Exception as error:
+            # Whatever else went wrong is reported, not dropped by Processing
+            self.failure = QgsProcessingException(
+                str(error) or type(error).__name__
+            )
         return True
 
     def check_prepared(self) -> None:

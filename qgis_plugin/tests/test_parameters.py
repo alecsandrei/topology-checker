@@ -211,6 +211,21 @@ def test_utility_outputs(tmp_path: Path, name: str, output: str):
     assert ran.results[OUTPUT]
 
 
+@pytest.mark.parametrize('name', ['merge_lines', 'explode_lines'])
+@pytest.mark.parametrize('driver', ['GPKG', 'ESRI Shapefile'])
+def test_a_utility_output_on_the_input_file_is_refused(
+    tmp_path: Path, name: str, driver: str
+):
+    layer = saved_layer(tmp_path, CHAIN, driver=driver)
+    QgsProject.instance().addMapLayer(layer)
+    path = Path(layer.source().split('|')[0])
+    before = path.read_bytes()
+    ran = run_algorithm(name, {'INPUT': layer.id(), 'OUTPUT': str(path)})
+    assert not ran.ok
+    assert 'input' in ran.log.lower()
+    assert path.read_bytes() == before
+
+
 def test_utility_on_a_polygon_layer_is_refused():
     layer = QgsVectorLayer('Polygon?crs=EPSG:32633', 'p', 'memory')
     QgsProject.instance().addMapLayer(layer)

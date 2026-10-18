@@ -135,3 +135,29 @@ def test_the_suffix_goes_back_when_the_first_rule_is_checked_again(dock: Dock):
     set_checked(dock, 0, True)
     assert dock.tolerance.suffix() == ' °'
     assert dock.tolerance.specialValueText() == 'Default (1e-8°)'
+
+
+# The box does not go below zero
+
+
+def is_default_or_not_negative(dock: Dock) -> bool:
+    box = dock.tolerance
+    return box.value() == box.minimum() or box.value() >= 0
+
+
+def test_one_step_up_from_the_default_is_not_negative(dock: Dock):
+    dock.tolerance.stepUp()
+    assert dock.tolerance.value() >= 0
+
+
+def test_a_negative_value_that_is_typed_is_not_accepted(dock: Dock):
+    dock.tolerance.lineEdit().setText('-0.5')
+    dock.tolerance.interpretText()
+    assert dock.tolerance.value() != -0.5
+    assert is_default_or_not_negative(dock)
+
+
+def test_a_negative_value_does_not_reach_the_run(dock: Dock):
+    dock.tolerance.stepUp()
+    value = dock.tolerance_value()
+    assert value is None or value >= 0

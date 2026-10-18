@@ -268,7 +268,14 @@ class CheckRulesAlgorithm(Planned):
         and the part of it that the scope asks for."""
         if layer_id not in inputs:
             layer = QgsProcessingUtils.mapLayerFromString(layer_id, context)
-            source = QgsProcessingUtils.variantToSource(layer_id, context)
+            try:
+                source = QgsProcessingUtils.variantToSource(layer_id, context)
+            except Exception as error:
+                # QGIS raises a bare exception for a layer it cannot read
+                name = layer.name() if layer is not None else layer_id
+                raise QgsProcessingException(
+                    f'The layer {name} cannot be read: {error}'
+                ) from error
             if not isinstance(layer, QgsVectorLayer) or source is None:
                 raise QgsProcessingException(f'The layer is gone: {layer_id}')
             ids, area = None, None

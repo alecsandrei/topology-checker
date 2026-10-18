@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import collections.abc as c
 import dataclasses
+import math
 import re
 import typing as t
 from pathlib import Path
@@ -15,6 +16,7 @@ from qgis.core import (
     QgsFeatureSource,
     QgsFields,
     QgsGeometry,
+    QgsPoint,
     QgsProcessingContext,
     QgsProcessingFeatureSource,
     QgsProcessingFeedback,
@@ -49,11 +51,42 @@ class Prepared:
     skipped: tuple[Skipped, ...] = ()
 
 
+def not_finite(geometry: QgsGeometry) -> bool:
+    """Whether a coordinate is not a number or is infinite. The box shows
+    most of them at once, and a point is empty to QGIS when one of its
+    coordinates is not a number, so it is the box that tells; the vertices
+    tell about the others."""
+    box = geometry.boundingBox()
+    corners = (
+        box.xMinimum(),
+        box.yMinimum(),
+        box.xMaximum(),
+        box.yMaximum(),
+    )
+    # An empty geometry has no coordinates at all
+    if all(math.isnan(value) for value in corners):
+        return False
+    if not box.isFinite():
+        return True
+    return any(
+        not math.isfinite(vertex.x() + vertex.y())
+        for vertex in t.cast('c.Iterable[QgsPoint]', geometry.vertices())
+    )
+
+
 def invalid_reason(geometry: QgsGeometry) -> str | None:
-    """Why the tool would reject a polygon, or none if it takes it."""
-    if geometry.isNull() or geometry.isEmpty():
+    """Why the tool would reject a feature, or none if it takes it: a point
+    or a line with a coordinate that is not finite, or a polygon that is not
+    valid."""
+    if geometry.isNull():
         return None
-    if wkb_kind(geometry.wkbType()) != 'polygon' or geometry.isGeosValid():
+    if wkb_kind(geometry.wkbType()) != 'polygon':
+        return (
+            'must be finite: a coordinate is not a number'
+            if not_finite(geometry)
+            else None
+        )
+    if geometry.isEmpty() or geometry.isGeosValid():
         return None
     errors = geometry.validateGeometry()
     return errors[0].what() if errors else 'invalid polygon'
