@@ -19,8 +19,10 @@ from qgis.core import (
 from topology_rules.algorithms.rule import COUNT
 
 from .helpers import (
+    VANISHING,
     add_features,
     line_layer,
+    remove_files,
     run_algorithm,
     save,
     saved_layer,
@@ -321,10 +323,9 @@ def test_a_table_without_geometry_is_refused(tmp_path: Path):
 
 
 def test_a_layer_whose_file_vanished_after_it_was_added(tmp_path: Path):
-    layer = saved_layer(tmp_path, CHAIN)
+    layer = saved_layer(tmp_path, CHAIN, driver=VANISHING)
     QgsProject.instance().addMapLayer(layer)
-    for part in tmp_path.glob('lines.gpkg*'):
-        part.unlink()
+    remove_files(tmp_path, 'lines')
     ran = run_algorithm(
         DANGLES,
         {'INPUT': layer.id()},

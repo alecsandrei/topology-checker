@@ -10,7 +10,14 @@ from qgis.core import QgsFeature, QgsGeometry, QgsProject, QgsVectorLayer
 
 from topology_rules.algorithms.rule import COUNT
 
-from .helpers import line_layer, point_layer, run_algorithm, saved_layer
+from .helpers import (
+    VANISHING,
+    line_layer,
+    point_layer,
+    remove_files,
+    run_algorithm,
+    saved_layer,
+)
 
 DANGLES = 'line/must-not-have-dangles'
 COVERED = 'point/must-be-covered-by-lines'
@@ -43,8 +50,10 @@ def entry(
     }
 
 
-def saved(tmp_path: Path, *wkts: str, name: str = 'roads') -> QgsVectorLayer:
-    layer = saved_layer(tmp_path, wkts, name)
+def saved(
+    tmp_path: Path, *wkts: str, name: str = 'roads', driver: str = 'GPKG'
+) -> QgsVectorLayer:
+    layer = saved_layer(tmp_path, wkts, name, driver)
     QgsProject.instance().addMapLayer(layer)
     return layer
 
@@ -74,9 +83,8 @@ def test_a_layer_that_is_gone_is_refused(tmp_path: Path):
 
 
 def test_a_layer_whose_file_vanished_is_refused(tmp_path: Path):
-    layer = saved(tmp_path, *CHAIN)
-    for part in tmp_path.glob('roads.gpkg*'):
-        part.unlink()
+    layer = saved(tmp_path, *CHAIN, driver=VANISHING)
+    remove_files(tmp_path, 'roads')
     ran = check(tmp_path, entry(DANGLES, layer))
     assert not ran.ok
     assert ran.log.strip()

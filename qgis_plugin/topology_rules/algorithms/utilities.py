@@ -30,6 +30,7 @@ from .base import (
     executable_path,
     failures,
     refuse_overwrite,
+    release_files,
     scratch,
 )
 
@@ -110,10 +111,9 @@ class UtilityAlgorithm(Planned):
                 )
             item = Input(layer.name(), source, layer)
             require_kind(item, 'line')
-            refuse_overwrite(
-                [self.parameterAsOutputLayer(parameters, OUTPUT, context)],
-                [item],
-            )
+            sink = self.parameterAsOutputLayer(parameters, OUTPUT, context)
+            refuse_overwrite([sink], [item])
+            release_files([sink])
             self.plan = Plan(executable_path(), item)
 
         return self.prepare_with(prepare)

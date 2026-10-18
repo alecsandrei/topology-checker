@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import typing as t
 from pathlib import Path
 
@@ -259,20 +260,44 @@ def test_three_tasks_at_once_on_one_layer_do_not_share_their_output(
 # qgis_process
 
 
+# How the program is named: as it is, with the extension of Windows, and as
+# the batch files of conda-forge on Windows, which set up QGIS and start it
+QGIS_PROCESS_NAMES = (
+    'qgis_process',
+    'qgis_process.exe',
+    'qgis_process.bat',
+    'qgis_process-qgis.bat',
+    'qgis_process-qgis-ltr.bat',
+)
+
+
 def qgis_process() -> str | None:
     """The qgis_process of the QGIS that runs the tests, else one on the
     PATH."""
     prefix = Path(QgsApplication.prefixPath())
-    candidates = [
-        os.environ.get('QGIS_PROCESS', ''),
-        str(prefix / 'qgis_process'),
-        str(prefix / 'bin' / 'qgis_process'),
-        str(prefix / 'Contents' / 'MacOS' / 'qgis_process'),
-        shutil.which('qgis_process') or '',
+    folders = [
+        prefix,
+        prefix / 'bin',
+        prefix / 'Contents' / 'MacOS',
+        # Where conda puts the programs of QGIS on Windows
+        prefix / 'Library' / 'bin',
     ]
+    candidates = [os.environ.get('QGIS_PROCESS', '')]
+    for name in QGIS_PROCESS_NAMES:
+        candidates += [str(folder / name) for folder in folders]
+        candidates.append(shutil.which(name) or '')
     return next(
         (path for path in candidates if path and Path(path).is_file()), None
     )
+
+
+def link_program(folder: Path, executable: str) -> None:
+    """Makes the tool available by the name that the plugin looks for. A copy
+    where there are no links to files to be had, as on Windows."""
+    if sys.platform == 'win32':
+        shutil.copy(executable, folder / 'topology-checker.exe')
+    else:
+        (folder / 'topology-checker').symlink_to(executable)
 
 
 @pytest.mark.slow
@@ -290,7 +315,7 @@ def test_qgis_process_runs_a_rule_of_the_plugin(
     )
     tools = tmp_path / 'bin'
     tools.mkdir()
-    (tools / 'topology-checker').symlink_to(executable)
+    link_program(tools, executable)
     data = project_layer(tmp_path / 'data', CHAIN)
     source = data.source()
     output = tmp_path / 'errors.gpkg'

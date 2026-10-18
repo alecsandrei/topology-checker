@@ -23,6 +23,7 @@ from .helpers import (
     saved_layer,
     select_rules,
 )
+from .test_wrapping import SLACK, room
 
 DANGLES = 'line/must-not-have-dangles'
 OVERLAPS = 'line/must-not-overlap'
@@ -246,14 +247,7 @@ def test_the_first_rule_does_not_move_the_list(dock: Dock, tmp_path: Path):
     assert dock.rules_placeholder.isHidden()
 
 
-# At the width of a narrow dock
-
-
-def room_for_the_name(dock: Dock) -> int:
-    """The width left for the text of a rule in the first column: what the
-    column has, less the indent of the two levels and the checkbox."""
-    tree = dock.rules_tree
-    return tree.columnWidth(0) - 2 * tree.indentation() - 24
+# At the width of a narrow dock, with the room that the style leaves
 
 
 def test_a_short_rule_name_is_not_elided_at_300_px(dock: Dock, tmp_path: Path):
@@ -262,8 +256,11 @@ def test_a_short_rule_name_is_not_elided_at_300_px(dock: Dock, tmp_path: Path):
     QApplication.processEvents()
     (item,) = rule_items(dock)
     assert item.text(0) == 'Must not have dangles'
-    width = dock.rules_tree.fontMetrics().horizontalAdvance(item.text(0))
-    assert width <= room_for_the_name(dock)
+    tree = dock.rules_tree
+    width = tree.fontMetrics().horizontalAdvance(item.text(0))
+    # The room that the style leaves for the text, with a few pixels to spare:
+    # the checkbox, the icon and the margins differ from one style to another
+    assert width <= room(tree, tree.indexFromItem(item, 0), SLACK)
 
 
 def test_the_second_column_holds_only_numbers(dock: Dock, tmp_path: Path):
