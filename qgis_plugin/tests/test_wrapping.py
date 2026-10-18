@@ -9,11 +9,13 @@ more room must wrap."""
 
 from __future__ import annotations
 
+import collections.abc as c
 import typing as t
 
 import pytest
 from qgis.core import QgsProject
 from qgis.PyQt.QtCore import QModelIndex, QRect, Qt
+from qgis.PyQt.QtGui import QFont
 from qgis.PyQt.QtWidgets import QApplication, QStyle, QTreeView, QWidget
 
 from topology_rules.panel.dock import Dock
@@ -27,6 +29,9 @@ CHAIN = ('LINESTRING(0 0, 10 0)', 'LINESTRING(10 0, 20 0)')
 LONG_NAME = 'Northern district road network of Cluj A'
 WIDER_NAME = f'{LONG_NAME} and the county roads of Alba'
 VIEWS = ['rules_tree', 'results_view']
+# The sizes in pixels are those of the font of a user
+pytestmark = pytest.mark.usefixtures('real_font')
+
 # Widgets whose smallest width is more than this are reported when a dock is
 # wider than it was told to be
 NARROW = 250
@@ -314,3 +319,70 @@ def test_a_narrower_dock_still_fits_every_item(narrow: Dock, name: str):
         needed = wrapped(view, index, SLACK)
         height = view.visualRect(index).height()
         assert needed.height() <= height, text_of(index)
+
+
+# People with bad eyes, or a screen of many pixels, have a larger font
+
+# 12 points at 96 dpi
+LARGE_TEXT_PIXELS = 16
+# What the smallest width of the dock may come to with the large font
+LARGE_FONT_MINIMUM_WIDTH = 340
+
+
+@pytest.fixture
+def large_font() -> c.Iterator[None]:
+    """The text of the interface is large for the widgets that the test makes
+    after it."""
+    saved = QFont(QApplication.font())
+    font = QFont(saved)
+    font.setPixelSize(LARGE_TEXT_PIXELS)
+    QApplication.setFont(font)
+    yield
+    QApplication.setFont(saved)
+
+
+@pytest.fixture
+def narrow_large(large_font: None, narrow: Dock) -> Dock:
+    """The narrow dock, made with the large font."""
+    return narrow
+
+
+def test_the_dock_stays_narrow_with_a_large_font(narrow_large: Dock):
+    width = narrow_large.minimumSizeHint().width()
+    assert width <= LARGE_FONT_MINIMUM_WIDTH, what_forces_the_width(
+        narrow_large
+    )
+
+
+@pytest.mark.parametrize('name', VIEWS)
+def test_long_names_wrap_and_are_not_elided_with_a_large_font(
+    narrow_large: Dock, name: str
+):
+    view = show_view(narrow_large, name)
+    too_wide: list[str] = []
+    too_high: list[str] = []
+    for index in with_text(view):
+        needed = wrapped(view, index, SLACK)
+        if needed.width() > room(view, index, SLACK):
+            too_wide.append(text_of(index))
+        if needed.height() > view.visualRect(index).height():
+            too_high.append(text_of(index))
+    assert too_wide == []
+    assert too_high == []
+    assert not any('…' in text_of(index) for index in with_text(view))
+
+
+@pytest.mark.parametrize('name', VIEWS)
+def test_a_name_that_cannot_fit_wraps_onto_a_second_line_with_a_large_font(
+    narrow_large: Dock, name: str
+):
+    view = show_view(narrow_large, name)
+    wide = [
+        index
+        for index in with_text(view)
+        if WIDER_NAME in text_of(index) and index.column() == 0
+    ]
+    assert wide
+    for index in wide:
+        assert lines(view, index, SLACK) > 1, text_of(index)
+        assert view.visualRect(index).height() > one_line(view)

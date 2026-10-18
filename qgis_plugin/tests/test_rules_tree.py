@@ -6,6 +6,7 @@ import re
 import typing as t
 from pathlib import Path
 
+import pytest
 from qgis.core import QgsProject, QgsVectorLayer
 from qgis.PyQt.QtCore import QPoint, QRect, Qt
 from qgis.PyQt.QtWidgets import QApplication, QTreeWidget
@@ -250,6 +251,7 @@ def test_the_first_rule_does_not_move_the_list(dock: Dock, tmp_path: Path):
 # At the width of a narrow dock, with the room that the style leaves
 
 
+@pytest.mark.usefixtures('real_font')
 def test_a_short_rule_name_is_not_elided_at_300_px(dock: Dock, tmp_path: Path):
     shown_dock(dock)
     add(dock, DANGLES, lines(tmp_path))
@@ -274,6 +276,7 @@ def test_the_second_column_holds_only_numbers(dock: Dock, tmp_path: Path):
         assert re.fullmatch(r'\d*', item.text(1)), item.text(0)
 
 
+@pytest.mark.usefixtures('real_font')
 def test_the_second_column_is_narrow(dock: Dock, tmp_path: Path):
     shown_dock(dock)
     add(dock, DANGLES, lines(tmp_path))
