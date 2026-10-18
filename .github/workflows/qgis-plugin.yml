@@ -218,6 +218,9 @@ jobs:
           - qgis: '3.44'
     env:
       QT_QPA_PLATFORM: offscreen
+      # Where the platform without a screen looks for fonts, which it does
+      # not do on Windows by itself
+      QT_QPA_FONTDIR: C:\Windows\Fonts
     defaults:
       run:
         shell: bash -el {0}
@@ -327,13 +330,66 @@ jobs:
           python -c "from qgis.core import Qgis; print(Qgis.version())"
           python -c "import sys; from qgis.core import Qgis; sys.exit(not Qgis.version().startswith('${{ matrix.qgis }}.'))"
 
-      # All the tests, the slow ones too, as in the images
+      # The tests of the layout measure text, which they need to be in the
+      # font that users have on Windows, Segoe UI. The platform without a
+      # screen (`offscreen`) is tried first, with the fonts of Windows, and
+      # when it does not see them, the platform of Windows itself, as the
+      # runners have a desktop session. What each platform finds is printed.
+      - name: Choose the Qt platform
+        run: |
+          source "$(cygpath -u "$RUNNER_TEMP")/qgis-env.sh"
+          cat > "$RUNNER_TEMP/fonts.py" <<'PY'
+          import sys
+
+          from qgis.core import QgsApplication
+          from qgis.PyQt.QtGui import QFontDatabase, QFontInfo, QGuiApplication
+          from qgis.PyQt.QtWidgets import QApplication
+
+          app = QgsApplication([], True)
+          app.initQgis()
+          font = QApplication.font()
+          print('platform:', QGuiApplication.platformName())
+          print('default font:', repr(font.family()), font.pointSizeF(), 'pt')
+          try:
+              families = QFontDatabase().families()
+          except TypeError:
+              families = QFontDatabase.families()
+          print(len(families), 'families, Segoe UI listed:', 'Segoe UI' in families)
+          font.setFamily('Segoe UI')
+          font.setPixelSize(12)
+          info = QFontInfo(font)
+          print('Segoe UI at 12 px:', repr(info.family()), 'exact', info.exactMatch())
+          sys.exit(0 if info.family() == 'Segoe UI' and info.exactMatch() else 1)
+          PY
+          chosen=''
+          for platform in offscreen windows; do
+            echo "=== QT_QPA_PLATFORM=$platform"
+            if QT_QPA_PLATFORM=$platform python "$(cygpath -w "$RUNNER_TEMP/fonts.py")"; then
+              chosen=$platform
+              break
+            fi
+          done
+          if [ -z "$chosen" ]; then
+            echo "::warning::Segoe UI is not found by either platform: the tests of the layout are skipped"
+            chosen=offscreen
+          fi
+          echo "chosen: $chosen"
+          echo "QT_PLATFORM=$chosen" >> "$GITHUB_ENV"
+
+      # All the tests, the slow ones too, as in the images. On the platform of
+      # Windows the plugin of pytest-qgis is told that there is a screen, as it
+      # sets the platform without one otherwise
       - name: Pytest
         env:
           TOPOLOGY_CHECKER: ${{ github.workspace }}/target/release/topology-checker.exe
         run: |
           source "$(cygpath -u "$RUNNER_TEMP")/qgis-env.sh"
-          python -m pytest -m "" -ra --durations=30 -o faulthandler_timeout=600
+          args=()
+          if [ "$QT_PLATFORM" = windows ]; then
+            export QT_QPA_PLATFORM=windows
+            args+=(-o qgis_gui_enabled=true)
+          fi
+          python -m pytest -m "" -ra --durations=30 -o faulthandler_timeout=600 "${args[@]}"
 
   pyqt6:
     name: PyQt6 compatibility
