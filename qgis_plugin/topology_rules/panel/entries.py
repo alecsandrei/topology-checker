@@ -1,31 +1,19 @@
 from __future__ import annotations
 
 import dataclasses
-import typing as t
 from pathlib import Path
 
-from qgis.core import (
-    Qgis,
-    QgsProviderRegistry,
-    QgsUnitTypes,
-    QgsVectorLayer,
-)
+from qgis.core import Qgis, QgsUnitTypes, QgsVectorLayer
 
 from ..core.binary import Rule, named_with
-from ..core.layers import CONTAINERS, project_layer
-from ..utils import not_none
+from ..core.layers import CONTAINERS, project_layer, uri_parts
 
 
 def where_is(layer: QgsVectorLayer) -> str:
     """Where the data of a layer is, to tell layers of one name apart."""
     if layer.providerType() != 'ogr':
         return layer.publicSource()
-    parts = t.cast(
-        'dict[str, t.Any]',
-        not_none(QgsProviderRegistry.instance()).decodeUri(
-            'ogr', layer.source()
-        ),
-    )
+    parts = uri_parts(layer)
     path = str(parts.get('path') or layer.source())
     name = parts.get('layerName')
     return (

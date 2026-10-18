@@ -4,19 +4,14 @@ import typing as t
 
 from qgis.core import QgsApplication, QgsTask
 from qgis.PyQt import sip
-from qgis.PyQt.QtCore import QCoreApplication
 
 from ..core import binary
 from ..core.binary import Rule
 from ..exceptions import ExecutableError
-from ..utils import named, not_none
+from ..utils import named, not_none, tr
 
 if t.TYPE_CHECKING:
     from .dock import Dock
-
-
-def tr(text: str) -> str:
-    return QCoreApplication.translate('TopologyRules', text)
 
 
 def refresh(dock: Dock) -> None:
@@ -45,7 +40,9 @@ def refresh(dock: Dock) -> None:
     dock.probe_task = named(QgsTask, 'fromFunction')(
         tr('Checking topology-checker'),
         lambda task: ask(path, modified),
-        on_finished=lambda error, rules: answered(dock, error, rules),
+        on_finished=lambda error, rules: answered(
+            dock, (path, modified), error, rules
+        ),
     )
     not_none(QgsApplication.taskManager()).addTask(dock.probe_task)
 
@@ -62,11 +59,13 @@ def ask(path: str, modified: int) -> tuple[Rule, ...] | Exception:
 
 def answered(
     dock: Dock,
+    asked: tuple[str, int],
     error: Exception | None,
     result: tuple[Rule, ...] | Exception | None,
 ) -> None:
-    """The answer of the executable, back on the main thread."""
-    if sip.isdeleted(dock):
+    """The answer of the executable, back on the main thread. One for an
+    executable that is not the one in question any more is of no use."""
+    if sip.isdeleted(dock) or dock.probing != asked:
         return
     dock.probing = None
     dock.probe_task = None

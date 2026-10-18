@@ -6,7 +6,6 @@ import typing as t
 from qgis.core import QgsVectorLayer
 from qgis.gui import QgisInterface
 from qgis.PyQt.QtCore import (
-    QCoreApplication,
     QEvent,
     QModelIndex,
     Qt,
@@ -27,7 +26,7 @@ from qgis.PyQt.QtWidgets import (
 )
 
 from ..core.style import Grouping, rule_grouping
-from ..utils import not_none
+from ..utils import not_none, tr
 from .entries import project_layer
 from .focus import Focus
 from .hint import Hint
@@ -35,10 +34,6 @@ from .ignored import Ignored
 from .rows import Row
 from .tree import ROLE, errors_under, fill
 from .wrapping import wrap_long_text
-
-
-def tr(text: str) -> str:
-    return QCoreApplication.translate('TopologyRules', text)
 
 
 def quoted(text: str) -> str:
@@ -205,7 +200,7 @@ class ResultsPanel(QWidget):
         gone = set(layer_ids)
         if any(row.error_layer in gone for row in self.rows):
             kept = [r for r in self.rows if r.error_layer not in gone]
-            self.show_rows(kept, self.layers)
+            self.show_rows(kept, self.layers, self.grouping, self.labels)
 
     def current(self) -> QModelIndex:
         selection = self.view.selectionModel()

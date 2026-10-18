@@ -378,6 +378,17 @@ def broken(tmp_path: Path, kind: str) -> Path:
         )
     elif kind == 'wrong rule layer count':
         write_toml(path, layers, [(COVERED, 'roads', None)])
+    elif kind.endswith('tolerance'):
+        write_toml(path, layers, rules)
+        value = {
+            'boolean tolerance': 'true',
+            'negative tolerance': '-1',
+            'text tolerance': '"wide"',
+        }[kind]
+        path.write_text(
+            f'tolerance = {value}\n' + path.read_text(encoding='utf-8'),
+            encoding='utf-8',
+        )
     return path
 
 
@@ -390,6 +401,9 @@ def broken(tmp_path: Path, kind: str) -> Path:
         'unknown layer',
         'missing data',
         'wrong rule layer count',
+        'boolean tolerance',
+        'negative tolerance',
+        'text tolerance',
     ],
 )
 def test_a_file_that_cannot_be_used_leaves_the_list_unchanged(

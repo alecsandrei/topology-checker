@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import html
 
+from processing.core.ProcessingConfig import ProcessingConfig
 from qgis.core import QgsSettings
-from qgis.PyQt.QtCore import QCoreApplication
 from qgis.PyQt.QtWidgets import (
     QFileDialog,
     QLabel,
@@ -13,12 +13,10 @@ from qgis.PyQt.QtWidgets import (
 )
 
 from ..enums import Setting
+from ..provider import SETTING_NAME
+from ..utils import tr
 
 INSTALL = 'https://alecsandrei.github.io/topology-checker/stable/install/'
-
-
-def tr(text: str) -> str:
-    return QCoreApplication.translate('TopologyRules', text)
 
 
 class SetupPage(QWidget):
@@ -55,5 +53,9 @@ class SetupPage(QWidget):
         )
         if not path:
             return False
+        # The setting of the Processing options, which they write back
+        # from what they hold when the dialog is accepted
+        if SETTING_NAME in ProcessingConfig.settings:
+            ProcessingConfig.setSettingValue(SETTING_NAME, path)
         QgsSettings().setValue(Setting.EXECUTABLE.value, path)
         return True

@@ -4,7 +4,7 @@ import typing as t
 
 from qgis.core import Qgis, QgsProcessingFeedback
 from qgis.gui import QgsMessageBar, QgsMessageBarItem
-from qgis.PyQt.QtCore import QCoreApplication, Qt
+from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -15,16 +15,12 @@ from qgis.PyQt.QtWidgets import (
     QWidget,
 )
 
-from ..utils import not_none
+from ..utils import not_none, tr
 
 # How long a message that is not a failure stays
 SECONDS = 5
 # Marks the failure that the plugin shows in the message bar
 MARK = 'topology_rules/failure'
-
-
-def tr(text: str) -> str:
-    return QCoreApplication.translate('TopologyRules', text)
 
 
 class RunFeedback(QgsProcessingFeedback):

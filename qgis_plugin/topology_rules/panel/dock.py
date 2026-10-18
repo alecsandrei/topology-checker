@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import contextlib
-import typing as t
 from pathlib import Path
 
 from qgis.core import (
@@ -12,7 +11,7 @@ from qgis.core import (
     QgsTask,
 )
 from qgis.gui import QgisInterface, QgsDockWidget
-from qgis.PyQt.QtCore import QCoreApplication, QUrl
+from qgis.PyQt.QtCore import QUrl
 from qgis.PyQt.QtGui import QDesktopServices
 from qgis.PyQt.QtWidgets import (
     QHBoxLayout,
@@ -27,7 +26,7 @@ from ..algorithms.base import DOCS
 from ..core.binary import Rule
 from ..enums import PROVIDER_ID
 from ..exceptions import ExecutableError
-from ..utils import not_none
+from ..utils import not_none, tr
 from . import controller, exchange, startup
 from .entries import Entry
 from .icons import icon
@@ -38,14 +37,8 @@ from .setup import SetupPage
 from .state import ProjectState
 from .tolerance import show_unit
 
-ERRORS_TAB = 1
-
 # The part of the documentation about the plugin
 HELP_URL = f'{DOCS}install/#qgis'
-
-
-def tr(text: str) -> str:
-    return QCoreApplication.translate('TopologyRules', text)
 
 
 class Dock(QgsDockWidget):
@@ -59,6 +52,7 @@ class Dock(QgsDockWidget):
         # The executable that is being asked for its rules, and the task
         self.probing: tuple[str, int] | None = None
         self.probe_task: QgsTask | None = None
+        self.run: controller.Run | None = None
         self.task: QgsProcessingAlgRunnerTask | None = None
         # The task and the objects it uses live until it finishes
         self.context: QgsProcessingContext | None = None
@@ -153,9 +147,18 @@ class Dock(QgsDockWidget):
 
     def rules_known(self, rules: tuple[Rule, ...]) -> None:
         self.available = True
+        self.load_algorithms()
         self.form.set_rules(rules)
         self.state.fill()
         self.update_buttons()
+
+    def load_algorithms(self) -> None:
+        """Has the provider list its algorithms, which it does by itself
+        when the executable answers, but maybe after the panel was told."""
+        registry = not_none(QgsApplication.processingRegistry())
+        provider = registry.providerById(PROVIDER_ID)
+        if provider is not None and not provider.algorithms():
+            provider.refreshAlgorithms()
 
     def rules_failed(self, error: ExecutableError) -> None:
         self.available = False
@@ -195,7 +198,8 @@ class Dock(QgsDockWidget):
             self.available and self.form.current_rule() is not None
         )
         controller.show_run_button(self, count)
-        show_unit(self.tolerance, self.entries[0] if self.entries else None)
+        # The run takes the CRS of its first rule, whose unit this is
+        show_unit(self.tolerance, next(iter(self.runnable()), None))
         self.rules_page.update_title()
 
     def add_rule(self) -> None:
@@ -219,7 +223,7 @@ class Dock(QgsDockWidget):
         key = self.run_keys.get(entry.key)
         if key is not None:
             self.results.select_key(key)
-        self.tabs.setCurrentIndex(ERRORS_TAB)
+        self.tabs.setCurrentIndex(controller.ERRORS_TAB)
 
     def open_help(self) -> None:
         QDesktopServices.openUrl(QUrl(HELP_URL))
@@ -233,9 +237,6 @@ class Dock(QgsDockWidget):
     def run_rules(self) -> None:
         controller.start(self)
 
-    def finished(self, ok: bool, results: dict[str, t.Any]) -> None:
-        controller.finish(self, ok, results)
-
     def tolerance_value(self) -> float | None:
         """The tolerance that was set, or none for the default."""
         value = self.tolerance.value()
@@ -243,7 +244,7 @@ class Dock(QgsDockWidget):
 
     def show_invalid(self) -> None:
         self.results.select_key('')
-        self.tabs.setCurrentIndex(ERRORS_TAB)
+        self.tabs.setCurrentIndex(controller.ERRORS_TAB)
 
     def export_rules(self, path: str | Path) -> None:
         exchange.export_rules(self, Path(path))
@@ -259,7 +260,7 @@ class Dock(QgsDockWidget):
 
     def set_error_count(self, count: int) -> None:
         self.tabs.setTabText(
-            ERRORS_TAB,
+            controller.ERRORS_TAB,
             tr('Errors ({count})').format(count=count)
             if count
             else tr('Errors'),
@@ -278,7 +279,9 @@ class Dock(QgsDockWidget):
         self.rule_list.refresh_marks()
 
     def project_cleared(self) -> None:
-        """Starts over: the rules were about layers of the old project."""
+        """Starts over: the rules were about layers of the old project, and
+        a run for them has nothing to show."""
+        controller.abandon(self)
         self.results.ignored.clear()
         self.results.clear()
         self.set_error_count(0)
@@ -294,7 +297,7 @@ class Dock(QgsDockWidget):
 
     def dispose(self) -> None:
         """Stops a run and lets go of the project, before the panel goes."""
-        self.cancel()
+        controller.abandon(self)
         project = not_none(QgsProject.instance())
         for signal, slot in (
             (project.layersRemoved, self.layers_removed),

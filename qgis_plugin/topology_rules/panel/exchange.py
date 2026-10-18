@@ -5,23 +5,18 @@ import typing as t
 from pathlib import Path
 
 from qgis.core import Qgis, QgsProject, QgsVectorFileWriter, QgsVectorLayer
-from qgis.PyQt.QtCore import QCoreApplication
 from qgis.PyQt.QtWidgets import QFileDialog, QMessageBox
 
 from ..core.commands import Check, write_config
 from ..core.definition import DefinitionError, read_definition
-from ..core.layers import Dataset, plain_dataset, project_layer
+from ..core.layers import Dataset, plain_dataset, project_layer, same_file
 from ..exceptions import RunError
-from ..utils import not_none
+from ..utils import not_none, tr
 from .entries import Entry, unit_of
 from .messages import SECONDS
 
 if t.TYPE_CHECKING:
     from .dock import Dock
-
-
-def tr(text: str) -> str:
-    return QCoreApplication.translate('TopologyRules', text)
 
 
 def export_rules(dock: Dock, path: Path) -> None:
@@ -119,7 +114,10 @@ def data_path(config: Path) -> Path:
     return config.with_name(f'{config.stem}_data.gpkg')
 
 
-def why_unreadable(layer: QgsVectorLayer) -> str:
+def why_saved(layer: QgsVectorLayer, readable: bool) -> str:
+    """Why a layer is saved in the GeoPackage and not read where it is."""
+    if readable:
+        return tr('selection')
     if layer.subsetString():
         return tr('filter')
     if layer.isEditable() and layer.isModified():
@@ -127,13 +125,43 @@ def why_unreadable(layer: QgsVectorLayer) -> str:
     return tr('temporary layer')
 
 
+def has_layers(path: Path) -> bool:
+    """Whether the file is a GeoPackage, whose layers can be added to."""
+    try:
+        with path.open('rb') as file:
+            return file.read(16) == b'SQLite format 3\0'
+    except OSError:
+        return False
+
+
+def in_use(path: Path, datasets: c.Iterable[Dataset]) -> set[str]:
+    """The names of the layers of the file that the project or the export
+    reads from it."""
+    used = {d.layer for d in datasets if same_file(d.path, str(path))}
+    for layer in not_none(QgsProject.instance()).mapLayers().values():
+        if not isinstance(layer, QgsVectorLayer):
+            continue
+        try:
+            found = plain_dataset(layer)
+        except RunError:
+            continue
+        if found is not None and same_file(found.path, str(path)):
+            used.add(found.layer)
+    return {name for name in used if name}
+
+
 def save_layers(
-    layers: c.Sequence[QgsVectorLayer], path: Path, selected: bool
+    layers: c.Sequence[QgsVectorLayer],
+    path: Path,
+    selected: bool,
+    keep: c.Collection[str] = (),
 ) -> dict[str, Dataset]:
     """Writes the layers as they are in the project to a GeoPackage, one
-    layer each, and returns where each one is."""
+    layer each, and returns where each one is. The layers that the file has
+    already stay, those of the keep names with their data, the others
+    unless a layer is written over them."""
     found: dict[str, Dataset] = {}
-    taken: set[str] = set()
+    taken: set[str] = set(keep)
     transform = not_none(QgsProject.instance()).transformContext()
     for layer in layers:
         name, index = layer.name(), 1
@@ -146,12 +174,11 @@ def save_layers(
         options.fileEncoding = 'UTF-8'
         options.layerName = name
         options.skipAttributeCreation = True
-        options.onlySelectedFeatures = selected and bool(
-            layer.selectedFeatureIds()
-        )
+        # Without a selection, nothing: the panel checks nothing there
+        options.onlySelectedFeatures = selected
         options.actionOnExistingFile = (
             QgsVectorFileWriter.ActionOnExistingFile.CreateOrOverwriteLayer
-            if found
+            if found or has_layers(path)
             else QgsVectorFileWriter.ActionOnExistingFile.CreateOrOverwriteFile
         )
         error, message, *_ = QgsVectorFileWriter.writeAsVectorFormatV3(
@@ -183,13 +210,18 @@ def export_definition(
     datasets: dict[str, Dataset] = {}
     unreadable: dict[str, QgsVectorLayer] = {}
     gone: list[str] = []
+    readable: set[str] = set()
     for layer_id, name in wanted:
         if layer_id is None or layer_id in datasets or layer_id in unreadable:
             continue
-        if (found := dataset_of(layer_id)) is not None:
+        found = dataset_of(layer_id)
+        layer = project_layer(layer_id)
+        if found is not None and not selected:
             datasets[layer_id] = found
-        elif (layer := project_layer(layer_id)) is not None:
+        elif layer is not None:
             unreadable[layer_id] = layer
+            if found is not None:
+                readable.add(layer_id)
         else:
             gone.append(name)
     if gone:
@@ -202,9 +234,14 @@ def export_definition(
     if unreadable:
         if data.exists() and not overwrite(data):
             raise DefinitionError('Export canceled.')
-        datasets.update(save_layers(list(unreadable.values()), data, selected))
+        # What the export keeps reading from the file stays in it
+        keep = in_use(data, datasets.values()) if has_layers(data) else set()
+        datasets.update(
+            save_layers(list(unreadable.values()), data, selected, keep)
+        )
         saved = {
-            layer.name(): why_unreadable(layer) for layer in unreadable.values()
+            layer.name(): why_saved(layer, layer_id in readable)
+            for layer_id, layer in unreadable.items()
         }
     checks = [
         Check(

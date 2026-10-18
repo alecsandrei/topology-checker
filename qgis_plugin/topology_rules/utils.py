@@ -4,6 +4,11 @@ import typing as t
 
 from qgis import core as _core
 from qgis.core import Qgis, QgsProcessing, QgsProcessingParameterNumber
+from qgis.PyQt.QtCore import QCoreApplication
+
+
+def tr(text: str) -> str:
+    return QCoreApplication.translate('TopologyRules', text)
 
 
 def named(owner: object, name: str) -> t.Any:

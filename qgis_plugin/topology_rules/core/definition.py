@@ -75,8 +75,11 @@ def read_definition(path: Path, known: dict[str, Rule]) -> Imported:
     ):
         raise DefinitionError(f'{path.name} needs [layers] and [[rules]].')
     tolerance = config.get('tolerance')
+    # A boolean is a number to Python, and not to the file
     if tolerance is not None and not (
-        isinstance(tolerance, (int, float)) and tolerance >= 0
+        isinstance(tolerance, (int, float))
+        and not isinstance(tolerance, bool)
+        and tolerance >= 0
     ):
         raise DefinitionError('The tolerance must be a number, not negative.')
     layers: dict[str, QgsVectorLayer] = {}

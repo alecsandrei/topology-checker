@@ -3,6 +3,7 @@ name: QGIS plugin
 on:
   push:
     branches: [master]
+    tags: ['v*']
     paths: ['qgis_plugin/**', 'crates/cli/**', '.github/workflows/qgis-plugin.yml']
   pull_request:
     paths: ['qgis_plugin/**', 'crates/cli/**', '.github/workflows/qgis-plugin.yml']

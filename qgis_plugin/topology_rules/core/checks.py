@@ -137,6 +137,7 @@ def run_once(
     target = jobs[0].layer.source.sourceCrs()
     prepared: dict[object, Prepared] = {}
     names: dict[object, str] = {}
+    inputs: dict[object, Input] = {}
 
     def get(item: Input) -> Prepared:
         if item.key not in prepared:
@@ -150,6 +151,7 @@ def run_once(
                 direct,
             )
             names[item.key] = item.name
+            inputs[item.key] = item
         return prepared[item.key]
 
     checks = [
@@ -207,9 +209,9 @@ def run_once(
             if item.ids is not None
         },
         {
-            aliases[item.dataset]: key
+            aliases[item.dataset]: layer_id
             for key, item in prepared.items()
-            if isinstance(key, str)
+            if (layer_id := inputs[key].layer_id) is not None
         },
         invalid,
         target,

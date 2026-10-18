@@ -5,7 +5,7 @@ import typing as t
 
 from qgis.core import Qgis, QgsProject, QgsVectorLayer
 from qgis.gui import QgsMapLayerComboBox
-from qgis.PyQt.QtCore import QCoreApplication, Qt
+from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtWidgets import (
     QComboBox,
     QFormLayout,
@@ -18,13 +18,9 @@ from qgis.PyQt.QtWidgets import (
 
 from ..core.binary import Rule
 from ..core.layers import wkb_kind
-from ..utils import not_none
+from ..utils import not_none, tr
 from .entries import Entry, unit_of
 from .icons import decorate
-
-
-def tr(text: str) -> str:
-    return QCoreApplication.translate('TopologyRules', text)
 
 
 def layer_filter(kind: str) -> t.Any:

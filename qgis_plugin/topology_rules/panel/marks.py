@@ -4,7 +4,7 @@ import contextlib
 import typing as t
 
 from qgis.core import QgsIconUtils
-from qgis.PyQt.QtCore import QCoreApplication, Qt
+from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import (
     QApplication,
@@ -13,7 +13,7 @@ from qgis.PyQt.QtWidgets import (
     QTreeWidgetItem,
 )
 
-from ..utils import not_none
+from ..utils import not_none, tr
 from .entries import Entry, project_layer, where_is
 
 # What an item of the list holds: the index of its entry (a rule), the id of
@@ -21,10 +21,6 @@ from .entries import Entry, project_layer, where_is
 ENTRY = Qt.ItemDataRole.UserRole
 LAYER = Qt.ItemDataRole.UserRole + 1
 OTHER = Qt.ItemDataRole.UserRole + 2
-
-
-def tr(text: str) -> str:
-    return QCoreApplication.translate('TopologyRules', text)
 
 
 def warning_icon() -> QIcon:

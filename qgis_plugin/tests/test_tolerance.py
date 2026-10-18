@@ -8,7 +8,14 @@ from qgis.gui import QgsDoubleSpinBox
 
 from topology_rules.panel.dock import Dock
 
-from .helpers import add, add_features, click_run, select_rules, shown
+from .helpers import (
+    add,
+    add_features,
+    click_run,
+    select_rules,
+    set_checked,
+    shown,
+)
 
 DANGLES = 'line/must-not-have-dangles'
 
@@ -100,4 +107,31 @@ def test_the_default_follows_the_first_layer_of_the_list(dock: Dock):
     assert dock.tolerance.specialValueText() == 'Default (1 mm)'
     select_rules(dock, 0)
     dock.remove_rules()
+    assert dock.tolerance.specialValueText() == 'Default (1e-8°)'
+
+
+def unchecked_degrees(dock: Dock) -> None:
+    """Rules on a layer in degrees, which is the first of the list but is not
+    checked, and on a layer in metres, which is the first that runs."""
+    add(dock, DANGLES, lines_in('EPSG:4326', 'degrees'))
+    add(dock, DANGLES, lines_in('EPSG:3857', 'metres'))
+    assert [entry.layer_name for entry in dock.entries] == ['degrees', 'metres']
+    set_checked(dock, 0, False)
+    assert [entry.checked for entry in dock.entries] == [False, True]
+
+
+def test_the_suffix_is_the_unit_of_the_first_checked_rule(dock: Dock):
+    unchecked_degrees(dock)
+    assert dock.tolerance.suffix() == ' m'
+
+
+def test_the_default_follows_the_first_checked_rule(dock: Dock):
+    unchecked_degrees(dock)
+    assert dock.tolerance.specialValueText() == 'Default (1 mm)'
+
+
+def test_the_suffix_goes_back_when_the_first_rule_is_checked_again(dock: Dock):
+    unchecked_degrees(dock)
+    set_checked(dock, 0, True)
+    assert dock.tolerance.suffix() == ' °'
     assert dock.tolerance.specialValueText() == 'Default (1e-8°)'

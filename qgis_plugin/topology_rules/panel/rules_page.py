@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from qgis.core import QgsSettings
 from qgis.gui import QgsCollapsibleGroupBox
-from qgis.PyQt.QtCore import QCoreApplication
 from qgis.PyQt.QtWidgets import (
     QCheckBox,
     QFormLayout,
@@ -12,6 +11,7 @@ from qgis.PyQt.QtWidgets import (
     QWidget,
 )
 
+from ..utils import tr
 from .form import RuleForm
 from .icons import decorate
 from .rule_list import RuleList
@@ -19,10 +19,6 @@ from .tolerance import tolerance_box
 
 # Whether the box of options is closed, in the settings of the user
 COLLAPSED = 'topology_rules/options_collapsed'
-
-
-def tr(text: str) -> str:
-    return QCoreApplication.translate('TopologyRules', text)
 
 
 class OptionsBox(QgsCollapsibleGroupBox):

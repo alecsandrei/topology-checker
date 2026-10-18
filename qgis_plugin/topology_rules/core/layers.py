@@ -59,6 +59,9 @@ class Input:
     area: QgsRectangle | None = None
     # Who the input is, to read a layer once for all the rules that use it
     key: object = dataclasses.field(init=False)
+    # The id of the layer in the project, kept for a run in another thread,
+    # which must not ask the layer
+    layer_id: str | None = dataclasses.field(init=False)
     valid: bool = dataclasses.field(init=False)
     # The file behind the layer, and why it is not there if it is gone
     path: str | None = dataclasses.field(init=False)
@@ -75,6 +78,7 @@ class Input:
                 object.__setattr__(self, name, value)
 
         keep(
+            layer_id=None if layer is None else layer.id(),
             key=(
                 layer.id()
                 if self.whole and layer is not None and not self.restricted
@@ -131,7 +135,8 @@ def same_file(first: str, second: str) -> bool:
         return Path(first).resolve() == Path(second).resolve()
 
 
-def _parts(layer: QgsVectorLayer) -> dict[str, t.Any]:
+def uri_parts(layer: QgsVectorLayer) -> dict[str, t.Any]:
+    """What the OGR provider says the source of a layer is made of."""
     return t.cast(
         'dict[str, t.Any]',
         not_none(QgsProviderRegistry.instance()).decodeUri(
@@ -144,7 +149,7 @@ def layer_file(layer: QgsVectorLayer) -> str | None:
     """The file behind an OGR layer, raising if it was removed."""
     if layer.providerType() != 'ogr':
         return None
-    path = str(_parts(layer).get('path') or '')
+    path = str(uri_parts(layer).get('path') or '')
     if path and Path(path).suffix and not Path(path).exists():
         raise RunError(f'The file of the layer {layer.name()} is gone: {path}')
     return path if path and Path(path).is_file() else None
@@ -160,7 +165,7 @@ def plain_dataset(layer: QgsVectorLayer) -> Dataset | None:
     if layer.isEditable() and layer.isModified():
         return None
     # A file inside an archive or behind a URL is not a file of its own
-    parts = _parts(layer)
+    parts = uri_parts(layer)
     if parts.get('vsiPrefix') or parts.get('vsiSuffix') or '/vsi' in path:
         return None
     if Path(path).suffix.lower() in CONTAINERS:

@@ -4,17 +4,27 @@ the Plugin Reloader do."""
 from __future__ import annotations
 
 import collections.abc as c
+import gc
 from pathlib import Path
 
 import pytest
-from qgis.core import QgsApplication, QgsProject
+from qgis.core import QgsApplication, QgsProcessingContext, QgsProject
 from qgis.gui import QgisInterface
 from qgis.PyQt.QtWidgets import QDockWidget, QMainWindow
 
 from topology_rules.enums import PROVIDER_ID
+from topology_rules.panel import controller
+from topology_rules.panel.messages import RunFeedback
 from topology_rules.plugin import TopologyRules
 
-from .helpers import add, saved_layer, script_executable, wait_for
+from .helpers import (
+    add,
+    error_layers,
+    gated_executable,
+    saved_layer,
+    script_executable,
+    wait_for,
+)
 
 CHAIN = ('LINESTRING(0 0, 10 0)', 'LINESTRING(10 0, 20 0)')
 DOCK = 'TopologyRulesDock'
@@ -78,7 +88,7 @@ def test_the_dock_follows_the_setting_after_the_options_dialog(
     configure(executable)
     # What the options dialog does on OK
     plugin.provider.refreshAlgorithms()
-    assert plugin.dock.setup_page.isHidden()
+    wait_for(plugin.dock.setup_page.isHidden)
     assert not plugin.dock.tabs.isHidden()
 
 
@@ -104,6 +114,92 @@ def test_unloading_during_a_run(
     for _ in range(100):
         QgsApplication.processEvents()
     wait_for(lambda: not QgsApplication.taskManager().activeTasks(), 30)
+
+
+class Letting:
+    """The objects of a run that were let go of while the run was on."""
+
+    def __init__(self) -> None:
+        self.running = True
+        self.dropped: list[str] = []
+        # Keeps a dropped object alive, so that the task does not use freed
+        # memory while the test tells what happened
+        self.kept: list[object] = []
+
+    def watch(self, base: type) -> type:
+        letting = self
+
+        class Watched(base):  # type: ignore[valid-type, misc]
+            def __del__(self) -> None:
+                if letting.running:
+                    letting.dropped.append(base.__name__)
+                    letting.kept.append(self)
+
+        return Watched
+
+
+def test_unloading_during_a_run_does_not_free_what_the_task_uses(
+    qgis_iface: QgisInterface,
+    executable: str,
+    qgis_processing: None,
+    tmp_path: Path,
+    configure: c.Callable[[str | Path], None],
+    monkeypatch: pytest.MonkeyPatch,
+):
+    letting = Letting()
+    monkeypatch.setattr(
+        controller, 'QgsProcessingContext', letting.watch(QgsProcessingContext)
+    )
+    monkeypatch.setattr(controller, 'RunFeedback', letting.watch(RunFeedback))
+    gate, started = tmp_path / 'gate', tmp_path / 'started'
+    configure(gated_executable(tmp_path, gate, started))
+    plugin = TopologyRules(qgis_iface)
+    plugin.initGui()
+    dock = plugin.dock
+    dock.refresh()
+    layer = saved_layer(tmp_path, CHAIN)
+    QgsProject.instance().addMapLayer(layer)
+    add(dock, 'line/must-not-have-dangles', layer)
+    dock.run_button.click()
+    wait_for(started.exists)
+    # As QGIS has it: nothing but the plugin holds the dock
+    del dock
+    plugin.unload()
+    gc.collect()
+    dropped = list(letting.dropped)
+    gate.touch()
+    wait_for(lambda: not QgsApplication.taskManager().activeTasks(), 30)
+    letting.running = False
+    assert dropped == []
+
+
+def test_unloading_during_a_run_ends_the_task_without_an_error(
+    qgis_iface: QgisInterface,
+    executable: str,
+    qgis_processing: None,
+    tmp_path: Path,
+    configure: c.Callable[[str | Path], None],
+):
+    gate, started = tmp_path / 'gate', tmp_path / 'started'
+    configure(gated_executable(tmp_path, gate, started))
+    plugin = TopologyRules(qgis_iface)
+    plugin.initGui()
+    dock = plugin.dock
+    dock.refresh()
+    layer = saved_layer(tmp_path, CHAIN)
+    QgsProject.instance().addMapLayer(layer)
+    add(dock, 'line/must-not-have-dangles', layer)
+    dock.run_button.click()
+    wait_for(started.exists)
+    del dock
+    plugin.unload()
+    gate.touch()
+    wait_for(lambda: not QgsApplication.taskManager().activeTasks(), 30)
+    for _ in range(50):
+        QgsApplication.processEvents()
+    # The test ends with no unhandled error, which a fixture checks, and no
+    # layers of errors for a plugin that is gone
+    assert not error_layers()
 
 
 def test_unloading_leaves_no_dock_in_the_main_window(

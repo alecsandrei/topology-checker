@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import tomllib
 from pathlib import Path
 
 from qgis.core import (
@@ -22,6 +23,7 @@ from .base import (
     TOLERANCE,
     executable_path,
     failures,
+    refuse_files,
     scratch,
     tolerance_of,
 )
@@ -38,6 +40,23 @@ def errors_crs(path: str) -> QgsCoordinateReferenceSystem:
         if layer.isValid():
             return layer.crs()
     return QgsCoordinateReferenceSystem()
+
+
+def data_files(definition: Path) -> list[str]:
+    """The files that the layers of a definition are read from. A file that
+    cannot be read names none: the tool says what is wrong with it."""
+    try:
+        config = tomllib.loads(definition.read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        return []
+    layers = config.get('layers')
+    if not isinstance(layers, dict):
+        return []
+    return [
+        str(definition.parent / str(found['path']).replace('\\', '/'))
+        for found in layers.values()
+        if isinstance(found, dict) and found.get('path')
+    ]
 
 
 @dataclasses.dataclass(frozen=True)
@@ -114,6 +133,9 @@ class CheckDefinition(SinkAlgorithm):
                 raise QgsProcessingException(
                     f'The definition does not exist: {definition}'
                 )
+            refuse_files(
+                self.sink_files(parameters, context), data_files(definition)
+            )
             self.plan = Plan(
                 executable_path(),
                 definition,

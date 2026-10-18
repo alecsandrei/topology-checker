@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import atexit
 import collections.abc as c
+import contextlib
 import shutil
 import sys
 import tempfile
@@ -21,6 +22,7 @@ from qgis.PyQt.QtWidgets import QMainWindow
 
 from topology_rules.core import binary
 from topology_rules.enums import Setting
+from topology_rules.exceptions import ExecutableError
 from topology_rules.panel.dock import Dock
 from topology_rules.panel.rules_page import COLLAPSED
 from topology_rules.provider import Provider
@@ -104,6 +106,10 @@ def provider(qgis_processing: None) -> c.Iterator[Provider]:
     """The Processing provider, registered as the plugin does."""
     provider = Provider()
     registry = QgsApplication.processingRegistry()
+    # The provider asks the tool for its rules in a task when it has not
+    # been asked, so it is asked here and the algorithms are there at once
+    with contextlib.suppress(ExecutableError):
+        binary.rules()
     registry.addProvider(provider)
     yield provider
     # The plugin replaces a provider of the same id, so this one may be gone

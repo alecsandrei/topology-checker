@@ -69,18 +69,26 @@ def geopackage_name(output: str) -> str:
     return f'{output}.gpkg'
 
 
-def refuse_overwrite(
-    outputs: c.Iterable[str], inputs: c.Iterable[Input | None]
-) -> None:
-    """Stops a run that would replace the file of a layer it checks."""
-    files = [item.path for item in inputs if item is not None]
+def refuse_files(outputs: c.Iterable[str], files: c.Iterable[str]) -> None:
+    """Stops a run that would replace one of the files it reads."""
+    files = list(files)
     for output in outputs:
         for path in files:
-            if path is not None and same_file(output, path):
+            if same_file(output, path):
                 raise QgsProcessingException(
                     f'The output {output} is a file of an input layer, which '
                     'the run would replace. Choose another output.'
                 )
+
+
+def refuse_overwrite(
+    outputs: c.Iterable[str], inputs: c.Iterable[Input | None]
+) -> None:
+    """Stops a run that would replace the file of a layer it checks."""
+    refuse_files(
+        outputs,
+        (item.path for item in inputs if item is not None and item.path),
+    )
 
 
 class Planned(QgsProcessingAlgorithm):

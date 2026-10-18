@@ -2,13 +2,9 @@ from __future__ import annotations
 
 from qgis.core import QgsVectorLayer
 from qgis.gui import QgsDoubleSpinBox
-from qgis.PyQt.QtCore import QCoreApplication
 
+from ..utils import tr
 from .entries import Entry, project_layer
-
-
-def tr(text: str) -> str:
-    return QCoreApplication.translate('TopologyRules', text)
 
 
 def tolerance_box() -> QgsDoubleSpinBox:

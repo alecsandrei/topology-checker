@@ -27,6 +27,7 @@ from topology_rules.enums import Setting
 
 from .helpers import (
     line_layer,
+    refresh_to_fake_tool,
     run_algorithm,
     saved_layer,
     saved_points,
@@ -183,7 +184,7 @@ def test_a_run_uses_the_executable_set_just_before_it_starts(
     first = marker(tmp_path, 'tool-first')
     second = marker(tmp_path, 'tool-second')
     configure(first)
-    provider.refreshAlgorithms()
+    refresh_to_fake_tool(provider)
     before = RUNS[kind](tmp_path)
     assert 'tool-first' in before.log
     configure(second)

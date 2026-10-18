@@ -22,9 +22,11 @@ from topology_rules.enums import PROVIDER_ID
 from topology_rules.provider import Provider
 
 from .helpers import (
+    FAKE_ALGORITHMS,
     fake_executable,
     line_layer,
     point_layer,
+    refresh_to_fake_tool,
     save,
 )
 
@@ -52,16 +54,9 @@ def test_provider_lists_the_rules_of_the_executable(
     provider: Provider,
 ):
     configure(fake_executable(tmp_path))
-    provider.refreshAlgorithms()
+    refresh_to_fake_tool(provider)
     names = {algorithm.name() for algorithm in provider.algorithms()}
-    assert names == {
-        'line_must_not_have_dangles',
-        'point_must_be_covered_by_lines',
-        'merge_lines',
-        'explode_lines',
-        'check_rules',
-        'check_definition',
-    }
+    assert names == FAKE_ALGORITHMS
     check = provider.algorithm('check_rules')
     assert check is not None
     # Only the dock runs it
@@ -146,7 +141,7 @@ def test_missing_executable_fails_the_algorithm(
     provider: Provider,
 ):
     configure(fake_executable(tmp_path))
-    provider.refreshAlgorithms()
+    refresh_to_fake_tool(provider)
     configure(tmp_path / 'gone')
     layer = line_layer(*CHAIN)
     QgsProject.instance().addMapLayer(layer)

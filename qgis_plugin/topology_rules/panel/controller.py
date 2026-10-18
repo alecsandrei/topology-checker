@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import json
 import typing as t
 from pathlib import Path
@@ -13,14 +14,13 @@ from qgis.core import (
     QgsProject,
 )
 from qgis.PyQt import sip
-from qgis.PyQt.QtCore import QCoreApplication
 
 from .._typing import Parameters
 from ..algorithms.base import OUTPUT, TOLERANCE
 from ..algorithms.check import COUNTS, INVALID, LAYERS, RULES, SCOPE
 from ..core.style import entry_grouping
 from ..enums import PROVIDER_ID
-from ..utils import not_none
+from ..utils import not_none, tr
 from .entries import Entry, project_layer
 from .groups import add_errors, remove_errors
 from .icons import icon
@@ -33,8 +33,20 @@ if t.TYPE_CHECKING:
 ERRORS_TAB = 1
 
 
-def tr(text: str) -> str:
-    return QCoreApplication.translate('TopologyRules', text)
+@dataclasses.dataclass(eq=False)
+class Run:
+    """A run in progress: its task, what the task works with, and the rules
+    it was started with."""
+
+    task: QgsProcessingAlgRunnerTask
+    context: QgsProcessingContext
+    feedback: RunFeedback
+    entries: list[Entry]
+
+
+# A task works with its context and feedback in another thread, so they stay
+# alive until the task has reported, whatever becomes of the panel
+LIVE: set[Run] = set()
 
 
 def start(dock: Dock) -> None:
@@ -63,47 +75,72 @@ def start(dock: Dock) -> None:
         entry.errors = None
     dock.rule_list.invalid = {}
     dock.rule_list.show_entries()
-    dock.context = QgsProcessingContext()
-    dock.context.setProject(not_none(QgsProject.instance()))
-    dock.feedback = RunFeedback()
-    dock.task = QgsProcessingAlgRunnerTask(
+    context = QgsProcessingContext()
+    context.setProject(not_none(QgsProject.instance()))
+    feedback = RunFeedback()
+    task = QgsProcessingAlgRunnerTask(
         algorithm,
         parameters(todo, dock.tolerance_value(), dock.runs, scope),
-        dock.context,
-        dock.feedback,
+        context,
+        feedback,
     )
-    dock.task.executed.connect(dock.finished)
+    run = Run(task, context, feedback, list(todo))
+    LIVE.add(run)
+    dock.run, dock.task = run, task
+    dock.context, dock.feedback = context, feedback
+    task.executed.connect(lambda ok, results: done(dock, run, ok, results))
+    task.taskTerminated.connect(lambda: LIVE.discard(run))
     dock.rules_page.setEnabled(False)
     dock.progress.show()
     dock.update_buttons()
-    not_none(QgsApplication.taskManager()).addTask(dock.task)
+    not_none(QgsApplication.taskManager()).addTask(task)
 
 
-def finish(dock: Dock, ok: bool, results: dict[str, t.Any]) -> None:
-    """Shows the outcome of a run when its task is done."""
-    # The panel can be gone when the plugin was unloaded during a run
-    if sip.isdeleted(dock):
-        return
-    feedback = dock.feedback
-    todo = dock.runnable()
-    dock.task = None
-    dock.feedback = None
-    dock.context = None
+def settle(dock: Dock) -> None:
+    """Lets go of the run and gives the panel back."""
+    dock.run = dock.task = dock.feedback = dock.context = None
     dock.rules_page.setEnabled(True)
     dock.progress.hide()
     dock.update_buttons()
+
+
+def abandon(dock: Dock) -> None:
+    """Stops the run in progress and drops what it finds: the project it was
+    for is gone, or the panel is."""
+    run = dock.run
+    if run is None:
+        return
+    run.feedback.cancel()
+    settle(dock)
+
+
+def done(dock: Dock, run: Run, ok: bool, results: dict[str, t.Any]) -> None:
+    """The task of a run ended. What it found is for the panel that started
+    it, if the panel is there and still waits for this run."""
+    LIVE.discard(run)
+    # The panel can be gone when the plugin was unloaded during a run
+    if sip.isdeleted(dock) or dock.run is not run:
+        return
+    finish(dock, run, ok, results)
+
+
+def finish(dock: Dock, run: Run, ok: bool, results: dict[str, t.Any]) -> None:
+    """Shows the outcome of a run when its task is done."""
+    feedback = run.feedback
+    todo = run.entries
+    settle(dock)
     bar = not_none(dock.iface.messageBar())
-    if feedback is not None and feedback.isCanceled():
+    if feedback.isCanceled():
         return
     if not ok:
-        if feedback is not None and feedback.errors:
+        if feedback.errors:
             push_failure(bar, feedback.errors[-1], feedback.textLog())
         return
     counts = loads(results.get(COUNTS), [])
     for entry, count in zip(todo, counts, strict=False):
         entry.errors = int(count)
     dock.rule_list.show_entries()
-    show_errors(dock, Path(str(results[OUTPUT])), results, counts)
+    show_errors(dock, todo, Path(str(results[OUTPUT])), results, counts)
     recount(dock)
     total = len(dock.results.active())
     ignored = len(dock.results.rows) - total
@@ -145,7 +182,11 @@ def recount(dock: Dock) -> None:
 
 
 def show_errors(
-    dock: Dock, path: Path, results: dict[str, t.Any], counts: list[int]
+    dock: Dock,
+    todo: list[Entry],
+    path: Path,
+    results: dict[str, t.Any],
+    counts: list[int],
 ) -> None:
     """Replaces the errors of the last run with those of this one."""
     dock.results.clear()
@@ -161,21 +202,20 @@ def show_errors(
     grouping = entry_grouping(counts)
     labels: dict[str, str] = {}
     dock.run_keys = {}
-    for index, entry in enumerate(dock.runnable()):
+    for index, entry in enumerate(todo):
         labels[f'e{index}'] = f'{entry.layer_name}: {entry.title}'
         dock.run_keys[entry.key] = f'e{index}'
     rows = read_rows(
         add_errors(path, grouping, labels, list(labels)), names, grouping
     )
     dock.results.show_rows(rows, layers, grouping, labels)
-    dock.rule_list.set_invalid(
-        {
-            layer_id: sum(
-                1 for r in rows if not r.rule_name and r.layer_alias == alias
-            )
-            for alias, layer_id in layers.items()
-        }
-    )
+    # A layer can be several inputs of the run, each with a name of its own
+    invalid: dict[str, int] = {}
+    for alias, layer_id in layers.items():
+        invalid[layer_id] = invalid.get(layer_id, 0) + sum(
+            1 for r in rows if not r.rule_name and r.layer_alias == alias
+        )
+    dock.rule_list.set_invalid(invalid)
     active = dock.results.active()
     dock.set_error_count(len(active))
     if active:

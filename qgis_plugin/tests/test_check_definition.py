@@ -245,3 +245,18 @@ def test_a_missing_definition_fails(tmp_path: Path):
     ran = check(tmp_path / 'nothing.toml')
     assert not ran.ok
     assert ran.log.strip()
+
+
+@pytest.mark.parametrize(
+    'sink', ['ERRORS_POINT', 'ERRORS_LINE', 'ERRORS_POLYGON']
+)
+@pytest.mark.parametrize('name', ['roads', 'stops'])
+def test_an_output_on_a_data_file_of_the_definition_is_refused(
+    definition: Path, name: str, sink: str
+):
+    path = definition.parent / 'data' / f'{name}.gpkg'
+    before = path.read_bytes()
+    ran = check(definition, **{sink: str(path)})
+    assert not ran.ok
+    assert 'input' in ran.log.lower()
+    assert path.read_bytes() == before

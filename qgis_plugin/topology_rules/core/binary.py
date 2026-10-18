@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import sys
+import threading
 import typing as t
 from pathlib import Path
 
@@ -183,22 +184,29 @@ class Probe:
 
     def __init__(self) -> None:
         self.done: dict[tuple[str, int], tuple[Rule, ...]] = {}
+        # The answers are read on the main thread and written by the thread
+        # that asked
+        self.lock = threading.Lock()
 
     def __call__(self, path: str, modified: int) -> tuple[Rule, ...]:
-        found = self.done.get((path, modified))
+        found = self.peek(path, modified)
         if found is None:
+            # Not under the lock, as the answer can take seconds
             found = self.ask(path)
-            self.done[(path, modified)] = found
-            # A few versions are enough, as the path changes by hand
-            while len(self.done) > MAX_VERSIONS:
-                del self.done[next(iter(self.done))]
+            with self.lock:
+                self.done[(path, modified)] = found
+                # A few versions are enough, as the path changes by hand
+                while len(self.done) > MAX_VERSIONS:
+                    del self.done[next(iter(self.done))]
         return found
 
     def peek(self, path: str, modified: int) -> tuple[Rule, ...] | None:
-        return self.done.get((path, modified))
+        with self.lock:
+            return self.done.get((path, modified))
 
     def cache_clear(self) -> None:
-        self.done.clear()
+        with self.lock:
+            self.done.clear()
 
     @staticmethod
     def ask(path: str) -> tuple[Rule, ...]:

@@ -100,6 +100,80 @@ def script_executable(
     return path
 
 
+# The algorithms of the provider when the tool lists the two RULES
+FAKE_ALGORITHMS = {
+    'line_must_not_have_dangles',
+    'point_must_be_covered_by_lines',
+    'merge_lines',
+    'explode_lines',
+    'check_rules',
+    'check_definition',
+}
+
+
+def refresh_to_fake_tool(provider: t.Any) -> None:
+    """Refreshes the algorithms, as the Options dialog does on OK, and waits
+    until the provider has those of the tool that lists the two RULES: a tool
+    that has not been asked is asked in a task."""
+    provider.refreshAlgorithms()
+    wait_for(
+        lambda: {a.name() for a in provider.algorithms()} == FAKE_ALGORITHMS
+    )
+
+
+def probe_executable(
+    directory: Path,
+    name: str = 'topology-checker',
+    rules: object = None,
+    gate: Path | None = None,
+    delay: float = 0.0,
+    broken: bool = False,
+) -> Path:
+    """A script that lists its rules after a delay and once the gate exists,
+    or fails to when it is broken. It runs nothing else."""
+    path = directory / name
+    reply = json.dumps(json.dumps(RULES if rules is None else rules))
+    wait = (
+        ''
+        if gate is None
+        else (
+            f'    while not os.path.exists({str(gate)!r}):\n'
+            '        time.sleep(0.02)\n'
+        )
+    )
+    answer = (
+        f'    print("{name} is broken", file=sys.stderr)\n    sys.exit(2)\n'
+        if broken
+        else f'    print({reply})\n    sys.exit(0)\n'
+    )
+    path.write_text(
+        '#!/usr/bin/env python3\n'
+        'import os, sys, time\n'
+        "if sys.argv[1:] == ['--json', 'rules']:\n"
+        f'    time.sleep({delay!r})\n' + wait + answer + 'sys.exit(2)\n'
+    )
+    path.chmod(path.stat().st_mode | stat.S_IXUSR)
+    return path
+
+
+def gated_executable(
+    directory: Path, gate: Path, started: Path, name: str = 'topology-checker'
+) -> Path:
+    """A tool that lists its rules at once. To check, it says that it began
+    by creating the started file, waits for the gate file to exist, and then
+    is the real tool."""
+    real = real_executable()
+    assert real is not None, 'set TOPOLOGY_CHECKER'
+    body = (
+        'import os, time\n'
+        f'open({str(started)!r}, "w").close()\n'
+        f'while not os.path.exists({str(gate)!r}):\n'
+        '    time.sleep(0.02)\n'
+        f'os.execv({real!r}, [{real!r}, *sys.argv[1:]])\n'
+    )
+    return script_executable(directory, body, name)
+
+
 # As a path from here, as some tests run the tool from another folder
 NAMED = os.environ.get('TOPOLOGY_CHECKER')
 NAMED_PATH = str(Path(NAMED).absolute()) if NAMED else None
@@ -253,6 +327,16 @@ def run_algorithm(
     feedback = QgsProcessingFeedback()
     results, ok = algorithm.run(parameters, context, feedback)
     return Ran(results, ok, context, feedback.textLog())
+
+
+def error_layers() -> list[QgsVectorLayer]:
+    """The layers of errors that a run put in the project."""
+    return [
+        layer
+        for layer in QgsProject.instance().mapLayers().values()
+        if isinstance(layer, QgsVectorLayer)
+        and layer.fields().indexOf('violation_id') >= 0
+    ]
 
 
 def errors_layer(ran: Ran, name: str) -> QgsVectorLayer:
