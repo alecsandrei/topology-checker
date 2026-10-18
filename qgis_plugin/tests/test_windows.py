@@ -38,6 +38,7 @@ from topology_rules.panel.exchange import export_definition
 from .helpers import saved_layer, write_toml
 
 CREATE_NO_WINDOW = 0x08000000
+CREATE_NEW_PROCESS_GROUP = 0x00000200
 DANGLES = Rule('line/must-not-have-dangles', 'x', 'line', None)
 COVERED = Rule('point/must-be-covered-by-lines', 'x', 'point', 'line')
 CHAIN = ('LINESTRING(0 0, 10 0)', 'LINESTRING(10 0, 20 0)')
@@ -64,6 +65,12 @@ def windows(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sys, 'platform', 'win32')
     monkeypatch.setattr(
         subprocess, 'CREATE_NO_WINDOW', CREATE_NO_WINDOW, raising=False
+    )
+    monkeypatch.setattr(
+        subprocess,
+        'CREATE_NEW_PROCESS_GROUP',
+        CREATE_NEW_PROCESS_GROUP,
+        raising=False,
     )
 
 
@@ -178,22 +185,40 @@ def test_a_quote_inside_the_path_is_kept(
 # The runner
 
 
-class FakeProcess:
-    """A process that answers at once, or after one wait that times out."""
+class Pipe:
+    def __init__(self) -> None:
+        self.closed = False
 
-    def __init__(self, hangs: bool = False) -> None:
+    def close(self) -> None:
+        self.closed = True
+
+
+class FakeProcess:
+    """A process that answers at once, or after one wait that times out, and
+    that is ended by being killed, unless something outlives it and holds
+    its pipes."""
+
+    def __init__(self, hangs: bool = False, outlived: bool = False) -> None:
         self.hangs = hangs
+        self.outlived = outlived
         self.returncode = 0
-        self.pid = 0
+        self.pid = 4242
         self.killed = False
+        self.stdout = Pipe()
+        self.stderr = Pipe()
 
     def communicate(self, timeout: float | None = None) -> tuple[str, str]:
-        if self.hangs and timeout is not None:
+        if (self.outlived or (self.hangs and not self.killed)) and (
+            timeout is not None
+        ):
             raise subprocess.TimeoutExpired('tc', timeout)
         return '', ''
 
     def kill(self) -> None:
         self.killed = True
+
+    def wait(self, timeout: float | None = None) -> int:
+        return 0
 
 
 class Canceled:
@@ -220,7 +245,17 @@ def test_a_command_on_windows_opens_no_console_window(
     windows: None, popen: list[dict[str, t.Any]]
 ):
     runner.run(['tc.exe', '--json', 'rules'])
-    assert popen[0]['creationflags'] == CREATE_NO_WINDOW
+    assert popen[0]['creationflags'] & CREATE_NO_WINDOW
+
+
+def test_a_command_on_windows_has_a_process_group_of_its_own(
+    windows: None, popen: list[dict[str, t.Any]]
+):
+    # So that the tree of processes of a tool behind a launcher can be ended
+    runner.run(['tc.exe', '--json', 'rules'])
+    assert popen[0]['creationflags'] == (
+        CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
+    )
 
 
 def test_a_command_on_windows_does_not_start_a_session(
@@ -258,14 +293,89 @@ def test_a_program_that_is_not_there_is_a_run_error_on_windows(
         runner.run(['C:\\nowhere\\tc.exe'])
 
 
+@pytest.fixture
+def taskkill(monkeypatch: pytest.MonkeyPatch) -> list[dict[str, t.Any]]:
+    """Records the commands that the runner runs to end a tree of processes
+    on Windows."""
+    calls: list[dict[str, t.Any]] = []
+
+    def run(command: list[str], **kwargs: t.Any) -> object:
+        calls.append({'command': command, **kwargs})
+        return types.SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(subprocess, 'run', run)
+    return calls
+
+
 def test_canceling_on_windows_kills_the_process(
-    windows: None, monkeypatch: pytest.MonkeyPatch
+    windows: None,
+    monkeypatch: pytest.MonkeyPatch,
+    taskkill: list[dict[str, t.Any]],
 ):
     process = FakeProcess(hangs=True)
     monkeypatch.setattr(subprocess, 'Popen', lambda *a, **k: process)
     with pytest.raises(RunError, match='Canceled'):
         runner.run(['tc.exe'], Canceled())  # type: ignore[arg-type]
     assert process.killed
+
+
+def test_canceling_on_windows_ends_the_tree_of_processes(
+    windows: None,
+    monkeypatch: pytest.MonkeyPatch,
+    taskkill: list[dict[str, t.Any]],
+):
+    process = FakeProcess(hangs=True)
+    monkeypatch.setattr(subprocess, 'Popen', lambda *a, **k: process)
+    with pytest.raises(RunError, match='Canceled'):
+        runner.run(['tc.exe'], Canceled())  # type: ignore[arg-type]
+    (call,) = taskkill
+    assert call['command'] == ['taskkill', '/T', '/F', '/PID', '4242']
+    assert call['creationflags'] == CREATE_NO_WINDOW
+
+
+def test_a_tool_that_takes_too_long_on_windows_is_ended_with_its_tree(
+    windows: None,
+    monkeypatch: pytest.MonkeyPatch,
+    taskkill: list[dict[str, t.Any]],
+):
+    process = FakeProcess(hangs=True)
+    monkeypatch.setattr(subprocess, 'Popen', lambda *a, **k: process)
+    with pytest.raises(RunError, match='did not answer'):
+        runner.run(['tc.exe'], timeout=-1)
+    assert [call['command'][:3] for call in taskkill] == [
+        ['taskkill', '/T', '/F']
+    ]
+    assert process.killed
+
+
+def test_a_program_that_outlives_its_tool_does_not_hold_up_a_cancel(
+    windows: None,
+    monkeypatch: pytest.MonkeyPatch,
+    taskkill: list[dict[str, t.Any]],
+):
+    # What the tool started holds the pipes of the tool open after the kill
+    process = FakeProcess(hangs=True, outlived=True)
+    monkeypatch.setattr(subprocess, 'Popen', lambda *a, **k: process)
+    with pytest.raises(RunError, match='Canceled'):
+        runner.run(['tc.exe'], Canceled())  # type: ignore[arg-type]
+    assert process.stdout.closed
+    assert process.stderr.closed
+
+
+def test_canceling_elsewhere_ends_the_group_of_the_tool(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    ended: list[tuple[int, int]] = []
+    process = FakeProcess(hangs=True)
+    monkeypatch.setattr(subprocess, 'Popen', lambda *a, **k: process)
+    monkeypatch.setattr(
+        runner.os,
+        'killpg',
+        lambda number, signal: ended.append((number, signal)),
+    )
+    with pytest.raises(RunError, match='Canceled'):
+        runner.run(['tc'], Canceled())  # type: ignore[arg-type]
+    assert ended == [(4242, runner.signal.SIGKILL)]
 
 
 # The definition file

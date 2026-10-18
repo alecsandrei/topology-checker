@@ -9,15 +9,17 @@ from qgis.core import (
     NULL,
     QgsProcessingAlgorithm,
     QgsProcessingContext,
+    QgsProject,
+    QgsVectorLayer,
 )
 from qgis.PyQt.QtGui import QIcon
 
 from .._typing import Parameters
 from ..core import binary
-from ..core.layers import Input, same_file
+from ..core.layers import Input, same_file, uri_parts
 from ..enums import Asset
 from ..exceptions import ExecutableError, RunError
-from ..utils import QgsProcessingException
+from ..utils import QgsProcessingException, not_none
 
 INPUT = 'INPUT'
 OTHER = 'OTHER'
@@ -25,6 +27,8 @@ TOLERANCE = 'TOLERANCE'
 OUTPUT = 'OUTPUT'
 COUNT = 'COUNT'
 # The documentation, which the help of an algorithm links to
+# How many other names are tried for a file that is in use
+MAX_NAMES = 20
 DOCS = 'https://alecsandrei.github.io/topology-checker/stable/'
 
 
@@ -93,6 +97,44 @@ def refuse_overwrite(
         outputs,
         (item.path for item in inputs if item is not None and item.path),
     )
+
+
+def release_files(files: c.Iterable[str]) -> None:
+    """Takes the layers of the project that read one of the files out of it,
+    so that a run can write the file again: where a file is open, as on
+    Windows, it cannot be replaced. Main thread only."""
+    files = list(files)
+    project = not_none(QgsProject.instance())
+    for layer in list(project.mapLayers().values()):
+        if not isinstance(layer, QgsVectorLayer):
+            continue
+        if layer.providerType() != 'ogr':
+            continue
+        where = str(uri_parts(layer).get('path') or '')
+        if where and any(same_file(where, path) for path in files):
+            project.removeMapLayer(layer.id())
+
+
+def free_file(path: str) -> str:
+    """The path to write to: the one given if what is there can be removed,
+    else a new one beside it, so that a run does not fail for a file that
+    something else has open."""
+    candidate, index = Path(path), 1
+    while True:
+        try:
+            for suffix in ('', '-wal', '-shm'):
+                Path(f'{candidate}{suffix}').unlink(missing_ok=True)
+            return str(candidate)
+        except OSError:
+            index += 1
+            candidate = Path(path).with_name(
+                f'{Path(path).stem}_{index}{Path(path).suffix}'
+            )
+            if index > MAX_NAMES:
+                raise QgsProcessingException(
+                    f'The file {path} cannot be replaced: it is in use. '
+                    'Choose another output.'
+                ) from None
 
 
 class Planned(QgsProcessingAlgorithm):

@@ -3,9 +3,9 @@ the tree again take about as long as it takes to look at each error once."""
 
 from __future__ import annotations
 
-import time
-
 import pytest
+from qgis.PyQt.QtCore import QModelIndex
+from qgis.PyQt.QtWidgets import QApplication
 
 from topology_rules.panel import controller, ignored
 from topology_rules.panel.dock import Dock
@@ -13,8 +13,8 @@ from topology_rules.panel.entries import Entry
 from topology_rules.panel.rows import Row
 
 RULES = 40
-# Seconds that counting and building the tree again may take, for many rows
-BUDGET = 2.0
+# Errors enough to show a search of all of them for each of the rules
+MANY = 20_000
 
 
 def filled(dock: Dock, rows: int) -> list[Row]:
@@ -76,17 +76,59 @@ def test_the_fingerprint_of_an_error_is_worked_out_once_per_error(
     assert counted[0] <= rows
 
 
-@pytest.mark.slow
-def test_counting_the_errors_that_are_left_is_quick_for_many_errors(dock: Dock):
-    filled(dock, 100_000)
-    started = time.perf_counter()
+# The work is counted and not the seconds: the seconds depend on the machine,
+# and a slow one fails a test that a quick one passes. A search of all the
+# errors for each rule would show here as many times more looks at the errors
+
+
+@pytest.fixture
+def looks(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    """The number of times that the list of ignored errors is asked about an
+    error."""
+    count = [0]
+    original = ignored.Ignored.has
+
+    def counting(self: ignored.Ignored, row: Row) -> bool:
+        count[0] += 1
+        return original(self, row)
+
+    monkeypatch.setattr(ignored.Ignored, 'has', counting)
+    return count
+
+
+def settled(dock: Dock) -> None:
+    """Lets what is waiting in the event loop happen, and leaves nothing
+    selected, so that the count is of the work of the call that is measured
+    and not of what a timer, a layout or a selection adds when the machine is
+    slow. The errors of a node that is selected are looked at again."""
+    for _ in range(5):
+        QApplication.processEvents()
+    dock.results_view.clearSelection()
+    dock.results_view.setCurrentIndex(QModelIndex())
+    for _ in range(5):
+        QApplication.processEvents()
+
+
+def test_counting_the_errors_that_are_left_looks_at_each_error_once(
+    dock: Dock, counted: list[int], looks: list[int]
+):
+    filled(dock, MANY)
+    settled(dock)
+    counted[0] = looks[0] = 0
     controller.recount(dock)
-    assert time.perf_counter() - started < BUDGET
+    assert looks[0] <= MANY
+    # The fingerprints are kept, and not worked out again
+    assert counted[0] == 0
 
 
-@pytest.mark.slow
-def test_building_the_tree_again_is_quick_for_many_errors(dock: Dock):
-    filled(dock, 100_000)
-    started = time.perf_counter()
+def test_building_the_tree_again_looks_at_each_error_a_few_times(
+    dock: Dock, counted: list[int], looks: list[int]
+):
+    filled(dock, MANY)
+    settled(dock)
+    counted[0] = looks[0] = 0
     dock.results.refresh()
-    assert time.perf_counter() - started < BUDGET
+    # To count the ones that are ignored, to tell which to show, to draw them
+    # and to filter the map: a few times, and not once for each of the rules
+    assert looks[0] <= 5 * MANY
+    assert counted[0] <= MANY

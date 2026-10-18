@@ -27,6 +27,7 @@ from .base import (
     executable_path,
     failures,
     refuse_overwrite,
+    release_files,
     scratch,
     tolerance_of,
 )
@@ -157,9 +158,9 @@ class RuleAlgorithm(SinkAlgorithm):
             other = None
             if self.rule.other is not None:
                 other = self.read(parameters, OTHER, context, self.rule.other)
-            refuse_overwrite(
-                self.sink_files(parameters, context), (first, other)
-            )
+            sinks = self.sink_files(parameters, context)
+            refuse_overwrite(sinks, (first, other))
+            release_files(sinks)
             self.plan = Plan(
                 executable_path(),
                 first,

@@ -247,19 +247,41 @@ def calls(log: Path, command: str) -> list[str]:
     ]
 
 
+def process_alive(number: int) -> bool:
+    """Whether a process of the system is there."""
+    if sys.platform == 'win32':
+        done = subprocess.run(
+            ['tasklist', '/FI', f'PID eq {number}', '/NH'],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return str(number) in done.stdout
+    try:
+        os.kill(number, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
 def gated_executable(
     directory: Path, gate: Path, started: Path, name: str = 'topology-checker'
 ) -> Path:
     """A tool that lists its rules at once. To check, it says that it began
-    by creating the started file, waits for the gate file to exist, and then
-    is the real tool."""
+    by creating the started file, with its process number in it, waits for the
+    gate file to exist, and then is the real tool."""
     real = real_executable()
     assert real is not None, 'set TOPOLOGY_CHECKER'
+    # Only a check waits: the other questions that the plugin asks the tool,
+    # such as which formats it reads, are answered by the real tool at once
     body = (
         'import os, time\n'
-        f'open({str(started)!r}, "w").close()\n'
-        f'while not os.path.exists({str(gate)!r}):\n'
-        '    time.sleep(0.02)\n' + hand_over(real)
+        "if 'validate' in sys.argv:\n"
+        f'    open({str(started)!r}, "w").write(str(os.getpid()))\n'
+        f'    while not os.path.exists({str(gate)!r}):\n'
+        '        time.sleep(0.02)\n' + hand_over(real)
     )
     return script_executable(directory, body, name)
 
@@ -315,6 +337,18 @@ def save(layer: QgsVectorLayer, path: Path, driver: str, name: str) -> None:
         layer, str(path), QgsProject.instance().transformContext(), options
     )
     assert result[0] == QgsVectorFileWriter.WriterError.NoError
+
+
+# Windows cannot delete a file that a layer has open. A layer of a GeoPackage
+# keeps its file open, and one of a GeoJSON file reads it and lets go of it,
+# so a test of a file that vanishes uses a file of the second kind there
+VANISHING = 'GeoJSON' if sys.platform == 'win32' else 'GPKG'
+
+
+def remove_files(directory: Path, stem: str) -> None:
+    """Deletes the files of a layer: the file and what goes with it."""
+    for part in directory.glob(f'{stem}.*'):
+        part.unlink()
 
 
 def saved_layer(

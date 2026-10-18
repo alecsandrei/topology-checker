@@ -35,8 +35,10 @@ from .base import (
     Planned,
     executable_path,
     failures,
+    free_file,
     geopackage_name,
     refuse_overwrite,
+    release_files,
     scratch,
     tolerance_of,
 )
@@ -177,6 +179,7 @@ class CheckRulesAlgorithm(Planned):
                     )
                 jobs.append(Job(rule, first, second))
             refuse_overwrite([requested, output], inputs.values())
+            release_files([output])
             self.plan = Plan(
                 executable,
                 jobs,
@@ -198,24 +201,28 @@ class CheckRulesAlgorithm(Planned):
         with failures():
             # A run that finds nothing writes nothing: the file of an earlier
             # run would be taken for its errors
-            for suffix in ('', '-wal', '-shm'):
-                Path(plan.output + suffix).unlink(missing_ok=True)
+            output = free_file(plan.output)
+            if output != plan.output:
+                feedback.pushInfo(
+                    f'{plan.output} is in use: the errors are written to '
+                    f'{output}'
+                )
             with scratch() as tmp:
                 outcome = run_jobs(
                     plan.jobs,
                     plan.executable,
                     plan.tolerance,
-                    plan.output,
+                    output,
                     Path(tmp),
                     context,
                     feedback,
                 )
-            renumber_errors(plan.output, outcome.ids)
-            append_invalid(plan.output, outcome.invalid, outcome.crs, context)
+            renumber_errors(output, outcome.ids)
+            append_invalid(output, outcome.invalid, outcome.crs, context)
         total = sum(outcome.counts) + len(outcome.invalid)
         feedback.pushInfo(f'{total} topology errors')
         return {
-            OUTPUT: plan.output,
+            OUTPUT: output,
             COUNT: total,
             COUNTS: json.dumps(outcome.counts),
             LAYERS: json.dumps(outcome.layers),

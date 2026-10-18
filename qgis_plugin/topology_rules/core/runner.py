@@ -18,6 +18,8 @@ if t.TYPE_CHECKING:
     from qgis.core import QgsProcessingFeedback
 
 POLL_SECONDS = 0.2
+# How long to wait for what was killed to be gone
+STOP_SECONDS = 5
 
 
 @dataclasses.dataclass(frozen=True)
@@ -36,7 +38,10 @@ def run(
     or the timeout in seconds passes."""
     flags = 0
     if sys.platform == 'win32':
-        flags = subprocess.CREATE_NO_WINDOW
+        # Its own group, so that the tree of processes can be stopped
+        flags = (
+            subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP
+        )
     try:
         # The command is a list of arguments, which no shell sees
         process = subprocess.Popen(  # nosec B603
@@ -94,10 +99,34 @@ def error_message(completed: Completed) -> str:
 
 
 def stop(process: subprocess.Popen[str]) -> None:
-    """Kills the process and the processes it started, then reaps it."""
+    """Kills the process and the processes it started, then reaps it.
+
+    A tool behind a launcher script (a .cmd file on Windows) has the script as
+    its process: the tool has to be stopped with it, as it would keep the pipes
+    open and the output would never end.
+    """
     if sys.platform == 'win32':
-        process.kill()
+        # The whole tree, which kill() does not reach
+        with contextlib.suppress(OSError):
+            subprocess.run(  # nosec B603 B607
+                ['taskkill', '/T', '/F', '/PID', str(process.pid)],
+                capture_output=True,
+                creationflags=subprocess.CREATE_NO_WINDOW,
+                timeout=STOP_SECONDS,
+                check=False,
+            )
+        with contextlib.suppress(OSError):
+            process.kill()
     else:
         with contextlib.suppress(ProcessLookupError):
             os.killpg(process.pid, signal.SIGKILL)
-    process.communicate()
+    try:
+        process.communicate(timeout=STOP_SECONDS)
+    except subprocess.TimeoutExpired:
+        # Something that outlived the tree holds the pipes: let go of them
+        for pipe in (process.stdout, process.stderr):
+            if pipe is not None:
+                with contextlib.suppress(OSError, ValueError):
+                    pipe.close()
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            process.wait(timeout=STOP_SECONDS)
