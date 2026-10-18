@@ -237,17 +237,68 @@ jobs:
       - name: Install QGIS
         run: conda install -y "qgis=${{ matrix.qgis }}" pyyaml
 
-      # On Windows conda-forge puts the Python package of QGIS, and its
-      # plugins such as Processing, under Library\python and not in
-      # site-packages, so the later steps are told where they are
+      # On Windows the Python package of QGIS, and its plugins such as
+      # Processing, are not in site-packages. Where they are is found in the
+      # environment, and printed, and the later steps are told
       - name: Point Python at QGIS
         run: |
-          prefix=$(cygpath -w "${CONDA_PREFIX:-$CONDA/envs/qgis}")
+          root=$(cygpath -u "${CONDA_PREFIX:-$CONDA/envs/qgis}")
+          conda list qgis
+          python -c "import sys; print(sys.executable); print(sys.path)"
+
+          echo "Activation scripts of the environment:"
+          ls "$root"/etc/conda/activate.d 2>/dev/null || true
+          for script in "$root"/etc/conda/activate.d/*qgis*; do
+            if [ -f "$script" ]; then
+              echo "--- $script"
+              cat "$script"
+            fi
+          done
+
+          # The folder with the package, which has its compiled module
+          package=''
+          first=''
+          while read -r hit; do
+            echo "qgis package: $hit"
+            first=${first:-$(dirname "$(dirname "$hit")")}
+            if ls "$(dirname "$hit")"/_core* > /dev/null 2>&1; then
+              package=$(dirname "$(dirname "$hit")")
+            fi
+          done < <(find "$root" -type f -path '*/qgis/__init__.py')
+          if [ -z "$package" ] && [ -n "$first" ]; then
+            echo "No package has the compiled module of QGIS next to it, taking the first"
+            package=$first
+          fi
+
+          # The folder with the plugins, one of which is Processing
+          plugins=''
+          while read -r hit; do
+            echo "processing plugin: $hit"
+            plugins=$(dirname "$(dirname "$hit")")
+          done < <(find "$root" -type f -path '*/plugins/processing/__init__.py')
+
+          # The prefix of QGIS is where share/qgis, with its resources, is
+          prefix="$root/Library"
+          while read -r hit; do
+            echo "qgis data: $hit"
+            prefix=$(dirname "$(dirname "$hit")")
+          done < <(find "$root" -type d -path '*/share/qgis')
+
+          if [ -z "$package" ] || [ -z "$plugins" ]; then
+            echo "::error::The Python package of QGIS or its plugins are not in the environment"
+            find "$root" -maxdepth 4 -iname '*qgis*' | head -40
+            exit 1
+          fi
+
           {
-            printf 'PYTHONPATH=%s\\Library\\python;%s\\Library\\python\\plugins\n' "$prefix" "$prefix"
-            printf 'QGIS_PREFIX_PATH=%s\\Library\n' "$prefix"
+            printf 'PYTHONPATH=%s;%s\n' "$(cygpath -w "$package")" "$(cygpath -w "$plugins")"
+            printf 'QGIS_PREFIX_PATH=%s\n' "$(cygpath -w "$prefix")"
           } >> "$GITHUB_ENV"
-          printf '%s\\Library\\bin\n' "$prefix" >> "$GITHUB_PATH"
+          for folder in Library/bin Library/mingw-w64/bin Library/usr/bin Scripts; do
+            if [ -d "$root/$folder" ]; then
+              cygpath -w "$root/$folder" >> "$GITHUB_PATH"
+            fi
+          done
 
       - name: Install the test dependencies
         run: python -m pip install pytest==9.1.1 pytest-qgis==5.0.1
