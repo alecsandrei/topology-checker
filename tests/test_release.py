@@ -20,6 +20,8 @@ from scripts.validate_release import (
     validate_release,
 )
 
+# The version of the package, as the release checks read it
+_, VERSION = project_config(ROOT)
 TAGS = [
     "manylinux_2_17_x86_64.manylinux2014_x86_64",
     "win_amd64",
@@ -28,7 +30,7 @@ TAGS = [
 ]
 
 
-def metadata_text(version: str = "0.1.0") -> str:
+def metadata_text(version: str = VERSION) -> str:
     """Create realistic metadata for the synthetic archive fixtures."""
     project, _ = project_config(ROOT)
     headers = [
@@ -64,7 +66,7 @@ def binary_header(tag: str) -> bytes:
     return bytes(payload)
 
 
-def make_wheel(directory: Path, tag: str, version: str = "0.1.0") -> Path:
+def make_wheel(directory: Path, tag: str, version: str = VERSION) -> Path:
     """Write a synthetic wheel for structural validator tests, without executing it."""
     path = directory / f"topology_checker-{version}-cp310-abi3-{tag}.whl"
     prefix = f"topology_checker-{version}.dist-info/"
@@ -86,8 +88,8 @@ def make_wheel(directory: Path, tag: str, version: str = "0.1.0") -> Path:
 
 def make_sdist(directory: Path) -> Path:
     """Package actual reviewed source files into a synthetic sdist fixture."""
-    path = directory / "topology_checker-0.1.0.tar.gz"
-    prefix = "topology_checker-0.1.0/"
+    path = directory / f"topology_checker-{VERSION}.tar.gz"
+    prefix = f"topology_checker-{VERSION}/"
     with tarfile.open(path, "w:gz") as archive:
         for source in [
             ROOT / "pyproject.toml",
@@ -134,7 +136,7 @@ def rewrite_wheel(
 
 def test_complete_bundle_and_checksums(bundle: Path) -> None:
     """All four platforms are mandatory and checksums cover only the archives."""
-    manifest = validate_release(bundle, tag="python-v0.1.0")
+    manifest = validate_release(bundle, tag=f"python-v{VERSION}")
     assert len(manifest.splitlines()) == 5
     assert manifest == checksum_manifest(list(bundle.iterdir()))
     (bundle / "SHA256SUMS").write_text(manifest)
@@ -212,15 +214,15 @@ def test_missing_required_files(bundle: Path, suffix: str) -> None:
 def test_invalid_linux_tag(bundle: Path, tag: str) -> None:
     """Reject generic Linux, newer glibc baselines and unsupported architectures."""
     path = next(bundle.glob("*manylinux*.whl"))
-    path.rename(bundle / f"topology_checker-0.1.0-cp310-abi3-{tag}.whl")
+    path.rename(bundle / f"topology_checker-{VERSION}-cp310-abi3-{tag}.whl")
     with pytest.raises(ValueError, match="unsupported platform tag"):
         validate_release(bundle)
 
 
 def test_wrong_tag_and_unexpected_bundle_files(bundle: Path) -> None:
     """Release tags must match the version, and the bundle cannot contain extras."""
-    with pytest.raises(ValueError, match="tag must be python-v0.1.0"):
-        validate_release(bundle, tag="python-v0.2.0")
+    with pytest.raises(ValueError, match=f"tag must be python-v{VERSION}"):
+        validate_release(bundle, tag="python-v0.0.1")
     (bundle / "extra.txt").write_text("not a release archive")
     with pytest.raises(ValueError, match="unexpected release bundle entries"):
         validate_release(bundle)
