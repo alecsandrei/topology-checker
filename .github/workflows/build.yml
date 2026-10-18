@@ -1,7 +1,21 @@
 name: build
 on:
   push:
+    paths:
+      - '**'
+      - '!docs/**'
+      - '!**/*.md'
+      - '!zensical.toml'
+      - 'docs/rules.md'
+      - '.github/workflows/build.yml'
   pull_request:
+    paths:
+      - '**'
+      - '!docs/**'
+      - '!**/*.md'
+      - '!zensical.toml'
+      - 'docs/rules.md'
+      - '.github/workflows/build.yml'
   workflow_dispatch:
 env:
   CARGO_TERM_COLOR: always
