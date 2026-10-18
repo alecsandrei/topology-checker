@@ -38,8 +38,11 @@ jobs:
       - name: Check formatting
         run: uv run --locked --only-group lint ruff format --check .
 
-  bandit:
-    name: Bandit
+  # The scans that plugins.qgis.org blocks an upload on. `detect-secrets scan`
+  # ends with 0 whatever it finds, so the hook of the tool is used, which ends
+  # with 1
+  security:
+    name: Security scan
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -49,6 +52,9 @@ jobs:
 
       - name: Bandit
         run: uv run --locked --only-group lint bandit -r topology_rules
+
+      - name: Secrets
+        run: git ls-files -z topology_rules | xargs -0 uv run --locked --only-group lint detect-secrets-hook
 
   package:
     name: Package

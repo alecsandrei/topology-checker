@@ -12,8 +12,7 @@ from qgis.PyQt.QtWidgets import (
     QWidget,
 )
 
-from ..enums import Setting
-from ..provider import SETTING_NAME
+from ..enums import SETTING_NAME, Setting
 from ..utils import tr
 
 INSTALL = 'https://alecsandrei.github.io/topology-checker/stable/install/'

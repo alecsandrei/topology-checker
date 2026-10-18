@@ -21,11 +21,8 @@ from .algorithms import (
 )
 from .core import binary
 from .core.binary import Rule
-from .enums import PROVIDER_ID, Asset
-from .enums import Setting as PluginSetting
+from .enums import PROVIDER_ID, SETTING_NAME, Asset
 from .exceptions import ExecutableError
-
-SETTING_NAME = PluginSetting.EXECUTABLE.value.rsplit('/', 1)[-1]
 
 
 class Provider(QgsProcessingProvider):
