@@ -35,7 +35,7 @@ from topology_rules.panel import exchange
 from topology_rules.panel.entries import Entry
 from topology_rules.panel.exchange import export_definition
 
-from .helpers import saved_layer, script_executable, write_toml
+from .helpers import saved_layer, write_toml
 
 CREATE_NO_WINDOW = 0x08000000
 DANGLES = Rule('line/must-not-have-dangles', 'x', 'line', None)
@@ -76,12 +76,22 @@ def ntfs(monkeypatch: pytest.MonkeyPatch) -> None:
 # The executable
 
 
+def program(directory: Path) -> Path:
+    """A file that is named as the program of Windows is, which only has to
+    be there to be found."""
+    path = directory / 'topology-checker.exe'
+    path.write_text('')
+    # `which` wants a program that can be run, on the system that tests this
+    path.chmod(0o755)
+    return path
+
+
 def test_a_path_without_exe_finds_the_exe_on_windows(
     windows: None,
     tmp_path: Path,
     configure: c.Callable[[str | Path], None],
 ):
-    script_executable(tmp_path, '', name='topology-checker.exe')
+    program(tmp_path)
     configure(tmp_path / 'topology-checker')
     try:
         answer = str(binary.find_executable())
@@ -95,7 +105,7 @@ def test_a_path_without_exe_finds_the_exe_on_windows(
 def test_a_path_without_exe_is_not_guessed_elsewhere(
     tmp_path: Path, configure: c.Callable[[str | Path], None]
 ):
-    script_executable(tmp_path, '', name='topology-checker.exe')
+    program(tmp_path)
     configure(tmp_path / 'topology-checker')
     with pytest.raises(ExecutableError, match='does not exist'):
         binary.find_executable()
@@ -104,7 +114,7 @@ def test_a_path_without_exe_is_not_guessed_elsewhere(
 def test_the_exe_on_the_path_is_found_through_pathext(
     windows: None, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    script_executable(tmp_path, '', name='topology-checker.exe')
+    program(tmp_path)
     monkeypatch.setenv('PATH', str(tmp_path))
     # In lower case for a file system that tells the case, and split as this
     # system splits a path list
@@ -124,7 +134,7 @@ def test_a_path_with_the_exe_is_taken_as_it_is(
     tmp_path: Path,
     configure: c.Callable[[str | Path], None],
 ):
-    path = script_executable(tmp_path, '', name='topology-checker.exe')
+    path = program(tmp_path)
     configure(path)
     assert binary.find_executable() == path
 
@@ -153,7 +163,7 @@ def test_a_pasted_path_with_spaces_and_quotes_finds_the_file(
 ):
     folder = tmp_path / 'Program Files'
     folder.mkdir()
-    path = script_executable(folder, '', name='topology-checker.exe')
+    path = program(folder)
     configure(f'"{path}" ')
     assert binary.find_executable() == path
 
