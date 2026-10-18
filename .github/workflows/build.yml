@@ -6,6 +6,7 @@ on:
       - '!docs/**'
       - '!**/*.md'
       - '!zensical.toml'
+      - '!qgis_plugin/**'
       - 'docs/rules.md'
       - '.github/workflows/build.yml'
   pull_request:
@@ -14,6 +15,7 @@ on:
       - '!docs/**'
       - '!**/*.md'
       - '!zensical.toml'
+      - '!qgis_plugin/**'
       - 'docs/rules.md'
       - '.github/workflows/build.yml'
   workflow_dispatch:
