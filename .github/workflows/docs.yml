@@ -43,6 +43,7 @@ env:
 jobs:
   site:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
         with:
@@ -65,6 +66,7 @@ jobs:
           if-no-files-found: error
   rust-api:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -85,6 +87,7 @@ jobs:
     if: github.event_name != 'pull_request'
     needs: [site, rust-api]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write
     concurrency:

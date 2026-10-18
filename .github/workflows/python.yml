@@ -32,6 +32,7 @@ permissions:
 jobs:
   checks:
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -56,6 +57,7 @@ jobs:
 
   msrv:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.88.0
@@ -76,6 +78,7 @@ jobs:
           - os: windows-latest
             target: x86_64
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     env:
       TOPOLOGY_EXPECT_WHEEL: '1'
     steps:
@@ -122,6 +125,7 @@ jobs:
 
   sdist:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
       TOPOLOGY_EXPECT_WHEEL: '1'
     steps:
@@ -147,6 +151,7 @@ jobs:
     needs: [checks, msrv, wheels, sdist]
     if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/python-v')
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -186,6 +191,7 @@ jobs:
     needs: release-bundle
     if: startsWith(github.ref, 'refs/tags/python-v')
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     environment: pypi
     permissions:
       id-token: write

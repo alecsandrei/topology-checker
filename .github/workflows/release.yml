@@ -28,6 +28,7 @@ jobs:
           - { platform: macos-x64, os: macos-15-intel }
           - { platform: windows-x64, os: windows-latest }
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
         with:
@@ -67,6 +68,7 @@ jobs:
 
   notices:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
@@ -111,6 +113,7 @@ jobs:
   rustgis-plugin:
     needs: [notices]
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
@@ -133,6 +136,7 @@ jobs:
   release:
     needs: [build, notices, rustgis-plugin]
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: write
     steps:

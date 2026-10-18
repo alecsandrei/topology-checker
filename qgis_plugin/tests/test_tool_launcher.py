@@ -36,6 +36,8 @@ def test_a_fake_tool_on_windows_is_a_launcher_of_a_script_beside_it(
     # The script of the launcher is the one beside it, whatever the folder
     assert '"%~dp0tool.py"' in launcher
     assert launcher.rstrip().endswith('%*')
+    # Quick to start: no site packages, no environment variables
+    assert f'"{sys.executable}" -I -S ' in launcher
 
 
 def test_a_fake_tool_on_windows_leaves_no_file_with_the_name_of_the_tool(

@@ -66,7 +66,10 @@ def write_tool(path: Path, source: str) -> Path:
     """Writes a program of Python source and returns the path to point the
     plugin to. Where a shebang runs it, that is the file itself. Windows
     ignores the shebang, so there a `.cmd` beside the script starts it with
-    this Python, and the launcher is what is returned."""
+    this Python, and the launcher is what is returned. It starts without the
+    site packages and the environment (-S, -I), as the scripts only use the
+    standard library and a start with them is quicker, which matters when a
+    run starts the tool many times."""
     path.write_text(source)
     if sys.platform != 'win32':
         path.chmod(path.stat().st_mode | stat.S_IXUSR)
@@ -75,7 +78,7 @@ def write_tool(path: Path, source: str) -> Path:
     path.replace(script)
     launcher = path.with_name(f'{path.name}.cmd')
     launcher.write_bytes(
-        f'@"{sys.executable}" "%~dp0{script.name}" %*\r\n'.encode()
+        f'@"{sys.executable}" -I -S "%~dp0{script.name}" %*\r\n'.encode()
     )
     return launcher
 

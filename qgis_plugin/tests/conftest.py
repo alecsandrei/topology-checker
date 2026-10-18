@@ -55,6 +55,22 @@ def forget_options_box(settings: QgsSettings) -> None:
     settings.sync()
 
 
+def forget_tools() -> None:
+    """Forgets the rules of the tools that were asked. The real tool is the
+    same file in every test, so what it said is kept, and each test does not
+    start it again: that costs a process, which on Windows is slow. The fake
+    tools are files of a test, and are forgotten."""
+    real = real_executable()
+    probe = binary._rules
+    with probe.lock:
+        rules = {k: v for k, v in probe.done.items() if k[0] == real}
+        formats = {k: v for k, v in probe.readable.items() if k[0] == real}
+    probe.cache_clear()
+    with probe.lock:
+        probe.done.update(rules)
+        probe.readable.update(formats)
+
+
 @pytest.fixture(autouse=True)
 def no_executable(monkeypatch: pytest.MonkeyPatch) -> c.Iterator[None]:
     """Starts without a configured executable and without cached rules."""
@@ -65,11 +81,11 @@ def no_executable(monkeypatch: pytest.MonkeyPatch) -> c.Iterator[None]:
     settings = QgsSettings()
     settings.remove(Setting.EXECUTABLE.value)
     forget_options_box(settings)
-    binary._rules.cache_clear()
+    forget_tools()
     yield
     settings.remove(Setting.EXECUTABLE.value)
     forget_options_box(settings)
-    binary._rules.cache_clear()
+    forget_tools()
 
 
 @pytest.fixture(autouse=True)
