@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import collections.abc as c
 import contextlib
+import re
 import tempfile
 import weakref
 from pathlib import Path
@@ -17,6 +18,7 @@ from topology_rules.algorithms import utilities
 from topology_rules.provider import Provider
 
 from .helpers import line_layer, run_algorithm
+from .test_rejected_features import bad_layer
 
 CHAIN = ('LINESTRING(0 0, 10 0)', 'LINESTRING(10 0, 20 0)')
 
@@ -55,6 +57,55 @@ def leaks(monkeypatch: pytest.MonkeyPatch) -> list[str]:
     monkeypatch.setattr(utilities, 'scratch', watched)
     monkeypatch.setattr(utilities, 'QgsVectorLayer', Watched)
     return found
+
+
+LEFT_OUT = 2
+
+
+def with_lines_left_out(tmp_path: Path) -> QgsVectorLayer:
+    """Four lines that can be taken, and two with coordinates that are not
+    numbers, which the export leaves out."""
+    layer = bad_layer('line', 4, LEFT_OUT, tmp_path)
+    return layer
+
+
+@pytest.mark.parametrize('name', ['merge_lines', 'explode_lines'])
+def test_a_utility_says_in_its_log_how_many_features_were_left_out(
+    tmp_path: Path, name: str
+):
+    layer = with_lines_left_out(tmp_path)
+    ran = run_algorithm(
+        name, {'INPUT': layer.id(), 'OUTPUT': str(tmp_path / 'out.gpkg')}
+    )
+    assert ran.ok, ran.log
+    assert re.search(
+        rf'\b{LEFT_OUT}\b[^\n]*(left out|skipped|invalid)', ran.log, re.I
+    ), ran.log
+
+
+@pytest.mark.parametrize('name', ['merge_lines', 'explode_lines'])
+def test_a_utility_gives_the_number_of_features_that_were_left_out(
+    tmp_path: Path, name: str
+):
+    layer = with_lines_left_out(tmp_path)
+    ran = run_algorithm(
+        name, {'INPUT': layer.id(), 'OUTPUT': str(tmp_path / 'out.gpkg')}
+    )
+    assert ran.ok, ran.log
+    assert ran.results.get('INVALID') == LEFT_OUT
+
+
+@pytest.mark.parametrize('name', ['merge_lines', 'explode_lines'])
+def test_a_utility_does_not_report_what_it_did_not_leave_out(
+    tmp_path: Path, name: str
+):
+    layer = line_layer(*CHAIN, name='whole')
+    QgsProject.instance().addMapLayer(layer)
+    ran = run_algorithm(
+        name, {'INPUT': layer.id(), 'OUTPUT': str(tmp_path / 'out.gpkg')}
+    )
+    assert ran.ok, ran.log
+    assert not ran.results.get('INVALID')
 
 
 @pytest.mark.parametrize('name', ['merge_lines', 'explode_lines'])

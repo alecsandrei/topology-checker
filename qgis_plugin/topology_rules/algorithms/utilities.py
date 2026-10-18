@@ -9,6 +9,7 @@ from qgis.core import (
     QgsFeature,
     QgsProcessingContext,
     QgsProcessingFeedback,
+    QgsProcessingOutputNumber,
     QgsProcessingParameterFeatureSink,
     QgsProcessingParameterVectorLayer,
     QgsProcessingUtils,
@@ -16,6 +17,7 @@ from qgis.core import (
 )
 
 from .._typing import Parameters
+from ..core.checks import UNREADABLE
 from ..core.commands import utility_command
 from ..core.inputs import prepare
 from ..core.layers import Input, require_kind
@@ -30,6 +32,9 @@ from .base import (
     refuse_overwrite,
     scratch,
 )
+
+# The features of the input that the tool would reject, which are left out
+SKIPPED = 'INVALID'
 
 
 @dataclasses.dataclass(frozen=True)
@@ -81,6 +86,9 @@ class UtilityAlgorithm(Planned):
                 OUTPUT, 'Output', source_type('VectorLine')
             )
         )
+        self.addOutput(
+            QgsProcessingOutputNumber(SKIPPED, 'Features left out of the run')
+        )
 
     def prepareAlgorithm(
         self,
@@ -125,12 +133,36 @@ class UtilityAlgorithm(Planned):
         ):
             output = str(Path(tmp) / 'output.gpkg')
             found = prepare(plan.item, Path(tmp), None, context, feedback)
-            completed = execute(
-                utility_command(
-                    plan.executable, self.command, found.dataset, output
-                ),
-                feedback,
+            command = utility_command(
+                plan.executable, self.command, found.dataset, output
             )
+            completed = execute(command, feedback)
+            if (
+                completed.exit_code != 0
+                and found.ids is None
+                and UNREADABLE.search(error_message(completed))
+            ):
+                # The tool cannot read the file as it is: the export leaves
+                # out what it would reject
+                found = prepare(
+                    plan.item, Path(tmp), None, context, feedback, direct=False
+                )
+                completed = execute(
+                    utility_command(
+                        plan.executable, self.command, found.dataset, output
+                    ),
+                    feedback,
+                )
+            if found.skipped:
+                feedback.pushWarning(
+                    f'{len(found.skipped)} features of {plan.item.name} '
+                    'were left out of the run'
+                )
+            for left_out in found.skipped:
+                feedback.pushInfo(
+                    f'Left out of the run: {plan.item.name}, feature '
+                    f'{left_out.fid}: {left_out.reason}'
+                )
             if completed.exit_code != 0:
                 raise QgsProcessingException(error_message(completed))
             result = QgsVectorLayer(output, 'output', 'ogr')
@@ -158,7 +190,7 @@ class UtilityAlgorithm(Planned):
             finally:
                 # Closed before the folder of the file goes, also on failure
                 del result
-        return {OUTPUT: destination}
+        return {OUTPUT: destination, SKIPPED: len(found.skipped)}
 
 
 class MergeLines(UtilityAlgorithm):

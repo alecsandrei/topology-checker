@@ -246,3 +246,73 @@ def test_the_name_does_not_clash_with_the_core_plugin(
 def test_the_tags_include_topology(metadata: configparser.ConfigParser):
     tags = [tag.strip() for tag in general(metadata, 'tags').split(',')]
     assert 'topology' in tags
+
+
+# The version of the plugin
+
+WORKFLOW = PLUGIN.parent.parent / '.github' / 'workflows' / 'qgis-plugin.yml'
+
+
+def test_the_version_is_a_release_version(metadata: configparser.ConfigParser):
+    assert re.fullmatch(r'\d+\.\d+\.\d+', general(metadata, 'version'))
+
+
+def test_the_version_is_the_one_of_the_project(
+    metadata: configparser.ConfigParser,
+):
+    project = (PLUGIN.parent / 'pyproject.toml').read_text(encoding='utf-8')
+    found = re.search(r'^version = "([^"]+)"', project, re.MULTILINE)
+    assert found is not None
+    assert general(metadata, 'version') == found.group(1)
+
+
+def test_the_workflow_packages_on_version_tags():
+    if not WORKFLOW.is_file():
+        pytest.skip('the workflow is not in this folder')
+    yaml = pytest.importorskip('yaml')
+    config = yaml.safe_load(WORKFLOW.read_text(encoding='utf-8'))
+    # YAML 1.1 reads the key `on` as true
+    triggers = config.get('on', config.get(True))
+    assert triggers['push']['tags'] == ['v*']
+
+
+def test_the_package_job_takes_the_version_from_the_tag_without_its_v():
+    if not WORKFLOW.is_file():
+        pytest.skip('the workflow is not in this folder')
+    text = WORKFLOW.read_text(encoding='utf-8')
+    assert 'refs/tags/v*' in text
+    assert '${GITHUB_REF_NAME#v}' in text
+    assert 'qgis-plugin-v' not in text
+
+
+# Files that QGIS leaves in the folder it is started from
+
+DATABASES = {'.db', '.sqlite', '.sqlite3'}
+
+
+def repository_files() -> list[Path]:
+    """The files under qgis_plugin that git tracks or would add."""
+    root = PLUGIN.parent
+    try:
+        done = subprocess.run(
+            ['git', 'ls-files', '--cached', '--others', '--exclude-standard'],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        pytest.skip('git is not installed')
+    if done.returncode != 0:
+        pytest.skip('the plugin is not in a repository')
+    return [root / line for line in done.stdout.splitlines()]
+
+
+def test_no_database_file_is_tracked_or_left_to_be_added():
+    stray = [
+        str(path.relative_to(PLUGIN.parent))
+        for path in repository_files()
+        if path.suffix.lower() in DATABASES
+        and 'tests' not in path.relative_to(PLUGIN.parent).parts
+    ]
+    assert stray == []

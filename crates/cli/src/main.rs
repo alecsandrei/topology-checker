@@ -303,6 +303,7 @@ fn finish(
         &result,
         &warnings,
         matches.get_flag("json"),
+        matches.get_flag("summary"),
         output,
         diagnostics,
     )?;
@@ -563,7 +564,15 @@ mod tests {
         .unwrap();
         let warnings = ["test warning".to_string()];
         for json in [false, true] {
-            report::print(&report, &warnings, json, &mut Vec::new(), &mut diagnostics).unwrap();
+            report::print(
+                &report,
+                &warnings,
+                json,
+                false,
+                &mut Vec::new(),
+                &mut diagnostics,
+            )
+            .unwrap();
         }
     }
 }

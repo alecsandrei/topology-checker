@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.0
 
 * Processing algorithms: one per rule, with errors as three sinks, and **Check topology definition** for a `topology.toml`.
 * The panel queues rules on layers and runs them in one pass; the errors are a tree by rule and kind, with zoom, selection and a map filter.

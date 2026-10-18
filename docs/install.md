@@ -27,7 +27,7 @@ Python 3.10 to 3.14. See [Python usage](python-usage.md).
 
 ## QGIS
 
-Install the [CLI](#cli) first; the plugin runs it and does not include it. Then install **Topology Rules** in **Plugins > Manage and Install Plugins** (QGIS 3.34 or newer; tick **Show also experimental plugins** in the Settings tab).
+Install the [CLI](#cli) (0.2.0 or newer) first; the plugin runs it and does not include it. Then install **Topology Rules** in **Plugins > Manage and Install Plugins** (QGIS 3.34 or newer; tick **Show also experimental plugins** in the Settings tab).
 
 If `topology-checker` is not on the `PATH`, choose it in the panel, or set its path under **Settings > Options > Processing > Providers > Topology Rules**. Each rule is then a tool in the Processing toolbox, and **Check topology definition** runs a `topology.toml`.
 

@@ -21,13 +21,12 @@ from .commands import (
     ERROR_LAYERS,
     Check,
     rule_counts,
-    validate_command,
+    run_validate,
     write_config,
 )
 from .inputs import Prepared, prepare
 from .invalid import REJECTED, Invalid, Rejected, parse_failure
 from .layers import Input
-from .runner import execute
 
 # The columns of an error that name a feature, and the layer it is in
 ID_COLUMNS = (
@@ -203,8 +202,8 @@ def run_once(
     ]
     config = directory / 'checks.toml'
     aliases = write_config(config, checks)
-    completed = execute(
-        validate_command(executable, str(config), tolerance, output), feedback
+    completed = run_validate(
+        executable, str(config), tolerance, output, feedback
     )
     try:
         counts = rule_counts(completed)

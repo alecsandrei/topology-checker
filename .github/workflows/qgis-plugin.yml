@@ -62,7 +62,7 @@ jobs:
           find build -name '*.pyc' -delete
           version=$(sed -n 's/^version=//p' build/topology_rules/metadata.txt)
           case "$GITHUB_REF" in
-            refs/tags/*) version="${GITHUB_REF_NAME#v}" ;;
+            refs/tags/v*) version="${GITHUB_REF_NAME#v}" ;;
           esac
           sed -i "s/^version=.*/version=${version}/" build/topology_rules/metadata.txt
           (cd build && zip -r -X "../dist/topology_rules-${version}.zip" topology_rules)
@@ -196,6 +196,60 @@ jobs:
         run: |
           chmod +x "$GITHUB_WORKSPACE/bin/topology-checker"
           TOPOLOGY_CHECKER="$GITHUB_WORKSPACE/bin/topology-checker" uv run pytest -m "" -ra --durations=15 -o faulthandler_timeout=600
+
+  # The plugin on Windows, with QGIS from conda-forge (the long term release,
+  # Qt5) and the CLI built here. The paths, the subprocess flags and the
+  # executable lookup of the plugin are only really tested here
+  test-windows:
+    name: Pytest (Windows, QGIS ${{ matrix.qgis }})
+    runs-on: windows-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - qgis: '3.44'
+    env:
+      QT_QPA_PLATFORM: offscreen
+    defaults:
+      run:
+        shell: bash -el {0}
+        working-directory: qgis_plugin
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build the CLI
+        working-directory: .
+        run: cargo build --release --locked -p topology-checker
+
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          python-version: '3.12'
+          channels: conda-forge
+          channel-priority: strict
+          activate-environment: qgis
+
+      - name: Install QGIS
+        run: conda install -y "qgis=${{ matrix.qgis }}" pyyaml
+
+      - name: Install the test dependencies
+        run: python -m pip install pytest==9.1.1 pytest-qgis==5.0.1
+
+      - name: Check the QGIS version
+        run: |
+          python -c "from qgis.core import Qgis; print(Qgis.version())"
+          python -c "import sys; from qgis.core import Qgis; sys.exit(not Qgis.version().startswith('${{ matrix.qgis }}.'))"
+
+      # All the tests, the slow ones too, as in the images
+      - name: Pytest
+        env:
+          TOPOLOGY_CHECKER: ${{ github.workspace }}/target/release/topology-checker.exe
+        run: python -m pytest -m "" -ra --durations=15 -o faulthandler_timeout=600
 
   pyqt6:
     name: PyQt6 compatibility

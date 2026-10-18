@@ -396,6 +396,26 @@ fn json_report(assertion: assert_cmd::assert::Assert) -> serde_json::Value {
     serde_json::from_slice(&assertion.get_output().stdout).unwrap()
 }
 #[test]
+fn summary_leaves_the_violations_out_of_the_json_report() {
+    let args = [
+        "--json",
+        "point",
+        "must-not-overlap",
+        &fixture("points.geojson"),
+    ];
+    let full = json_report(cli().args(args).assert().code(1));
+    let rules = full["rules"].as_array().unwrap();
+    assert!(!rules[0]["errors"].as_array().unwrap().is_empty());
+    let short = json_report(cli().args(args).arg("--summary").assert().code(1));
+    let summary = short["rules"].as_array().unwrap();
+    assert_eq!(summary.len(), rules.len());
+    for (a, b) in summary.iter().zip(rules) {
+        assert!(a.get("errors").is_none());
+        assert_eq!(a["counts"], b["counts"]);
+        assert_eq!(a["spec"], b["spec"]);
+    }
+}
+#[test]
 fn physical_layers_are_separate_selectable_and_binary_rules_expand_pairs() {
     let temp = TempDir::new().unwrap();
     let a = temp.path().join("a.gpkg");

@@ -119,7 +119,7 @@ topology-checker --json validate topology.toml -o errors.gpkg
 
 ## QGIS
 
-The Topology Rules plugin adds every rule to the Processing toolbox and a panel where you queue several rules, run them in one pass and browse the errors. It runs the CLI, so install that first. See [Install](https://alecsandrei.github.io/topology-checker/stable/install/).
+The Topology Rules plugin adds every rule to the Processing toolbox and a panel where you queue several rules, run them in one pass and browse the errors. It runs the CLI (0.2.0 or newer), so install that first. See [Install](https://alecsandrei.github.io/topology-checker/stable/install/).
 
 ### Plugin development
 

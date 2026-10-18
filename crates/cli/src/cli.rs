@@ -33,6 +33,13 @@ pub fn command() -> Command {
                 .help("Print a machine-readable report"),
         )
         .arg(
+            Arg::new("summary")
+                .long("summary")
+                .global(true)
+                .action(ArgAction::SetTrue)
+                .help("With --json, leave out the list of violations; the table is as ever"),
+        )
+        .arg(
             Arg::new("overwrite")
                 .long("overwrite")
                 .global(true)

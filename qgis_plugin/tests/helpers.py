@@ -62,21 +62,50 @@ RULES = [
 # Fake executables
 
 
+def write_tool(path: Path, source: str) -> Path:
+    """Writes a program of Python source and returns the path to point the
+    plugin to. Where a shebang runs it, that is the file itself. Windows
+    ignores the shebang, so there a `.cmd` beside the script starts it with
+    this Python, and the launcher is what is returned."""
+    path.write_text(source)
+    if sys.platform != 'win32':
+        path.chmod(path.stat().st_mode | stat.S_IXUSR)
+        return path
+    script = path.with_name(f'{path.name}.py')
+    path.replace(script)
+    launcher = path.with_name(f'{path.name}.cmd')
+    launcher.write_bytes(
+        f'@"{sys.executable}" "%~dp0{script.name}" %*\r\n'.encode()
+    )
+    return launcher
+
+
+def hand_over(real: str) -> str:
+    """The lines of a fake tool that make it the real tool, with the same
+    arguments. On POSIX the program is replaced by the real tool. Windows has
+    no such call, so the fake waits for the real tool and ends as it does."""
+    if sys.platform == 'win32':
+        return (
+            'import subprocess\n'
+            f'sys.exit(subprocess.call([{real!r}, *sys.argv[1:]]))\n'
+        )
+    return f'os.execv({real!r}, [{real!r}, *sys.argv[1:]])\n'
+
+
 def fake_executable(directory: Path, rules: object = None) -> Path:
     """A script that prints the rules for `--json rules` and fails otherwise."""
     path = directory / 'topology-checker'
     reply = json.dumps(json.dumps(RULES if rules is None else rules))
-    path.write_text(
+    return write_tool(
+        path,
         '#!/usr/bin/env python3\n'
         'import sys\n'
         "if sys.argv[1:] == ['--json', 'rules']:\n"
         f'    print({reply})\n'
         '    sys.exit(0)\n'
         'print(\'{"error": "unsupported"}\', file=sys.stderr)\n'
-        'sys.exit(2)\n'
+        'sys.exit(2)\n',
     )
-    path.chmod(path.stat().st_mode | stat.S_IXUSR)
-    return path
 
 
 def script_executable(
@@ -89,15 +118,14 @@ def script_executable(
     otherwise runs the body."""
     path = directory / name
     reply = json.dumps(json.dumps(RULES if rules is None else rules))
-    path.write_text(
+    return write_tool(
+        path,
         '#!/usr/bin/env python3\n'
         'import sys\n'
         "if sys.argv[1:] == ['--json', 'rules']:\n"
         f'    print({reply})\n'
-        '    sys.exit(0)\n' + body
+        '    sys.exit(0)\n' + body,
     )
-    path.chmod(path.stat().st_mode | stat.S_IXUSR)
-    return path
 
 
 # The algorithms of the provider when the tool lists the two RULES
@@ -146,14 +174,13 @@ def probe_executable(
         if broken
         else f'    print({reply})\n    sys.exit(0)\n'
     )
-    path.write_text(
+    return write_tool(
+        path,
         '#!/usr/bin/env python3\n'
         'import os, sys, time\n'
         "if sys.argv[1:] == ['--json', 'rules']:\n"
-        f'    time.sleep({delay!r})\n' + wait + answer + 'sys.exit(2)\n'
+        f'    time.sleep({delay!r})\n' + wait + answer + 'sys.exit(2)\n',
     )
-    path.chmod(path.stat().st_mode | stat.S_IXUSR)
-    return path
 
 
 def counting_executable(
@@ -164,15 +191,48 @@ def counting_executable(
     real = real_executable()
     assert real is not None, 'set TOPOLOGY_CHECKER'
     path = directory / name
-    path.write_text(
+    return write_tool(
+        path,
         '#!/usr/bin/env python3\n'
         'import os, sys\n'
         f'with open({str(log)!r}, "a") as log:\n'
-        '    log.write(" ".join(sys.argv[1:]) + "\\n")\n'
-        f'os.execv({real!r}, [{real!r}, *sys.argv[1:]])\n'
+        '    log.write(" ".join(sys.argv[1:]) + "\\n")\n' + hand_over(real),
     )
-    path.chmod(path.stat().st_mode | stat.S_IXUSR)
-    return path
+
+
+def measuring_executable(
+    directory: Path, log: Path, name: str = 'topology-checker'
+) -> Path:
+    """The real tool, behind a script that writes to the log file how many
+    bytes of output each call gave, a line for each call."""
+    real = real_executable()
+    assert real is not None, 'set TOPOLOGY_CHECKER'
+    path = directory / name
+    return write_tool(
+        path,
+        '#!/usr/bin/env python3\n'
+        'import subprocess, sys\n'
+        f'command = [{real!r}, *sys.argv[1:]]\n'
+        'done = subprocess.run(command, capture_output=True)\n'
+        f'with open({str(log)!r}, "a") as log:\n'
+        '    words = " ".join(sys.argv[1:])\n'
+        '    log.write(words + " " + str(len(done.stdout)) + "\\n")\n'
+        'sys.stdout.buffer.write(done.stdout)\n'
+        'sys.stderr.buffer.write(done.stderr)\n'
+        'sys.exit(done.returncode)\n',
+    )
+
+
+def output_sizes(log: Path, command: str) -> list[int]:
+    """The bytes of output of each call of a measuring tool with the
+    command."""
+    if not log.exists():
+        return []
+    return [
+        int(line.rsplit(' ', 1)[1])
+        for line in log.read_text().splitlines()
+        if command in line.split()
+    ]
 
 
 def calls(log: Path, command: str) -> list[str]:
@@ -196,8 +256,7 @@ def gated_executable(
         'import os, time\n'
         f'open({str(started)!r}, "w").close()\n'
         f'while not os.path.exists({str(gate)!r}):\n'
-        '    time.sleep(0.02)\n'
-        f'os.execv({real!r}, [{real!r}, *sys.argv[1:]])\n'
+        '    time.sleep(0.02)\n' + hand_over(real)
     )
     return script_executable(directory, body, name)
 

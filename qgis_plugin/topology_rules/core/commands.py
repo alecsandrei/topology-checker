@@ -10,9 +10,11 @@ from ..enums import ExitCode
 from ..exceptions import RunError
 from .binary import Rule
 from .layers import Dataset
-from .runner import Completed, error_message
+from .runner import Completed, error_message, execute
 
 if t.TYPE_CHECKING:
+    from qgis.core import QgsProcessingFeedback
+
     from .._typing import ReportJson
 
 ERROR_LAYERS = ('errors_point', 'errors_line', 'errors_polygon')
@@ -93,12 +95,49 @@ def write_config(
 
 
 def validate_command(
-    executable: str, config: str, tolerance: float | None, output: str
+    executable: str,
+    config: str,
+    tolerance: float | None,
+    output: str,
+    summary: bool = False,
 ) -> list[str]:
+    """The command of a run. With a summary the report leaves out the
+    violations, which are in the output file, and only counts them."""
     command = [executable, '--json', 'validate', config]
+    if summary:
+        command.append('--summary')
     if tolerance is not None:
         command += ['--tolerance', repr(tolerance)]
     return [*command, '-o', output, '--overwrite']
+
+
+# The executables that do not know --summary, which older versions lack
+WITHOUT_SUMMARY: set[str] = set()
+
+
+def run_validate(
+    executable: str,
+    config: str,
+    tolerance: float | None,
+    output: str,
+    feedback: QgsProcessingFeedback,
+) -> Completed:
+    """Runs the rules of a definition and returns the report, asking for no
+    list of the violations where the executable can leave it out."""
+    if executable not in WITHOUT_SUMMARY:
+        completed = execute(
+            validate_command(executable, config, tolerance, output, True),
+            feedback,
+        )
+        known = completed.exit_code != ExitCode.ERROR.value or (
+            '--summary' not in completed.stderr + completed.stdout
+        )
+        if known:
+            return completed
+        WITHOUT_SUMMARY.add(executable)
+    return execute(
+        validate_command(executable, config, tolerance, output), feedback
+    )
 
 
 def utility_command(

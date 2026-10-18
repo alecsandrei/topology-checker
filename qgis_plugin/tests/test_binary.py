@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import collections.abc as c
+import sys
 from pathlib import Path
 
 import pytest
@@ -73,6 +74,7 @@ def test_old_executable_without_layer_kinds_is_rejected(
         binary.rules()
 
 
+@pytest.mark.skipif(sys.platform == 'win32', reason='a shell script')
 def test_failing_executable_reports_its_error(
     tmp_path: Path, configure: c.Callable[[str | Path], None]
 ):

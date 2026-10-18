@@ -14,8 +14,7 @@ from qgis.core import (
 )
 
 from .._typing import Parameters
-from ..core.commands import ERROR_LAYERS, rule_counts, validate_command
-from ..core.runner import execute
+from ..core.commands import ERROR_LAYERS, rule_counts, run_validate
 from ..core.toml import TomlUnavailable, loads
 from ..utils import QgsProcessingException, double_type, not_none
 from .base import (
@@ -161,13 +160,11 @@ class CheckDefinition(SinkAlgorithm):
         ):
             path = str(Path(tmp) / 'errors.gpkg')
             counts = rule_counts(
-                execute(
-                    validate_command(
-                        plan.executable,
-                        str(plan.definition),
-                        plan.tolerance,
-                        path,
-                    ),
+                run_validate(
+                    plan.executable,
+                    str(plan.definition),
+                    plan.tolerance,
+                    path,
                     feedback,
                 )
             )

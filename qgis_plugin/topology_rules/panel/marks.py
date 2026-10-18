@@ -3,7 +3,7 @@ from __future__ import annotations
 import contextlib
 import typing as t
 
-from qgis.core import QgsIconUtils
+from qgis.core import QgsIconUtils, QgsVectorLayer
 from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtGui import QIcon
 from qgis.PyQt.QtWidgets import (
@@ -47,6 +47,23 @@ def layer_text(
     return f'{name} · ' + tr('{count} invalid').format(count=left_out)
 
 
+def listen(
+    layer: QgsVectorLayer,
+    names_changed: t.Callable[[], None],
+    crs_changed: t.Callable[[], None],
+) -> None:
+    """Has the list follow the name and the CRS of a layer."""
+    for signal, slot in (
+        (layer.nameChanged, names_changed),
+        (layer.crsChanged, crs_changed),
+    ):
+        # A connection that is there already raises
+        with contextlib.suppress(TypeError):
+            t.cast(t.Any, signal).connect(
+                slot, Qt.ConnectionType.UniqueConnection
+            )
+
+
 def mark_nodes(
     tree: QTreeWidget,
     entries: list[Entry],
@@ -82,19 +99,14 @@ def mark_nodes(
                 ).format(count=left_out),
             )
         if layer is not None:
-            for signal, slot in (
-                (layer.nameChanged, names_changed),
-                (layer.crsChanged, crs_changed),
-            ):
-                # A connection that is there already raises
-                with contextlib.suppress(TypeError):
-                    t.cast(t.Any, signal).connect(
-                        slot, Qt.ConnectionType.UniqueConnection
-                    )
+            listen(layer, names_changed, crs_changed)
         for row in range(node.childCount()):
             child = not_none(node.child(row))
             other = child.data(0, OTHER)
-            gone = other is not None and project_layer(other) is None
+            second = None if other is None else project_layer(other)
+            gone = other is not None and second is None
+            if second is not None:
+                listen(second, names_changed, crs_changed)
             child.setIcon(0, warning_icon() if gone else QIcon())
             child.setToolTip(
                 0,

@@ -15,7 +15,7 @@ from qgis.PyQt.QtWidgets import QApplication, QLabel
 from topology_rules.core import binary
 from topology_rules.panel.dock import Dock
 
-from .helpers import RULES, line_layer
+from .helpers import RULES, line_layer, write_tool
 
 # The longest that the interface may stand still, and how slow the tool is
 MAX_STALL = 0.2
@@ -25,17 +25,16 @@ SLOW = 1.0
 def slow_tool(directory: Path, seconds: float) -> Path:
     """A tool that takes its time to list its rules."""
     path = directory / 'topology-checker'
-    path.write_text(
+    return write_tool(
+        path,
         '#!/usr/bin/env python3\n'
         'import sys, time\n'
         "if sys.argv[1:] == ['--json', 'rules']:\n"
         f'    time.sleep({seconds})\n'
         f'    print({json.dumps(json.dumps(RULES))})\n'
         '    sys.exit(0)\n'
-        'sys.exit(2)\n'
+        'sys.exit(2)\n',
     )
-    path.chmod(0o755)
-    return path
 
 
 @pytest.fixture

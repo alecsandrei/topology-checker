@@ -17,6 +17,7 @@ from qgis.core import (
 
 from ..exceptions import RunError
 from ..utils import not_none
+from .binary import readable_extensions
 
 # Formats with several layers per file, which need the layer name. Their
 # feature ids are the ones QGIS shows, unlike those of other formats
@@ -168,7 +169,15 @@ def plain_dataset(layer: QgsVectorLayer) -> Dataset | None:
     parts = uri_parts(layer)
     if parts.get('vsiPrefix') or parts.get('vsiSuffix') or '/vsi' in path:
         return None
-    if Path(path).suffix.lower() in CONTAINERS:
+    suffix = Path(path).suffix.lower()
+    # The tool reads some formats only, and no layer of a file but the
+    # first: a KML file is several layers to QGIS, one to the tool
+    if suffix.lstrip('.') not in readable_extensions() or suffix in {
+        '.kml',
+        '.kmz',
+    }:
+        return None
+    if suffix in CONTAINERS:
         name = parts.get('layerName')
         return Dataset(path, str(name)) if name else None
     return Dataset(path)

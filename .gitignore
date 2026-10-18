@@ -18,6 +18,7 @@ assets/
 /qgis_plugin/.pytest_cache/
 /qgis_plugin/.ruff_cache/
 /qgis_plugin/.qgis-settings/
+/qgis_plugin/symbology-style.db
 System Volume Information
 builds
 *.zip

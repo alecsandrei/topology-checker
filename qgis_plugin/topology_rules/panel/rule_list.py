@@ -162,6 +162,8 @@ class RuleList(QWidget):
             self.rename_nodes()
         finally:
             self.filling = False
+        # The project keeps the names
+        self.changed.emit()
 
     def rename_nodes(self) -> None:
         for entry in self.entries:

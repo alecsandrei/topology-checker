@@ -1,11 +1,18 @@
 from __future__ import annotations
 
 import collections.abc as c
-import os
 import typing as t
 from pathlib import Path
 
-from qgis.core import Qgis, QgsProject, QgsVectorFileWriter, QgsVectorLayer
+from qgis.core import (
+    Qgis,
+    QgsCoordinateReferenceSystem,
+    QgsCoordinateTransform,
+    QgsProject,
+    QgsRectangle,
+    QgsVectorFileWriter,
+    QgsVectorLayer,
+)
 from qgis.PyQt.QtWidgets import QFileDialog, QMessageBox
 
 from ..core.commands import Check, write_config
@@ -24,6 +31,9 @@ from .messages import SECONDS
 
 if t.TYPE_CHECKING:
     from .dock import Dock
+
+# The part of the map that is visible, and its CRS
+Area = tuple[QgsRectangle, QgsCoordinateReferenceSystem]
 
 
 def export_rules(dock: Dock, path: Path) -> None:
@@ -47,6 +57,7 @@ def export_rules(dock: Dock, path: Path) -> None:
             Path(path),
             dock.selected_only.isChecked(),
             overwrite,
+            visible_extent(dock) if dock.extent_only.isChecked() else None,
         )
     except DefinitionError as error:
         dock.warn(str(error))
@@ -61,6 +72,12 @@ def export_rules(dock: Dock, path: Path) -> None:
             Qgis.MessageLevel.Info,
             SECONDS,
         )
+
+
+def visible_extent(dock: Dock) -> Area:
+    """The area of the map canvas, with its CRS."""
+    canvas = not_none(dock.iface.mapCanvas())
+    return canvas.extent(), canvas.mapSettings().destinationCrs()
 
 
 def import_rules(dock: Dock, path: Path) -> None:
@@ -121,14 +138,31 @@ def data_path(config: Path) -> Path:
     return config.with_name(f'{config.stem}_data.gpkg')
 
 
-def why_saved(layer: QgsVectorLayer, readable: bool) -> str:
+def layer_area(layer: QgsVectorLayer, extent: Area) -> QgsRectangle:
+    """The area in the CRS of the layer."""
+    area, crs = extent
+    if crs.isValid() and layer.crs().isValid() and crs != layer.crs():
+        return QgsCoordinateTransform(
+            crs, layer.crs(), not_none(QgsProject.instance())
+        ).transformBoundingBox(area)
+    return area
+
+
+def why_saved(
+    layer: QgsVectorLayer, readable: bool, selected: bool = True
+) -> str:
     """Why a layer is saved in the GeoPackage and not read where it is."""
     if readable:
-        return tr('selection')
+        return tr('selection') if selected else tr('visible extent')
     if layer.subsetString():
         return tr('filter')
     if layer.isEditable() and layer.isModified():
         return tr('unsaved edits')
+    if (
+        layer.providerType() == 'ogr'
+        and Path(uri_parts(layer).get('path') or '').is_file()
+    ):
+        return tr('format')
     return tr('temporary layer')
 
 
@@ -166,6 +200,7 @@ def write_layer(
     first: bool,
     selected: bool = False,
     attributes: bool = False,
+    area: QgsRectangle | None = None,
 ) -> None:
     """Writes a layer to the GeoPackage as a table of the name, in a new
     file if it is the first."""
@@ -174,8 +209,12 @@ def write_layer(
     options.fileEncoding = 'UTF-8'
     options.layerName = name
     options.skipAttributeCreation = not attributes
+    if not layer.crs().isValid():
+        options.layerOptions = ['SRID=-1']
     # Without a selection, nothing: the panel checks nothing there
     options.onlySelectedFeatures = selected
+    if area is not None:
+        options.filterExtent = area
     options.actionOnExistingFile = (
         QgsVectorFileWriter.ActionOnExistingFile.CreateOrOverwriteFile
         if first
@@ -192,47 +231,30 @@ def write_layer(
 
 
 def save_layers(
-    items: c.Sequence[tuple[QgsVectorLayer, bool]], path: Path
+    items: c.Sequence[tuple[QgsVectorLayer, bool, QgsRectangle | None]],
+    path: Path,
 ) -> list[Dataset]:
     """Writes the layers as they are in the project to a GeoPackage, one
     table each, with only the selected features for the ones marked so, and
     returns where each one is.
 
-    The file is made beside the old one and put in its place when it is
-    whole, so that a failure leaves the old one. It has the tables that
-    layers of the project read from the old file, as they were: what is
-    written, a layer with unsaved edits or a view of one, never takes the
-    name of one of them.
+    A GeoPackage that is there is added to and not replaced, as layers of
+    the project may have it open. The tables that layers read are never
+    written over, whatever is done to the layer (edits, a filter, a
+    selection): the layer is written under a name that is not theirs.
     """
     found: list[Dataset] = []
-    kept = list(tables_read(path)) if has_layers(path) else []
-    taken: set[str] = set(kept)
-    partial = path.with_name(f'.{path.stem}.partial.gpkg')
-    partial.unlink(missing_ok=True)
-    try:
-        first = True
-        for table in kept:
-            old = QgsVectorLayer(f'{path}|layername={table}', table, 'ogr')
-            if old.isValid():
-                write_layer(old, partial, table, first, attributes=True)
-                first = False
-        for layer, selected in items:
-            name, index = layer.name(), 1
-            while name in taken:
-                index += 1
-                name = f'{layer.name()}_{index}'
-            taken.add(name)
-            write_layer(layer, partial, name, first, selected)
-            first = False
-            found.append(Dataset(str(path), name))
-        try:
-            os.replace(partial, path)
-        except OSError as error:
-            raise DefinitionError(
-                f'Could not replace {path.name}: {error.strerror}'
-            ) from error
-    finally:
-        partial.unlink(missing_ok=True)
+    adding = has_layers(path)
+    taken: set[str] = set(tables_read(path)) if adding else set()
+    for layer, selected, area in items:
+        name, index = layer.name(), 1
+        while name in taken:
+            index += 1
+            name = f'{layer.name()}_{index}'
+        taken.add(name)
+        write_layer(layer, path, name, not adding, selected, area=area)
+        adding = True
+        found.append(Dataset(str(path), name))
     return found
 
 
@@ -242,19 +264,21 @@ def export_definition(
     path: Path,
     selected: bool = False,
     overwrite: c.Callable[[Path], bool] = lambda _: True,
+    extent: Area | None = None,
 ) -> dict[str, str]:
     """Writes the checked rules as a topology.toml, which the command line
     also runs, and returns why each layer that is not a file of its own was
     saved in a GeoPackage next to it, by name. Nothing is written if a layer
     is gone from the project.
 
-    As in the panel, the selection limits the layer that a rule checks and
-    not the layer it checks it against."""
+    As in the panel, the selection and the extent limit the layer that a rule
+    checks and not the layer it checks it against."""
     checked = [entry for entry in entries if entry.checked]
     if not checked:
         raise DefinitionError('Check at least one rule to export.')
     # Each layer with what is asked of it: the selection, or the whole
-    wanted = [((entry.layer, selected), entry.layer_name) for entry in checked]
+    limit = selected or extent is not None
+    wanted = [((entry.layer, limit), entry.layer_name) for entry in checked]
     wanted += [
         ((entry.other, False), entry.other_name)
         for entry in checked
@@ -289,17 +313,25 @@ def export_definition(
         if data.exists() and not overwrite(data):
             raise DefinitionError('Export canceled.')
         written = save_layers(
-            [(layer, key[1]) for key, layer in unreadable.items()], data
+            [
+                (
+                    layer,
+                    key[1] and selected,
+                    layer_area(layer, extent) if key[1] and extent else None,
+                )
+                for key, layer in unreadable.items()
+            ],
+            data,
         )
         datasets.update(zip(unreadable, written, strict=True))
         saved = {
-            layer.name(): why_saved(layer, key in readable)
+            layer.name(): why_saved(layer, key in readable, selected)
             for key, layer in unreadable.items()
         }
     checks = [
         Check(
             entry.rule,
-            datasets[(entry.layer, selected)],
+            datasets[(entry.layer, limit)],
             datasets[(entry.other, False)] if entry.other else None,
         )
         for entry in checked

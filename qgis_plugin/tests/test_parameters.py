@@ -86,7 +86,10 @@ def test_the_tolerance_joins_a_small_gap():
     assert counts == [4, 2]
 
 
-@pytest.mark.skipif(os.geteuid() == 0, reason='root can write anywhere')
+@pytest.mark.skipif(
+    os.name == 'nt' or os.geteuid() == 0,
+    reason='needs a folder that refuses, which root can write to',
+)
 def test_a_sink_in_a_folder_that_cannot_be_written(tmp_path: Path):
     layer = memory_chain()
     folder = tmp_path / 'locked'

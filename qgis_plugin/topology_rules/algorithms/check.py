@@ -196,6 +196,10 @@ class CheckRulesAlgorithm(Planned):
         self.check_prepared()
         plan = not_none(self.plan)
         with failures():
+            # A run that finds nothing writes nothing: the file of an earlier
+            # run would be taken for its errors
+            for suffix in ('', '-wal', '-shm'):
+                Path(plan.output + suffix).unlink(missing_ok=True)
             with scratch() as tmp:
                 outcome = run_jobs(
                     plan.jobs,

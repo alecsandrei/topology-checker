@@ -5,6 +5,7 @@ from __future__ import annotations
 import collections.abc as c
 import os
 import signal
+import sys
 import time
 import types
 from pathlib import Path
@@ -15,6 +16,13 @@ from topology_rules.core import binary
 from topology_rules.exceptions import ExecutableError
 
 from .helpers import RULES, fake_executable
+
+# Programs that are shell scripts, an alarm signal and the descriptors of a
+# terminal: the cases are about POSIX programs. The runner flags of Windows
+# are tested in test_windows
+pytestmark = pytest.mark.skipif(
+    sys.platform == 'win32', reason='shell scripts and POSIX signals'
+)
 
 DEADLINE_SECONDS = 20
 

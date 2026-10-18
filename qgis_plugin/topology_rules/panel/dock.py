@@ -282,6 +282,7 @@ class Dock(QgsDockWidget):
         """Starts over: the rules were about layers of the old project, and
         a run for them has nothing to show."""
         controller.abandon(self)
+        self.state.pending = None
         self.results.ignored.clear()
         self.results.clear()
         self.set_error_count(0)

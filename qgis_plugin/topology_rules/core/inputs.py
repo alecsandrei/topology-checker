@@ -160,6 +160,10 @@ def export_dataset(
     options.driverName = 'GPKG'
     options.fileEncoding = 'UTF-8'
     options.layerName = stem
+    if not crs.isValid():
+        # A layer without a CRS is one in no CRS, which the tool reads as
+        # such, and not one in an "undefined" CRS, which it cannot parse
+        options.layerOptions = ['SRID=-1']
     # The tool reads geometries, and an attribute such as `fid` can clash
     writer = QgsVectorFileWriter.create(
         str(path),

@@ -71,3 +71,28 @@ def test_the_rules_of_a_project_survive_a_change_made_while_the_tool_is_missing(
     assert QgsProject.instance().read(str(second))
     assert queue_column(dock, 1) == ['roads']
     assert kept(dock)
+
+
+def test_a_new_project_does_not_get_the_rules_the_old_one_was_waiting_with(
+    dock: Dock,
+    tmp_path: Path,
+    configure: c.Callable[[str | Path], None],
+    executable: str,
+):
+    (tmp_path / 'data').mkdir()
+    layer = saved_layer(tmp_path / 'data', CHAIN, 'roads')
+    QgsProject.instance().addMapLayer(layer)
+    add(dock, DANGLES, layer)
+    saved = tmp_path / 'saved.qgz'
+    assert QgsProject.instance().write(str(saved))
+    QgsProject.instance().clear()
+    configure(tmp_path / 'gone')
+    dock.refresh()
+    # The rules wait for a tool to name them
+    assert QgsProject.instance().read(str(saved))
+    # File > New: a project that was not read
+    QgsProject.instance().clear()
+    configure(executable)
+    dock.refresh()
+    wait_for(lambda: dock.available)
+    assert dock.entries == []

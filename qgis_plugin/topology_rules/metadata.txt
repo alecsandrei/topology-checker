@@ -3,7 +3,7 @@ name=Topology Rules
 qgisMinimumVersion=3.34
 qgisMaximumVersion=4.99
 description=Check vector layers for topology errors such as dangles, gaps, overlaps and duplicate points
-about=Topology Rules adds the rules of the topology-checker command line tool to the Processing toolbox and to a dock panel, where several rules can be queued, run in one pass and browsed by the errors found. The rules cover points, lines and polygons, on one layer or two. Errors are added to the project as layers. The plugin does not include the tool: install it with "cargo install topology-checker --locked" or download a release from the repository, then choose it in the panel, set its path under Settings > Options > Processing > Providers > Topology Rules, or put it on the PATH.
+about=Topology Rules adds the rules of the topology-checker command line tool to the Processing toolbox and to a dock panel, where several rules can be queued, run in one pass and browsed by the errors found. The rules cover points, lines and polygons, on one layer or two. Errors are added to the project as layers. The plugin does not include the tool: install topology-checker 0.2.0 or newer with "cargo install topology-checker --locked" or download a release from the repository, then choose it in the panel, set its path under Settings > Options > Processing > Providers > Topology Rules, or put it on the PATH.
 author=Cuvuliuc Alex-Andrei
 email=cuvuliucalexandrei@gmail.com
 hasProcessingProvider=yes
@@ -12,7 +12,7 @@ supportsQt6=True
 
 # Done automatically by qgis-plugin-ci
 changelog=Rules are queued in a panel and run in one pass; errors are a tree with zoom, selection and a map filter; rules are exported to and imported from a topology.toml and saved with the project; invalid geometries are reported.
-version=master
+version=0.2.0
 commitNumber=
 commitSha1=
 dateTime=

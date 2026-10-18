@@ -233,3 +233,42 @@ def test_the_rules_exported_with_unsaved_edits_check_the_edits(
     layer = QgsProject.instance().mapLayer(entry.layer)
     assert isinstance(layer, QgsVectorLayer)
     assert layer.featureCount() == COUNT + 1
+
+
+# The file is changed where it is: layers of the project read it
+
+
+def identity(path: Path) -> tuple[int, int]:
+    """Who a file is: replacing it by another file with the same name
+    changes this."""
+    found = path.stat()
+    return found.st_dev, found.st_ino
+
+
+def test_a_second_export_changes_the_data_file_where_it_is(
+    dock: Dock, imported: Path, tmp_path: Path
+):
+    data = tmp_path / 'topology_data.gpkg'
+    before = identity(data)
+    export_again(dock, imported)
+    assert identity(data) == before
+
+
+def test_the_layer_of_the_data_file_reads_the_same_file_after_a_second_export(
+    dock: Dock, imported: Path, tmp_path: Path
+):
+    layer = scratch_layer()
+    source = layer.source()
+    export_again(dock, imported)
+    assert layer.source() == source
+    assert layer.isValid()
+    assert sum(1 for _ in layer.getFeatures()) == COUNT
+
+
+def test_the_new_layer_is_added_to_the_data_file_beside_the_old_one(
+    dock: Dock, imported: Path, tmp_path: Path
+):
+    export_again(dock, imported)
+    data = tmp_path / 'topology_data.gpkg'
+    assert stored(data, 'scratch').featureCount() == COUNT
+    assert stored(data, 'extra').featureCount() == COUNT

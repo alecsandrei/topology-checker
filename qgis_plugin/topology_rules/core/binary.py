@@ -150,7 +150,14 @@ def known(entry: RuleJson) -> bool:
     )
 
 
-def parse_rules(text: str) -> tuple[Rule, ...]:
+# What to do about an executable that cannot be used
+CHOOSE = (
+    "Choose a newer build with 'Choose topology-checker…' or under "
+    'Settings > Options > Processing > Providers > Topology Rules.'
+)
+
+
+def parse_rules(text: str, path: str = '') -> tuple[Rule, ...]:
     """Reads the output of `topology-checker --json rules`."""
     try:
         entries = t.cast('list[RuleJson]', json.loads(text))
@@ -168,11 +175,20 @@ def parse_rules(text: str) -> tuple[Rule, ...]:
         )
     except (ValueError, KeyError, TypeError) as error:
         raise ExecutableError(
-            'This topology-checker is too old for the plugin. Update it.'
+            f'{who(path)} is too old for the plugin, which needs '
+            'topology-checker 0.2.0 or newer: it does not list the layers '
+            f'each rule needs. {CHOOSE}'
         ) from error
     if not rules:
-        raise ExecutableError('This topology-checker lists no rules.')
+        raise ExecutableError(f'{who(path)} lists no rules. {CHOOSE}')
     return rules
+
+
+def who(path: str) -> str:
+    """The executable, by its path where it is known."""
+    return (
+        f'The topology-checker at {path}' if path else 'This topology-checker'
+    )
 
 
 class Probe:
@@ -185,6 +201,8 @@ class Probe:
 
     def __init__(self) -> None:
         self.done: dict[tuple[str, int], tuple[Rule, ...]] = {}
+        # The file extensions that each version reads, asked with the rules
+        self.readable: dict[tuple[str, int], frozenset[str]] = {}
         # The versions that are being asked, for a second request to share
         self.pending: dict[tuple[str, int], Future[tuple[Rule, ...]]] = {}
         # The answers are read on the main thread and written by the thread
@@ -216,27 +234,68 @@ class Probe:
             del self.pending[key]
             # A few versions are enough, as the path changes by hand
             while len(self.done) > MAX_VERSIONS:
-                del self.done[next(iter(self.done))]
+                gone = next(iter(self.done))
+                del self.done[gone]
+                self.readable.pop(gone, None)
         future.set_result(found)
+        # The formats are asked on the side: they are not needed to list the
+        # rules, and a tool that is slow to answer must not hold them up
+        threading.Thread(
+            target=self.learn_formats, args=(key,), daemon=True
+        ).start()
         return found
+
+    def learn_formats(self, key: tuple[str, int]) -> None:
+        formats = self.ask_formats(key[0])
+        with self.lock:
+            if formats is not None and key in self.done:
+                self.readable[key] = formats
 
     def peek(self, path: str, modified: int) -> tuple[Rule, ...] | None:
         with self.lock:
             return self.done.get((path, modified))
 
+    def formats(self, path: str, modified: int) -> frozenset[str] | None:
+        with self.lock:
+            return self.readable.get((path, modified))
+
     def cache_clear(self) -> None:
         with self.lock:
             self.done.clear()
+            self.readable.clear()
+
+    @staticmethod
+    def ask_formats(path: str) -> frozenset[str] | None:
+        """The extensions of the files that the executable reads, or none if
+        it does not say."""
+        try:
+            completed = run(
+                [path, '--json', 'drivers', '--read'], timeout=PROBE_TIMEOUT
+            )
+            if completed.exit_code != ExitCode.VALID.value:
+                return None
+            found = json.loads(completed.stdout)
+            return frozenset(
+                str(extension).lower().lstrip('.')
+                for driver in found
+                if driver.get('read')
+                for extension in driver.get('extensions', [])
+            )
+        except (RunError, ValueError, AttributeError, TypeError):
+            return None
 
     @staticmethod
     def ask(path: str) -> tuple[Rule, ...]:
         try:
             completed = run([path, '--json', 'rules'], timeout=PROBE_TIMEOUT)
         except RunError as error:
-            raise ExecutableError(str(error)) from error
+            raise ExecutableError(f'{error} {CHOOSE}') from error
         if completed.exit_code != ExitCode.VALID.value:
-            raise ExecutableError(error_message(completed))
-        return parse_rules(completed.stdout)
+            raise ExecutableError(
+                f'{who(path)} does not work: '
+                f'{error_message(completed)} {CHOOSE}'
+            )
+        return parse_rules(completed.stdout, path)
 
 
 _rules = Probe()
@@ -258,6 +317,34 @@ def locate() -> tuple[str, int]:
     except OSError as error:
         raise ExecutableError(f'Could not read {path}: {error}') from error
     return str(path), modified
+
+
+# What the executable reads when it was not asked: the formats it has of its
+# own
+NATIVE_EXTENSIONS = frozenset(
+    {
+        'shp',
+        'fgb',
+        'gpkg',
+        'gpx',
+        'geojson',
+        'json',
+        'parquet',
+        'geoparquet',
+        'kml',
+        'kmz',
+    }
+)
+
+
+def readable_extensions() -> frozenset[str]:
+    """The extensions of the files the executable reads, for the main
+    thread."""
+    try:
+        path, modified = locate()
+    except ExecutableError:
+        return NATIVE_EXTENSIONS
+    return _rules.formats(path, modified) or NATIVE_EXTENSIONS
 
 
 def rules() -> tuple[Rule, ...]:
