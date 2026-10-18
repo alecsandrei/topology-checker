@@ -24,6 +24,7 @@
   <a href="https://alecsandrei.github.io/topology-checker/stable/cli/">CLI</a> ·
   <a href="https://alecsandrei.github.io/topology-checker/stable/rules/">Rules</a> ·
   <a href="https://alecsandrei.github.io/topology-checker/stable/web-app/">Web app</a> ·
+  <a href="https://alecsandrei.github.io/topology-checker/stable/qgis-plugin/">QGIS plugin</a> ·
   <a href="https://alecsandrei.github.io/topology-checker/stable/rustgis-plugin/">RustGIS plugin</a> ·
   <a href="https://alecsandrei.github.io/topology-checker/stable/python-usage/">Python usage</a> ·
   <a href="https://alecsandrei.github.io/topology-checker/stable/python-api/">Python API</a> ·
@@ -32,7 +33,7 @@
 
 # topology-checker
 
-topology-checker checks map data for duplicate points, gaps, overlaps, and disconnected lines. Use it with Python, the command line, the local web app, or as a [RustGIS](https://github.com/opengeos/RustGIS) plugin.
+topology-checker checks map data for duplicate points, gaps, overlaps, and disconnected lines. Use it with Python, the command line, the local web app, or as a [QGIS](https://alecsandrei.github.io/topology-checker/stable/qgis-plugin/) or [RustGIS](https://github.com/opengeos/RustGIS) plugin.
 
 ![Validation time for topology-checker, QGIS 4.2, GRASS GIS, PostGIS and gvSIG](benchmarks/gis/results/comparison.png)
 
@@ -117,9 +118,9 @@ other = "addresses"
 topology-checker --json validate topology.toml -o errors.gpkg
 ```
 
-## QGIS
+## QGIS plugin
 
-The Topology Rules plugin adds every rule to the Processing toolbox and a panel where you queue several rules, run them in one pass and browse the errors. It runs the CLI (0.2.0 or newer), so install that first. See [Install](https://alecsandrei.github.io/topology-checker/stable/install/).
+The Topology Rules plugin adds a Processing tool for each rule and a panel where you queue several rules, run them in one pass and browse the errors. It runs the CLI (0.2.0 or newer), so install that first, then the plugin in **Plugins > Manage and Install Plugins** with experimental plugins shown. See [QGIS plugin](https://alecsandrei.github.io/topology-checker/stable/qgis-plugin/).
 
 ### Plugin development
 

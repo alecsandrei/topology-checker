@@ -7,6 +7,7 @@
 - [CLI](cli.md): commands, `topology.toml`, tolerance, output files
 - [Rules](rules.md): all 38 rules
 - [Web app](web-app.md)
+- [QGIS plugin](qgis-plugin.md): the panel, Processing tools, tolerance
 - [RustGIS plugin](rustgis-plugin.md): install from a file, a tool for each of the 38 rules, tolerance
 - [Python usage](python-usage.md)
 - [Python API](python-api.md)
