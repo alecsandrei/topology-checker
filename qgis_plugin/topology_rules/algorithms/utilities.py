@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import collections.abc as c
+import contextlib
 import dataclasses
 import typing as t
 from pathlib import Path
@@ -29,6 +30,7 @@ from .base import (
     Planned,
     executable_path,
     failures,
+    memory_copy,
     refuse_overwrite,
     release_files,
     scratch,
@@ -130,6 +132,7 @@ class UtilityAlgorithm(Planned):
         with (
             failures(),
             scratch() as tmp,
+            contextlib.ExitStack() as stack,
         ):
             output = str(Path(tmp) / 'output.gpkg')
             found = prepare(plan.item, Path(tmp), None, context, feedback)
@@ -165,7 +168,8 @@ class UtilityAlgorithm(Planned):
                 )
             if completed.exit_code != 0:
                 raise QgsProcessingException(error_message(completed))
-            result = QgsVectorLayer(output, 'output', 'ogr')
+            copy = stack.enter_context(memory_copy(output))
+            result = QgsVectorLayer(copy, 'output', 'ogr')
             try:
                 if not result.isValid():
                     raise QgsProcessingException('The tool wrote no output')

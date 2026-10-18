@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import collections.abc as c
 import contextlib
+import importlib
 import tempfile
+import uuid
 from pathlib import Path
 
 from qgis.core import (
@@ -97,6 +99,25 @@ def refuse_overwrite(
         outputs,
         (item.path for item in inputs if item is not None and item.path),
     )
+
+
+@contextlib.contextmanager
+def memory_copy(path: str) -> c.Iterator[str]:
+    """The source of a layer on a file that the tool wrote in the folder of a
+    run: a copy in memory, so that QGIS never opens the file. QGIS keeps a
+    file it opened open for a while after the layer is gone, which on Windows
+    stops the folder from being removed."""
+    if not Path(path).is_file():
+        yield path
+        return
+    # Not typed by every set of stubs, and the same module that QGIS uses
+    gdal = importlib.import_module('osgeo.gdal')
+    name = f'/vsimem/topology-{uuid.uuid4().hex}{Path(path).suffix}'
+    gdal.FileFromMemBuffer(name, Path(path).read_bytes())
+    try:
+        yield name
+    finally:
+        gdal.Unlink(name)
 
 
 def release_files(files: c.Iterable[str]) -> None:

@@ -48,8 +48,12 @@ def test_a_fake_tool_on_windows_leaves_no_file_with_the_name_of_the_tool(
     assert not (tmp_path / 'tool').exists()
 
 
-def test_a_fake_tool_hands_over_to_the_real_tool_by_exec_where_that_exists():
-    assert hand_over('/real').startswith("os.execv('/real'")
+def test_a_fake_tool_hands_over_to_the_real_tool_in_the_way_of_the_system():
+    lines = hand_over('/real')
+    if sys.platform == 'win32':
+        assert 'subprocess.call' in lines
+    else:
+        assert lines.startswith("os.execv('/real'")
 
 
 def test_a_fake_tool_on_windows_waits_for_the_real_tool_and_ends_as_it_does(

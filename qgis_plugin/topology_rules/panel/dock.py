@@ -31,6 +31,7 @@ from . import controller, exchange, startup
 from .entries import Entry
 from .icons import icon
 from .messages import RunFeedback
+from .narrow import shrink_buttons, shrink_tabs
 from .results import ResultsPanel
 from .rules_page import RulesPage
 from .setup import SetupPage
@@ -100,6 +101,8 @@ class Dock(QgsDockWidget):
         self.progress.hide()
 
         self.tabs = QTabWidget()
+        shrink_tabs(self.tabs)
+        shrink_buttons(self.run_button)
         self.tabs.addTab(self.rules_page, tr('Rules'))
         self.tabs.addTab(self.results, tr('Errors'))
         layout = QVBoxLayout()

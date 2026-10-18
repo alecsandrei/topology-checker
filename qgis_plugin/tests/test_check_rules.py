@@ -11,7 +11,7 @@ from qgis.core import QgsFeature, QgsGeometry, QgsProject, QgsVectorLayer
 from topology_rules.algorithms.rule import COUNT
 
 from .helpers import (
-    VANISHING,
+    files_stay_open,
     line_layer,
     point_layer,
     remove_files,
@@ -82,8 +82,9 @@ def test_a_layer_that_is_gone_is_refused(tmp_path: Path):
     assert 'gone' in ran.log
 
 
+@files_stay_open
 def test_a_layer_whose_file_vanished_is_refused(tmp_path: Path):
-    layer = saved(tmp_path, *CHAIN, driver=VANISHING)
+    layer = saved(tmp_path, *CHAIN)
     remove_files(tmp_path, 'roads')
     ran = check(tmp_path, entry(DANGLES, layer))
     assert not ran.ok

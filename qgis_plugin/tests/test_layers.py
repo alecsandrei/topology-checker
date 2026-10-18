@@ -16,7 +16,7 @@ from topology_rules.core.inputs import prepare
 from topology_rules.core.layers import Dataset, Input, file_dataset
 from topology_rules.exceptions import RunError
 
-from .helpers import VANISHING, line_layer, remove_files, save
+from .helpers import files_stay_open, line_layer, remove_files, save
 
 LINE = 'LINESTRING(0 0, 1 1)'
 
@@ -25,15 +25,6 @@ def geopackage_layer(tmp_path: Path) -> QgsVectorLayer:
     path = tmp_path / 'data.gpkg'
     save(line_layer(LINE), path, 'GPKG', 'roads')
     return QgsVectorLayer(f'{path}|layername=roads', 'roads', 'ogr')
-
-
-def layer_that_can_vanish(tmp_path: Path) -> QgsVectorLayer:
-    """A layer of a file that a test can delete, as Windows allows it."""
-    if VANISHING == 'GPKG':
-        return geopackage_layer(tmp_path)
-    path = tmp_path / 'data.geojson'
-    save(line_layer(LINE), path, VANISHING, 'roads')
-    return QgsVectorLayer(str(path), 'roads', 'ogr')
 
 
 def run_prepare(
@@ -159,8 +150,9 @@ def test_an_invalid_layer_is_refused(tmp_path: Path):
         run_prepare(Input('gone', layer, layer), tmp_path)
 
 
+@files_stay_open
 def test_a_layer_whose_file_is_gone_is_refused(tmp_path: Path):
-    layer = layer_that_can_vanish(tmp_path)
+    layer = geopackage_layer(tmp_path)
     remove_files(tmp_path, 'data')
     with pytest.raises(RunError, match='gone'):
         run_prepare(Input('roads', layer, layer), tmp_path)

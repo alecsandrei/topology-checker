@@ -20,6 +20,7 @@ from .entries import Entry, project_layer, unit_of
 from .hint import Hint
 from .icons import decorate
 from .marks import ENTRY, LAYER, OTHER, layer_text, mark_nodes, tip, tr
+from .narrow import shrink_buttons
 from .wrapping import wrap_long_text
 
 COLUMNS = ('Rule', 'Errors')
@@ -73,6 +74,7 @@ class RuleList(QWidget):
         decorate(
             self.clear_button, 'clear', tr('Take all the rules off the list')
         )
+        shrink_buttons(self.remove_button, self.clear_button)
         buttons = QHBoxLayout()
         buttons.addWidget(self.remove_button)
         buttons.addWidget(self.clear_button)

@@ -14,7 +14,7 @@ import typing as t
 import pytest
 from qgis.core import QgsProject
 from qgis.PyQt.QtCore import QModelIndex, QRect, Qt
-from qgis.PyQt.QtWidgets import QApplication, QStyle, QTreeView
+from qgis.PyQt.QtWidgets import QApplication, QStyle, QTreeView, QWidget
 
 from topology_rules.panel.dock import Dock
 
@@ -27,6 +27,9 @@ CHAIN = ('LINESTRING(0 0, 10 0)', 'LINESTRING(10 0, 20 0)')
 LONG_NAME = 'Northern district road network of Cluj A'
 WIDER_NAME = f'{LONG_NAME} and the county roads of Alba'
 VIEWS = ['rules_tree', 'results_view']
+# Widgets whose smallest width is more than this are reported when a dock is
+# wider than it was told to be
+NARROW = 250
 # The pixels that the room of a text may be wrong by
 SLACK = 10
 # An int in Qt5 and a flag in Qt6
@@ -53,6 +56,28 @@ def narrow(dock: Dock) -> Dock:
     dock.show()
     QApplication.processEvents()
     return dock
+
+
+def what_forces_the_width(dock: Dock) -> str:
+    """Why a dock is wider than it was told to be: the widgets in it whose
+    smallest width is large, and the font that sets their size. A dock cannot
+    be narrower than the widest of what it holds."""
+    lines = [
+        f'{dock.width()} px wide, the smallest it can be is '
+        f'{dock.minimumSizeHint().width()} px (minimum width '
+        f'{dock.minimumWidth()}), font {dock.font().family()!r} at '
+        f'{dock.font().pointSizeF()} pt, {dock.logicalDpiX()} dpi'
+    ]
+    for widget in dock.findChildren(QWidget):
+        smallest = widget.minimumSizeHint().width()
+        if widget.isVisibleTo(dock) and smallest > NARROW:
+            text = widget.text() if hasattr(widget, 'text') else ''
+            lines.append(
+                f'{type(widget).__name__} {widget.objectName()!r} '
+                f'{str(text)[:40]!r}: smallest width {smallest} px, '
+                f'now {widget.width()} px'
+            )
+    return '\n'.join(lines)
 
 
 def show_view(dock: Dock, name: str) -> QTreeView:
@@ -162,7 +187,7 @@ def test_the_lists_have_the_long_names(narrow: Dock, name: str):
 @pytest.mark.parametrize('name', VIEWS)
 def test_the_dock_is_300_px_wide(narrow: Dock, name: str):
     show_view(narrow, name)
-    assert narrow.width() == 300
+    assert narrow.width() == 300, what_forces_the_width(narrow)
 
 
 # Nothing is elided

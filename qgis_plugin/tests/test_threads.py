@@ -185,10 +185,14 @@ def test_a_run_uses_the_executable_set_just_before_it_starts(
     second = marker(tmp_path, 'tool-second')
     configure(first)
     refresh_to_fake_tool(provider)
-    before = RUNS[kind](tmp_path)
+    # A folder for each run, as Windows does not replace the file of a layer
+    # that is loaded, and the layer of the first run is
+    (tmp_path / 'first').mkdir()
+    (tmp_path / 'second').mkdir()
+    before = RUNS[kind](tmp_path / 'first')
     assert 'tool-first' in before.log
     configure(second)
-    after = RUNS[kind](tmp_path)
+    after = RUNS[kind](tmp_path / 'second')
     assert 'tool-second' in after.log
     assert 'tool-first' not in after.log
 

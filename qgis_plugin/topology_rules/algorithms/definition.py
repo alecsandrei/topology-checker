@@ -22,6 +22,7 @@ from .base import (
     TOLERANCE,
     executable_path,
     failures,
+    memory_copy,
     refuse_files,
     scratch,
     tolerance_of,
@@ -168,14 +169,15 @@ class CheckDefinition(SinkAlgorithm):
                     feedback,
                 )
             )
-            results = self.write_sinks(
-                parameters,
-                context,
-                errors_crs(path),
-                path,
-                {},
-                [],
-                plan.definition.stem,
-            )
+            with memory_copy(path) as source:
+                results = self.write_sinks(
+                    parameters,
+                    context,
+                    errors_crs(source),
+                    source,
+                    {},
+                    [],
+                    plan.definition.stem,
+                )
         feedback.pushInfo(f'{sum(counts)} topology errors')
         return {**results, COUNT: sum(counts)}
