@@ -1,6 +1,6 @@
 [project]
 name = "topology-rules-qgis"
-version = "0.2.0"
+version = "0.2.1"
 description = "QGIS plugin for the topology-checker command line tool"
 license = "MIT"
 requires-python = ">=3.12"
@@ -13,6 +13,7 @@ dev = [
 ]
 lint = [
     "bandit>=1.9.4",
+    "detect-secrets>=1.5.0",
     "pyqt5-stubs>=5.15.6.0",
     "pyright[nodejs]>=1.1.414",
     "ruff>=0.16.9",

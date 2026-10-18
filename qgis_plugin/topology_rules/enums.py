@@ -7,6 +7,9 @@ _ASSETS_DIR = Path(__file__).parent / 'assets'
 
 PROVIDER_ID = 'topologyrules'
 EXECUTABLE_NAME = 'topology-checker'
+# The name of the setting of the executable, which Processing keeps under its
+# own prefix
+SETTING_NAME = 'TOPOLOGY_RULES_EXECUTABLE'
 
 
 class Asset(Enum):
@@ -15,7 +18,7 @@ class Asset(Enum):
 
 class Setting(Enum):
     # Processing stores its provider settings under this prefix
-    EXECUTABLE = 'Processing/Configuration/TOPOLOGY_RULES_EXECUTABLE'
+    EXECUTABLE = f'Processing/Configuration/{SETTING_NAME}'
     GEOMETRY = 'TopologyRules/geometry'
 
 

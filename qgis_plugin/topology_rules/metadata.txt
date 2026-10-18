@@ -11,8 +11,8 @@ server=False
 supportsQt6=True
 
 # Done automatically by qgis-plugin-ci
-changelog=Release the QGIS plugin.
-version=0.2.0
+changelog=Pass the plugin repository's security scan.
+version=0.2.1
 commitNumber=
 commitSha1=
 dateTime=
