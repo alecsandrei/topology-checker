@@ -239,15 +239,22 @@ jobs:
 
       # On Windows the Python package of QGIS, and its plugins such as
       # Processing, are not in site-packages. Where they are is found in the
-      # environment, and printed, and the later steps are told
-      - name: Point Python at QGIS
+      # environment, and printed, and written to a file for the steps that
+      # run Python.
+      #
+      # It is a file, and not the variables of the job, because every step
+      # starts a login shell (`bash -el`) that runs the activation scripts of
+      # the environment again. The one of QGIS, qgis-activate.sh, puts its
+      # folders in PYTHONPATH with ':', which Python on Windows does not split
+      # on, and so it undoes what a step before has set. The steps source the
+      # file at their start, and set the variables again with ';'.
+      - name: Find QGIS
         run: |
           root=$(cygpath -u "${CONDA_PREFIX:-$CONDA/envs/qgis}")
           conda list qgis
           python -c "import sys; print(sys.executable); print(sys.path)"
 
-          echo "Activation scripts of the environment:"
-          ls "$root"/etc/conda/activate.d 2>/dev/null || true
+          echo "Activation scripts of QGIS:"
           for script in "$root"/etc/conda/activate.d/*qgis*; do
             if [ -f "$script" ]; then
               echo "--- $script"
@@ -290,10 +297,13 @@ jobs:
             exit 1
           fi
 
+          # What qgis-activate.bat sets, with the paths that were found
           {
-            printf 'PYTHONPATH=%s;%s\n' "$(cygpath -w "$package")" "$(cygpath -w "$plugins")"
-            printf 'QGIS_PREFIX_PATH=%s\n' "$(cygpath -w "$prefix")"
-          } >> "$GITHUB_ENV"
+            printf "export PYTHONPATH='%s;%s'\n" "$(cygpath -w "$package")" "$(cygpath -w "$plugins")"
+            printf "export QGIS_PREFIX_PATH='%s'\n" "$(cygpath -m "$prefix")"
+            printf "export QT_PLUGIN_PATH='%s;%s'\n" "$(cygpath -w "$root/Library/plugins")" "$(cygpath -w "$root/Library/qtplugins")"
+          } > "$(cygpath -u "$RUNNER_TEMP")/qgis-env.sh"
+          cat "$(cygpath -u "$RUNNER_TEMP")/qgis-env.sh"
           for folder in Library/bin Library/mingw-w64/bin Library/usr/bin Scripts; do
             if [ -d "$root/$folder" ]; then
               cygpath -w "$root/$folder" >> "$GITHUB_PATH"
@@ -305,6 +315,8 @@ jobs:
 
       - name: Check the QGIS version
         run: |
+          source "$(cygpath -u "$RUNNER_TEMP")/qgis-env.sh"
+          python -c "import sys; print(sys.path)"
           python -c "from qgis.core import Qgis; print(Qgis.version())"
           python -c "import sys; from qgis.core import Qgis; sys.exit(not Qgis.version().startswith('${{ matrix.qgis }}.'))"
 
@@ -312,7 +324,9 @@ jobs:
       - name: Pytest
         env:
           TOPOLOGY_CHECKER: ${{ github.workspace }}/target/release/topology-checker.exe
-        run: python -m pytest -m "" -ra --durations=15 -o faulthandler_timeout=600
+        run: |
+          source "$(cygpath -u "$RUNNER_TEMP")/qgis-env.sh"
+          python -m pytest -m "" -ra --durations=15 -o faulthandler_timeout=600
 
   pyqt6:
     name: PyQt6 compatibility
