@@ -5,7 +5,7 @@
 ## Install
 
 1. Install the [CLI](install.md#cli), 0.2.0 or newer.
-2. In QGIS 3.34 or newer, open **Plugins > Manage and Install Plugins**, tick **Show also experimental plugins** in the Settings tab, and install **Topology Rules**.
+2. In QGIS 3.34 or newer, open **Plugins > Manage and Install Plugins** and install **Topology Rules**.
 3. If `topology-checker` is not on the `PATH`, choose it in the panel, or set its path under **Settings > Options > Processing > Providers > Topology Rules**.
 
 ## Panel
@@ -37,4 +37,19 @@ Features the tool cannot read, such as invalid polygons or coordinates that are 
 
 ## Develop
 
-See **Plugin development** in the [README](https://github.com/alecsandrei/topology-checker#plugin-development).
+Lint needs no QGIS: in `qgis_plugin/`, `uv sync`, then `uv run ruff check .` and `uv run ruff format --check .`.
+
+pyright and the tests need a QGIS Python. With Docker, as CI does (`--platform` makes it work on ARM machines too):
+
+```sh
+docker run --rm --platform linux/amd64 -v "$PWD":/src -w /src rust:1 cargo build --release -p topology-checker --target-dir target/linux
+docker run --rm --platform linux/amd64 -v "$PWD":/src -w /src/qgis_plugin -e TOPOLOGY_CHECKER=/src/target/linux/release/topology-checker -e UV_PROJECT_ENVIRONMENT=/tmp/venv qgis/qgis:stable \
+  bash -c 'pip install --break-system-packages uv && uv venv /tmp/venv --system-site-packages --python /usr/bin/python3 && uv sync --locked && uv run pyright && uv run pytest'
+```
+
+Tests that need the tool skip without `TOPOLOGY_CHECKER`. With a local QGIS, run `cargo build --release` and point `TOPOLOGY_CHECKER` at `target/release/topology-checker`:
+
+- macOS (checked), with your QGIS app, e.g. `/Applications/QGIS-final-4_2_2.app`: `uv pip install --target /tmp/qgis-pytest pytest pytest-qgis`, then `APP=/Applications/QGIS-final-4_2_2.app/Contents; PYTHONHOME=$APP/Frameworks PYTHONPATH=/tmp/qgis-pytest QT_QPA_PLATFORM=offscreen TOPOLOGY_CHECKER=<absolute path to target/release/topology-checker> $APP/MacOS/python3.12 -m pytest`. pyright does not run on that Python; use Docker.
+- Linux and Windows (not checked here): `uv venv --system-site-packages --python <QGIS's python>` (`/usr/bin/python3`, or `python` in the OSGeo4W shell), `uv sync --locked`, then `uv run pytest` and `uv run pyright`.
+
+The modules are listed in `qgis_plugin/topology_rules/__init__.py`.
