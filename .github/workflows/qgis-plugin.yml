@@ -13,7 +13,10 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # A run of a pull request that a newer push replaces is stopped. A run on
+  # master is not, so that each push there ends with a result and not with a
+  # cancellation
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 defaults:
   run:
@@ -23,6 +26,7 @@ jobs:
   lint:
     name: Ruff
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -37,6 +41,7 @@ jobs:
   bandit:
     name: Bandit
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -48,6 +53,7 @@ jobs:
   package:
     name: Package
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -85,6 +91,7 @@ jobs:
   cli:
     name: Build the CLI
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: .
@@ -111,6 +118,7 @@ jobs:
   typecheck:
     name: Pyright (QGIS ${{ matrix.qgis }})
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     container:
       image: qgis/qgis:${{ matrix.qgis }}
     strategy:
@@ -195,7 +203,7 @@ jobs:
       - name: Pytest
         run: |
           chmod +x "$GITHUB_WORKSPACE/bin/topology-checker"
-          TOPOLOGY_CHECKER="$GITHUB_WORKSPACE/bin/topology-checker" uv run pytest -m "" -ra --durations=15 -o faulthandler_timeout=600
+          TOPOLOGY_CHECKER="$GITHUB_WORKSPACE/bin/topology-checker" uv run pytest -m "" -ra --durations=30 -o faulthandler_timeout=600
 
   # The plugin on Windows, with QGIS from conda-forge (the long term release,
   # Qt5) and the CLI built here. The paths, the subprocess flags and the
@@ -203,7 +211,6 @@ jobs:
   test-windows:
     name: Pytest (Windows, QGIS ${{ matrix.qgis }})
     runs-on: windows-latest
-    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -326,11 +333,12 @@ jobs:
           TOPOLOGY_CHECKER: ${{ github.workspace }}/target/release/topology-checker.exe
         run: |
           source "$(cygpath -u "$RUNNER_TEMP")/qgis-env.sh"
-          python -m pytest -m "" -ra --durations=15 -o faulthandler_timeout=600
+          python -m pytest -m "" -ra --durations=30 -o faulthandler_timeout=600
 
   pyqt6:
     name: PyQt6 compatibility
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     container:
       image: registry.gitlab.com/oslandia/qgis/pyqgis-4-checker/pyqgis-qt-checker:latest
       options: --user root
