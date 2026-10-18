@@ -13,6 +13,7 @@ use geo::{
 };
 use serde_json::json;
 use std::path::Path;
+use std::sync::{Mutex, PoisonError};
 use topology_checker_core::{Layer, Rule, Topology};
 use topology_checker_io::{
     crs, read, registry,
@@ -952,8 +953,11 @@ fn fallback_coordinate_systems_expose_the_same_helpers() {
             .is_err()
     );
 }
+// Opening VRT datasets from two test threads at once hung CI, so the tests that do take turns.
+static VRT: Mutex<()> = Mutex::new(());
 #[test]
 fn vrt_over_geojson_exposes_list_date_and_nested_geometry_types() {
+    let _guard = VRT.lock().unwrap_or_else(PoisonError::into_inner);
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("source.geojson");
     std::fs::write(
@@ -990,6 +994,7 @@ fn vrt_over_geojson_exposes_list_date_and_nested_geometry_types() {
 }
 #[test]
 fn vrt_without_layers_is_reported() {
+    let _guard = VRT.lock().unwrap_or_else(PoisonError::into_inner);
     let dir = tempfile::tempdir().unwrap();
     let vrt = dir.path().join("empty.vrt");
     std::fs::write(&vrt, "<OGRVRTDataSource></OGRVRTDataSource>").unwrap();
