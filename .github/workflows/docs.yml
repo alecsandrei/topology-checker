@@ -7,7 +7,29 @@ on:
   push:
     branches: [master]
     tags: ['python-v*']
+    paths:
+      - 'docs/**'
+      - 'zensical.toml'
+      - 'python/**'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - 'crates/core/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.cargo/**'
+      - '.github/workflows/docs.yml'
   pull_request:
+    paths:
+      - 'docs/**'
+      - 'zensical.toml'
+      - 'python/**'
+      - 'pyproject.toml'
+      - 'uv.lock'
+      - 'crates/core/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.cargo/**'
+      - '.github/workflows/docs.yml'
   workflow_dispatch:
     inputs:
       tag:
