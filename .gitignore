@@ -13,6 +13,12 @@ __pycache__/
 *.so
 *.pyd
 assets/
+!/qgis_plugin/topology_rules/assets/
+/qgis_plugin/.venv/
+/qgis_plugin/.pytest_cache/
+/qgis_plugin/.ruff_cache/
+/qgis_plugin/.qgis-settings/
+/qgis_plugin/symbology-style.db
 System Volume Information
 builds
 *.zip

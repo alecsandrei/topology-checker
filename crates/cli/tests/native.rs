@@ -64,6 +64,90 @@ fn default_cli_lists_native_formats_and_validates_every_native_format() {
         );
     }
 }
+/// A definition of one rule on a line with two ends that touch nothing, in a
+/// folder, with the path of the output.
+fn definition(dir: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf) {
+    let layer = DatasetLayer::new(
+        "line",
+        Some(crs::parse("EPSG:4326").unwrap()),
+        vec![Record {
+            id: Some(1),
+            geometry: Some(LineString::from(vec![(5., 52.), (6., 53.)]).into()),
+            properties: Map::new(),
+        }],
+    );
+    write::dataset(&dir.join("lines.geojson"), None, false, &[layer]).unwrap();
+    let config = dir.join("topology.toml");
+    std::fs::write(
+        &config,
+        "[layers]\nroads = { path = \"lines.geojson\" }\n\n[[rules]]\nrule = \"line/must-not-have-dangles\"\nlayer = \"roads\"\n",
+    )
+    .unwrap();
+    (config, dir.join("errors.gpkg"))
+}
+#[test]
+fn summary_counts_the_violations_without_listing_them_and_still_writes_the_output() {
+    let dir = tempfile::tempdir().unwrap();
+    let (config, output) = definition(dir.path());
+    let full = cargo_bin_cmd!("topology-checker")
+        .args(["--json", "validate"])
+        .arg(&config)
+        .assert()
+        .code(1)
+        .get_output()
+        .stdout
+        .clone();
+    let full: Value = serde_json::from_slice(&full).unwrap();
+    assert_eq!(full["rules"][0]["errors"].as_array().unwrap().len(), 2);
+    let short = cargo_bin_cmd!("topology-checker")
+        .args(["--json", "--summary", "validate"])
+        .arg(&config)
+        .arg("-o")
+        .arg(&output)
+        .assert()
+        .code(1)
+        .get_output()
+        .stdout
+        .clone();
+    assert!(short.len() < full_len(&full));
+    let short: Value = serde_json::from_slice(&short).unwrap();
+    let rule = &short["rules"][0];
+    assert!(rule.get("errors").is_none());
+    assert_eq!(rule["counts"], full["rules"][0]["counts"]);
+    assert_eq!(rule["spec"], full["rules"][0]["spec"]);
+    let errors = read::read_with_attributes(&output, None, "errors", true).unwrap();
+    assert_eq!(errors[0].layer.len(), 2);
+}
+fn full_len(report: &Value) -> usize {
+    serde_json::to_vec(report).unwrap().len()
+}
+#[test]
+fn summary_without_json_prints_the_same_table() {
+    let dir = tempfile::tempdir().unwrap();
+    let (config, _) = definition(dir.path());
+    let plain = cargo_bin_cmd!("topology-checker")
+        .arg("validate")
+        .arg(&config)
+        .assert()
+        .code(1)
+        .get_output()
+        .stdout
+        .clone();
+    let summary = cargo_bin_cmd!("topology-checker")
+        .args(["--summary", "validate"])
+        .arg(&config)
+        .assert()
+        .code(1)
+        .get_output()
+        .stdout
+        .clone();
+    assert_eq!(plain, summary);
+    assert!(
+        String::from_utf8(plain)
+            .unwrap()
+            .contains("topology errors")
+    );
+}
 #[test]
 fn native_cli_preserves_signed_ids_and_rejects_duplicate_ids() {
     let dir = tempfile::tempdir().unwrap();

@@ -12,6 +12,7 @@ pub fn print(
     report: &DiskReport,
     warnings: &[String],
     as_json: bool,
+    summary: bool,
     output: &mut impl Write,
     diagnostics: &mut impl Write,
 ) -> Result<()> {
@@ -34,6 +35,10 @@ pub fn print(
             serde_json::to_writer(&mut *output, &rule.other)?;
             output.write_all(b",\"counts\":")?;
             serde_json::to_writer(&mut *output, &rule.counts)?;
+            if summary {
+                output.write_all(b"}")?;
+                continue;
+            }
             output.write_all(b",\"errors\":[")?;
             for j in 0..rule.total {
                 if j > 0 {

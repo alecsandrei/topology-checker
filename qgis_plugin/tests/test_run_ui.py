@@ -1,0 +1,154 @@
+"""The tabs and the run button of the dock, before, during and after a run."""
+
+from __future__ import annotations
+
+import collections.abc as c
+import typing as t
+from pathlib import Path
+
+import pytest
+from qgis.core import Qgis, QgsProject
+from qgis.PyQt.QtWidgets import QProgressBar, QTabWidget
+
+from topology_rules.panel.dock import Dock
+
+from .helpers import (
+    add,
+    click_run,
+    saved_layer,
+    script_executable,
+    wait_for,
+)
+
+DANGLES = 'line/must-not-have-dangles'
+CHAIN = ('LINESTRING(0 0, 10 0)', 'LINESTRING(10 0, 20 0)')
+RING = ('LINESTRING(0 0, 10 0, 10 10, 0 0)',)
+
+
+def lines(tmp_path: Path, wkts: tuple[str, ...], name: str = 'roads'):
+    layer = saved_layer(tmp_path, wkts, name)
+    QgsProject.instance().addMapLayer(layer)
+    return layer
+
+
+@pytest.fixture
+def running(
+    dock: Dock,
+    tmp_path: Path,
+    configure: c.Callable[[str | Path], None],
+) -> Dock:
+    """A dock in the middle of a run that does not end by itself."""
+    configure(script_executable(tmp_path, 'import time\ntime.sleep(60)\n'))
+    dock.refresh()
+    add(dock, DANGLES, lines(tmp_path, CHAIN))
+    dock.run_button.click()
+    assert dock.task is not None
+    return dock
+
+
+def test_the_dock_opens_on_rules_with_a_plain_errors_tab(dock: Dock):
+    assert isinstance(dock.tabs, QTabWidget)
+    names = [dock.tabs.tabText(index) for index in range(dock.tabs.count())]
+    assert names == ['Rules', 'Errors']
+    assert dock.tabs.currentIndex() == 0
+
+
+def test_a_run_with_errors_counts_them_in_the_tab(dock: Dock, tmp_path: Path):
+    add(dock, DANGLES, lines(tmp_path, CHAIN))
+    click_run(dock)
+    assert dock.tabs.tabText(1) == 'Errors (2)'
+
+
+def test_a_run_with_errors_shows_the_errors_tab(dock: Dock, tmp_path: Path):
+    add(dock, DANGLES, lines(tmp_path, CHAIN))
+    click_run(dock)
+    assert dock.tabs.currentIndex() == 1
+
+
+def test_a_run_without_errors_stays_on_the_rules_tab(
+    dock: Dock, tmp_path: Path
+):
+    add(dock, DANGLES, lines(tmp_path, RING))
+    click_run(dock)
+    assert dock.tabs.currentIndex() == 0
+    assert dock.tabs.tabText(1) == 'Errors'
+
+
+def test_a_run_without_errors_says_so(dock: Dock, tmp_path: Path, bar: t.Any):
+    add(dock, DANGLES, lines(tmp_path, RING))
+    click_run(dock)
+    assert bar.get_messages(Qgis.MessageLevel.Success)
+
+
+def test_a_clean_rerun_clears_the_count(dock: Dock, tmp_path: Path):
+    roads = lines(tmp_path, CHAIN)
+    add(dock, DANGLES, roads)
+    click_run(dock)
+    dock.clear_rules()
+    add(dock, DANGLES, lines(tmp_path, RING, 'rails'))
+    click_run(dock)
+    assert dock.tabs.tabText(1) == 'Errors'
+
+
+def test_the_run_button_names_the_rules_when_idle(dock: Dock, tmp_path: Path):
+    add(dock, DANGLES, lines(tmp_path, CHAIN))
+    add(dock, DANGLES, lines(tmp_path, RING, 'rails'))
+    assert dock.run_button.text() == 'Run 2 rules'
+
+
+def test_there_is_no_separate_cancel_button(dock: Dock):
+    assert not hasattr(dock, 'cancel_button')
+
+
+def test_the_run_button_cancels_during_a_run(running: Dock):
+    assert running.run_button.text() == 'Cancel'
+    assert running.run_button.isEnabled()
+
+
+def test_clicking_the_run_button_during_a_run_cancels_it(running: Dock):
+    running.run_button.click()
+    wait_for(lambda: running.task is None, timeout=20)
+    assert running.run_button.text() == 'Run 1 rule'
+    assert running.tabs.tabText(1) == 'Errors'
+
+
+def test_a_canceled_run_leaves_the_rules_editable(running: Dock):
+    running.run_button.click()
+    wait_for(lambda: running.task is None, timeout=20)
+    assert running.add_button.isEnabled()
+    assert running.rule_box.isEnabled()
+
+
+def test_the_progress_bar_is_hidden_when_idle(dock: Dock):
+    assert isinstance(dock.progress, QProgressBar)
+    assert dock.progress.isHidden()
+
+
+def test_the_progress_bar_is_indeterminate_during_a_run(running: Dock):
+    assert not running.progress.isHidden()
+    assert running.progress.minimum() == running.progress.maximum() == 0
+
+
+def test_the_progress_bar_goes_with_the_run(running: Dock):
+    running.run_button.click()
+    wait_for(lambda: running.task is None, timeout=20)
+    assert running.progress.isHidden()
+
+
+@pytest.mark.parametrize(
+    'name',
+    [
+        'rule_box',
+        'input_box',
+        'other_box',
+        'add_button',
+        'tolerance',
+        'rules_tree',
+        'remove_button',
+        'clear_button',
+    ],
+)
+def test_the_form_and_the_list_are_disabled_during_a_run(
+    running: Dock, name: str
+):
+    assert not getattr(running, name).isEnabled()

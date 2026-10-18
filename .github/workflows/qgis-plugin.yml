@@ -1,0 +1,266 @@
+name: QGIS plugin
+
+on:
+  push:
+    branches: [master]
+    tags: ['v*']
+    paths: ['qgis_plugin/**', 'crates/cli/**', 'crates/core/**', 'crates/io/**', '.github/workflows/qgis-plugin.yml']
+  pull_request:
+    paths: ['qgis_plugin/**', 'crates/cli/**', 'crates/core/**', 'crates/io/**', '.github/workflows/qgis-plugin.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: qgis_plugin
+
+jobs:
+  lint:
+    name: Ruff
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Lint
+        run: uv run --locked --only-group lint ruff check .
+
+      - name: Check formatting
+        run: uv run --locked --only-group lint ruff format --check .
+
+  bandit:
+    name: Bandit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Bandit
+        run: uv run --locked --only-group lint bandit -r topology_rules
+
+  package:
+    name: Package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The folder of the plugin without caches, with the version of the tag
+      # if there is one
+      - name: Build the zip
+        run: |
+          rm -rf build dist
+          mkdir build dist
+          cp -r topology_rules build/
+          find build -name __pycache__ -prune -exec rm -rf {} +
+          find build -name '*.pyc' -delete
+          version=$(sed -n 's/^version=//p' build/topology_rules/metadata.txt)
+          case "$GITHUB_REF" in
+            refs/tags/v*) version="${GITHUB_REF_NAME#v}" ;;
+          esac
+          sed -i "s/^version=.*/version=${version}/" build/topology_rules/metadata.txt
+          (cd build && zip -r -X "../dist/topology_rules-${version}.zip" topology_rules)
+          unzip -l dist/*.zip
+
+      - name: Check the zip
+        run: |
+          unzip -Z1 dist/*.zip > files.txt
+          for need in topology_rules/__init__.py topology_rules/metadata.txt topology_rules/LICENSE topology_rules/assets/icon.svg; do
+            grep -qx "$need" files.txt
+          done
+          ! grep -E '__pycache__|\.pyc$|\.qgis-settings|\.venv' files.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: topology-rules-plugin
+          path: qgis_plugin/dist/*.zip
+          if-no-files-found: error
+
+  cli:
+    name: Build the CLI
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: .
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release --locked -p topology-checker
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: topology-checker
+          path: target/release/topology-checker
+          if-no-files-found: error
+
+  # The QGIS images: 3.34 is the oldest that the plugin supports, `ltr` is the
+  # long term release (3.44 now, Qt5), and `stable` is the newest release
+  # (4.2 now, Qt6). `expected` is the major version that the tag must ship,
+  # so that a tag which moves cannot make a run test the wrong QGIS.
+  typecheck:
+    name: Pyright (QGIS ${{ matrix.qgis }})
+    runs-on: ubuntu-latest
+    container:
+      image: qgis/qgis:${{ matrix.qgis }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - qgis: 3.34-noble
+            expected: '3'
+          - qgis: ltr
+            expected: ''
+          - qgis: stable
+            expected: '4'
+    env:
+      UV_LINK_MODE: copy
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Check the QGIS version
+        if: matrix.expected != ''
+        run: |
+          python3 -c "from qgis.core import Qgis; print(Qgis.version())"
+          python3 -c "import sys; from qgis.core import Qgis; sys.exit(not Qgis.version().startswith('${{ matrix.expected }}.'))"
+
+      - name: Create venv on top of the system QGIS
+        run: uv venv --system-site-packages --python /usr/bin/python3
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Pyright
+        run: uv run pyright
+
+  test:
+    name: Pytest (QGIS ${{ matrix.qgis }})
+    needs: cli
+    runs-on: ubuntu-latest
+    # A task that never ends should fail the run, not hold it for hours
+    timeout-minutes: 30
+    container:
+      image: qgis/qgis:${{ matrix.qgis }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - qgis: 3.34-noble
+            expected: '3'
+          - qgis: ltr
+            expected: ''
+          - qgis: stable
+            expected: '4'
+    env:
+      UV_LINK_MODE: copy
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: topology-checker
+          path: bin
+
+      - name: Check the QGIS version
+        if: matrix.expected != ''
+        run: |
+          python3 -c "from qgis.core import Qgis; print(Qgis.version())"
+          python3 -c "import sys; from qgis.core import Qgis; sys.exit(not Qgis.version().startswith('${{ matrix.expected }}.'))"
+
+      - name: Create venv on top of the system QGIS
+        run: uv venv --system-site-packages --python /usr/bin/python3
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      # All the tests, the slow ones too (`-m ""` replaces the default of
+      # pyproject.toml). `-ra` lists why each test failed or was skipped, the
+      # slowest tests are shown, and a test stuck for ten minutes dumps the
+      # stacks of all the threads
+      - name: Pytest
+        run: |
+          chmod +x "$GITHUB_WORKSPACE/bin/topology-checker"
+          TOPOLOGY_CHECKER="$GITHUB_WORKSPACE/bin/topology-checker" uv run pytest -m "" -ra --durations=15 -o faulthandler_timeout=600
+
+  # The plugin on Windows, with QGIS from conda-forge (the long term release,
+  # Qt5) and the CLI built here. The paths, the subprocess flags and the
+  # executable lookup of the plugin are only really tested here
+  test-windows:
+    name: Pytest (Windows, QGIS ${{ matrix.qgis }})
+    runs-on: windows-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - qgis: '3.44'
+    env:
+      QT_QPA_PLATFORM: offscreen
+    defaults:
+      run:
+        shell: bash -el {0}
+        working-directory: qgis_plugin
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build the CLI
+        working-directory: .
+        run: cargo build --release --locked -p topology-checker
+
+      - uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          python-version: '3.12'
+          channels: conda-forge
+          channel-priority: strict
+          activate-environment: qgis
+
+      - name: Install QGIS
+        run: conda install -y "qgis=${{ matrix.qgis }}" pyyaml
+
+      - name: Install the test dependencies
+        run: python -m pip install pytest==9.1.1 pytest-qgis==5.0.1
+
+      - name: Check the QGIS version
+        run: |
+          python -c "from qgis.core import Qgis; print(Qgis.version())"
+          python -c "import sys; from qgis.core import Qgis; sys.exit(not Qgis.version().startswith('${{ matrix.qgis }}.'))"
+
+      # All the tests, the slow ones too, as in the images
+      - name: Pytest
+        env:
+          TOPOLOGY_CHECKER: ${{ github.workspace }}/target/release/topology-checker.exe
+        run: python -m pytest -m "" -ra --durations=15 -o faulthandler_timeout=600
+
+  pyqt6:
+    name: PyQt6 compatibility
+    runs-on: ubuntu-latest
+    container:
+      image: registry.gitlab.com/oslandia/qgis/pyqgis-4-checker/pyqgis-qt-checker:latest
+      options: --user root
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check PyQt5 to PyQt6 compatibility
+        run: |
+          pyqt5_to_pyqt6.py --dry_run topology_rules
+          pyqt5_to_pyqt6.py topology_rules
