@@ -156,3 +156,72 @@ def test_the_tool_is_asked_for_its_rules_once_when_the_plugin_starts(
         QgsApplication.processEvents()
     plugin.unload()
     assert len(calls(log, 'rules')) == 1
+
+
+# The dock does not wait for the answer of a tool that it has left, however
+# it is left: for a tool whose rules are known, or for one that is gone
+
+TASKS: list[object] = []
+
+
+@pytest.fixture
+def asking_slow_tool(
+    dock: Dock, configure: c.Callable[[str | Path], None], tmp_path: Path
+) -> tuple[Path, Path]:
+    """The dock is asking a slow tool for its rules. Returns the gate that
+    lets it answer, and a fast tool whose rules are known."""
+    wait_for(lambda: dock.probing is None)
+    gate = tmp_path / 'gate'
+    slow, fast = tmp_path / 'slow', tmp_path / 'fast'
+    slow.mkdir()
+    fast.mkdir()
+    fast_tool = probe_executable(fast, rules=[RULES[1]])
+    configure(fast_tool)
+    dock.refresh()
+    wait_for(lambda: known_rules(dock) == [SECOND])
+    configure(probe_executable(slow, rules=[RULES[0]], gate=gate))
+    dock.refresh()
+    assert dock.probing is not None
+    # Kept here, as the dock lets go of it
+    TASKS.append(dock.probe_task)
+    return gate, fast_tool
+
+
+def test_a_late_answer_does_not_replace_rules_that_were_known_already(
+    dock: Dock,
+    asking_slow_tool: tuple[Path, Path],
+    configure: c.Callable[[str | Path], None],
+):
+    gate, fast_tool = asking_slow_tool
+    configure(fast_tool)
+    dock.refresh()
+    assert known_rules(dock) == [SECOND]
+    let_it_answer(gate)
+    assert known_rules(dock) == [SECOND]
+
+
+def test_a_late_answer_does_not_revive_a_tool_that_is_gone(
+    dock: Dock,
+    asking_slow_tool: tuple[Path, Path],
+    configure: c.Callable[[str | Path], None],
+    tmp_path: Path,
+):
+    gate, _ = asking_slow_tool
+    configure(tmp_path / 'gone')
+    dock.refresh()
+    assert not dock.available
+    let_it_answer(gate)
+    assert not dock.available
+    assert known_rules(dock) == []
+
+
+def test_the_dock_is_not_marked_as_asking_after_rules_from_the_cache(
+    dock: Dock,
+    asking_slow_tool: tuple[Path, Path],
+    configure: c.Callable[[str | Path], None],
+):
+    gate, fast_tool = asking_slow_tool
+    configure(fast_tool)
+    dock.refresh()
+    assert dock.probing is None
+    let_it_answer(gate)

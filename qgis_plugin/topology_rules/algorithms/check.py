@@ -165,13 +165,15 @@ class CheckRulesAlgorithm(Planned):
                     raise QgsProcessingException(
                         f'Wrong number of layers for {rule.name}'
                     )
+                # The scope limits the layer a rule checks, not the layer it
+                # checks it against
                 first = self.read(
                     entry['layer'], rule.layer, inputs, context, scope
                 )
                 second = None
                 if other is not None and rule.other is not None:
                     second = self.read(
-                        other, rule.other, inputs, context, scope
+                        other, rule.other, inputs, context, {}, 'other'
                     )
                 jobs.append(Job(rule, first, second))
             refuse_overwrite([requested, output], inputs.values())
@@ -263,10 +265,13 @@ class CheckRulesAlgorithm(Planned):
         inputs: dict[str, Input],
         context: QgsProcessingContext,
         scope: dict[str, t.Any],
+        role: str = 'layer',
     ) -> Input:
         """The layer of the project with the id, of the kind of geometry,
-        and the part of it that the scope asks for."""
-        if layer_id not in inputs:
+        and the part of it that the scope asks for. A layer that is the
+        layer of a rule and the other layer of another is two inputs."""
+        key = f'{role}:{layer_id}'
+        if key not in inputs:
             layer = QgsProcessingUtils.mapLayerFromString(layer_id, context)
             try:
                 source = QgsProcessingUtils.variantToSource(layer_id, context)
@@ -274,7 +279,8 @@ class CheckRulesAlgorithm(Planned):
                 # QGIS raises a bare exception for a layer it cannot read
                 name = layer.name() if layer is not None else layer_id
                 raise QgsProcessingException(
-                    f'The layer {name} cannot be read: {error}'
+                    f'QGIS cannot read the layer {name}; it may contain '
+                    f'infinite coordinates ({error})'
                 ) from error
             if not isinstance(layer, QgsVectorLayer) or source is None:
                 raise QgsProcessingException(f'The layer is gone: {layer_id}')
@@ -285,7 +291,7 @@ class CheckRulesAlgorithm(Planned):
                 )
             if scope.get('extent'):
                 area = self.area_in(scope['extent'], layer, context)
-            inputs[layer_id] = Input(
+            inputs[key] = Input(
                 layer.name(),
                 source,
                 layer,
@@ -293,5 +299,5 @@ class CheckRulesAlgorithm(Planned):
                 ids=ids,
                 area=area,
             )
-        require_kind(inputs[layer_id], kind)
-        return inputs[layer_id]
+        require_kind(inputs[key], kind)
+        return inputs[key]

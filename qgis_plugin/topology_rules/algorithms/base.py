@@ -30,7 +30,11 @@ DOCS = 'https://alecsandrei.github.io/topology-checker/stable/'
 
 def scratch() -> tempfile.TemporaryDirectory[str]:
     """A folder for the files of one run, which goes with the run."""
-    return tempfile.TemporaryDirectory(prefix='topology-checker-')
+    # A file of the folder that is still open, as on Windows, is left behind
+    # and not an error of the run
+    return tempfile.TemporaryDirectory(
+        prefix='topology-checker-', ignore_cleanup_errors=True
+    )
 
 
 @contextlib.contextmanager

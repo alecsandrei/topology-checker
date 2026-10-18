@@ -47,24 +47,27 @@ class ProjectState(QObject):
         if self.quiet_now:
             return
         project = not_none(QgsProject.instance())
-        project.writeEntry(
-            SECTION,
-            'rules',
-            json.dumps(
-                [
-                    {
-                        'rule': entry.rule.name,
-                        'layer': entry.layer,
-                        'layer_name': entry.layer_name,
-                        'unit': entry.unit,
-                        'other': entry.other,
-                        'other_name': entry.other_name,
-                        'checked': entry.checked,
-                    }
-                    for entry in self.dock.entries
-                ]
-            ),
-        )
+        # The rules that the project had stay in it until the list is filled
+        # from them, which waits for the executable to name the rules
+        if self.pending is None:
+            project.writeEntry(
+                SECTION,
+                'rules',
+                json.dumps(
+                    [
+                        {
+                            'rule': entry.rule.name,
+                            'layer': entry.layer,
+                            'layer_name': entry.layer_name,
+                            'unit': entry.unit,
+                            'other': entry.other,
+                            'other_name': entry.other_name,
+                            'checked': entry.checked,
+                        }
+                        for entry in self.dock.entries
+                    ]
+                ),
+            )
         project.writeEntryDouble(
             SECTION, 'tolerance', self.dock.tolerance.value()
         )

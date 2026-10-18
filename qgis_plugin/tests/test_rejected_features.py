@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import collections.abc as c
 import math
+import re
 import typing as t
 from pathlib import Path
 
@@ -24,6 +25,7 @@ from .helpers import (
     add,
     calls,
     click_run,
+    error_layers,
     layer_nodes,
     message_text,
     polygon_layer,
@@ -90,7 +92,7 @@ def test_the_message_names_the_error_that_stopped_the_run(
 
 
 def bad_layer(
-    kind: str, good: int, bad: int, directory: Path
+    kind: str, good: int, bad: int, directory: Path, value: float = math.nan
 ) -> QgsVectorLayer:
     """A layer of points or of lines, with `bad` features whose coordinates
     are not finite."""
@@ -99,7 +101,7 @@ def bad_layer(
     features: list[QgsFeature] = []
     for number in range(good + bad):
         x = float(number * 10)
-        y = 0.0 if number < good else math.nan
+        y = 0.0 if number < good else value
         feature = QgsFeature()
         if kind == 'point':
             feature.setGeometry(QgsGeometry.fromPointXY(QgsPointXY(x, y)))
@@ -169,7 +171,8 @@ rows = sqlite3.connect(path).execute(
 ).fetchall()
 for number, (blob,) in enumerate(rows, start=1):
     if not finite(blob):
-        error = 'layer ' + alias + ', FID ' + str(number) + ': must be finite'
+        error = 'layer ' + alias + ', FID ' + str(number)
+        error += ': coordinates must be finite'
         print(json.dumps({'error': error}), file=sys.stderr)
         sys.exit(2)
 print(json.dumps({'rules': [{'counts': {}}] * config.count('[[rules]]')}))
@@ -208,3 +211,47 @@ def test_every_feature_with_coordinates_that_are_not_finite_is_reported(
     click_run(dock)
     (node,) = layer_nodes(dock)
     assert node.text(0) == f'bad · {BAD} invalid'
+
+
+# The real tool, which says 'coordinates must be finite'
+
+
+@pytest.mark.parametrize('kind', ['point', 'line'])
+@pytest.mark.parametrize('value', [math.inf, math.nan])
+def test_the_real_tool_run_completes_with_a_coordinate_that_is_not_finite(
+    dock: Dock, tmp_path: Path, kind: str, value: float, bar: t.Any
+):
+    layer = bad_layer(kind, 4, 1, tmp_path, value)
+    add(dock, RULE[kind], layer)
+    click_run(dock)
+    assert dock.task is None
+    if dock.results.rows:
+        # The run completed, and reports the feature
+        (node,) = layer_nodes(dock)
+        assert node.text(0) == 'bad · 1 invalid'
+    else:
+        # A QGIS that cannot read the layer ends the run with a message that
+        # says which layer it is and why
+        text = message_text(bar)
+        assert 'bad' in text
+        assert re.search(r'infinite|non-finite|not finite', text, re.I), text
+
+
+def finite_vertices(layer: QgsVectorLayer) -> bool:
+    return all(
+        math.isfinite(vertex.x()) and math.isfinite(vertex.y())
+        for feature in layer.getFeatures()
+        for vertex in feature.geometry().vertices()
+    )
+
+
+@pytest.mark.parametrize('kind', ['point', 'line'])
+@pytest.mark.parametrize('value', [math.inf, math.nan])
+def test_no_layer_of_errors_holds_a_coordinate_that_is_not_finite(
+    dock: Dock, tmp_path: Path, kind: str, value: float
+):
+    add(dock, RULE[kind], bad_layer(kind, 4, 1, tmp_path, value))
+    click_run(dock)
+    assert dock.task is None
+    for errors in error_layers():
+        assert finite_vertices(errors), errors.name()

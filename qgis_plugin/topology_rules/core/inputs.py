@@ -81,11 +81,7 @@ def invalid_reason(geometry: QgsGeometry) -> str | None:
     if geometry.isNull():
         return None
     if wkb_kind(geometry.wkbType()) != 'polygon':
-        return (
-            'must be finite: a coordinate is not a number'
-            if not_finite(geometry)
-            else None
-        )
+        return 'coordinates must be finite' if not_finite(geometry) else None
     if geometry.isEmpty() or geometry.isGeosValid():
         return None
     errors = geometry.validateGeometry()

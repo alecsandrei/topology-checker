@@ -23,10 +23,13 @@ def refresh(dock: Dock) -> None:
     try:
         path, modified = binary.locate()
     except ExecutableError as error:
+        # No answer of an executable that was asked is wanted any more
+        dock.probing = None
         dock.rules_failed(error)
         return
     found = binary.probe_cache.peek(path, modified)
     if found is not None:
+        dock.probing = None
         dock.rules_known(found)
         return
     if dock.probing == (path, modified):

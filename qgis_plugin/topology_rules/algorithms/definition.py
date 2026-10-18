@@ -47,9 +47,9 @@ def data_files(definition: Path) -> list[str]:
     cannot be read names none: the tool says what is wrong with it."""
     try:
         config = loads(definition.read_text(encoding='utf-8'))
-    except TomlUnavailable as error:
-        raise QgsProcessingException(str(error)) from error
-    except (OSError, ValueError):
+    except (OSError, ValueError, TomlUnavailable):
+        # With no reader here the tool still reads the file, and the
+        # guard goes
         return []
     layers = config.get('layers')
     if not isinstance(layers, dict):

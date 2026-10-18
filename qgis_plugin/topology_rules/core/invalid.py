@@ -18,6 +18,7 @@ from qgis.core import (
 
 from ..exceptions import RunError
 from ..utils import not_none
+from .inputs import not_finite
 from .layers import wkb_kind
 
 # The columns of the tool, as a memory layer defines them
@@ -40,7 +41,8 @@ FAILURE = re.compile(
     re.DOTALL,
 )
 # What it rejects, as opposed to what is wrong with the rule or the layer
-REJECTED = ('invalid polygon', 'must be finite')
+# (crates/core/src/error.rs has the messages)
+REJECTED = ('invalid polygon', 'coordinates must be finite')
 
 
 def error_fields() -> QgsFields:
@@ -57,6 +59,9 @@ class Rejected(RunError):
         self.key = key
         # What the tool said, for the features it can be told to skip
         self.skippable = reason.startswith(REJECTED)
+        # Whether the tool read the layer from its own file, where the
+        # number of the feature is not told apart from the export's
+        self.direct = False
 
 
 def parse_failure(message: str) -> tuple[str, int, str] | None:
@@ -82,10 +87,14 @@ class Invalid:
         return wkb_kind(self.geometry.wkbType())
 
     def feature(self, fields: QgsFields) -> QgsFeature:
-        geometry = QgsGeometry(self.geometry)
-        geometry.convertToMultiType()
         feature = QgsFeature(fields)
-        feature.setGeometry(geometry)
+        # A coordinate that is not finite cannot be in a GeoPackage, where it
+        # breaks the extent of the layer: the error is listed without a
+        # geometry, and there is nothing to zoom to
+        if not not_finite(self.geometry):
+            geometry = QgsGeometry(self.geometry)
+            geometry.convertToMultiType()
+            feature.setGeometry(geometry)
         values = {
             'rule': '',
             'error_type': 'invalid',

@@ -134,26 +134,30 @@ class UtilityAlgorithm(Planned):
             if completed.exit_code != 0:
                 raise QgsProcessingException(error_message(completed))
             result = QgsVectorLayer(output, 'output', 'ogr')
-            if not result.isValid():
-                raise QgsProcessingException('The tool wrote no output')
-            crs = result.crs() if result.crs().isValid() else plan.item.crs
-            sink, destination = self.parameterAsSink(
-                parameters,
-                OUTPUT,
-                context,
-                result.fields(),
-                result.wkbType(),
-                crs,
-            )
-            if sink is None:
-                raise QgsProcessingException(
-                    self.invalidSinkError(parameters, OUTPUT)
+            try:
+                if not result.isValid():
+                    raise QgsProcessingException('The tool wrote no output')
+                crs = result.crs() if result.crs().isValid() else plan.item.crs
+                sink, destination = self.parameterAsSink(
+                    parameters,
+                    OUTPUT,
+                    context,
+                    result.fields(),
+                    result.wkbType(),
+                    crs,
                 )
-            for feature in t.cast(
-                'c.Iterable[QgsFeature]', result.getFeatures()
-            ):
-                sink.addFeature(feature)
-            del sink
+                if sink is None:
+                    raise QgsProcessingException(
+                        self.invalidSinkError(parameters, OUTPUT)
+                    )
+                for feature in t.cast(
+                    'c.Iterable[QgsFeature]', result.getFeatures()
+                ):
+                    sink.addFeature(feature)
+                del sink
+            finally:
+                # Closed before the folder of the file goes, also on failure
+                del result
         return {OUTPUT: destination}
 
 

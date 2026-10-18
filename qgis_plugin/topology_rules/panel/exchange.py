@@ -192,20 +192,20 @@ def write_layer(
 
 
 def save_layers(
-    layers: c.Sequence[QgsVectorLayer], path: Path, selected: bool
-) -> dict[str, Dataset]:
+    items: c.Sequence[tuple[QgsVectorLayer, bool]], path: Path
+) -> list[Dataset]:
     """Writes the layers as they are in the project to a GeoPackage, one
-    layer each, and returns where each one is.
+    table each, with only the selected features for the ones marked so, and
+    returns where each one is.
 
     The file is made beside the old one and put in its place when it is
-    whole, so that a failure leaves the old one. It has the tables that other
-    layers read from the old file, as they were, and the layers; a layer
-    that was read from a table of the file takes the place of that table.
+    whole, so that a failure leaves the old one. It has the tables that
+    layers of the project read from the old file, as they were: what is
+    written, a layer with unsaved edits or a view of one, never takes the
+    name of one of them.
     """
-    found: dict[str, Dataset] = {}
-    reading = tables_read(path) if has_layers(path) else {}
-    saving = {layer.id() for layer in layers}
-    kept = [table for table, ids in reading.items() if ids - saving]
+    found: list[Dataset] = []
+    kept = list(tables_read(path)) if has_layers(path) else []
     taken: set[str] = set(kept)
     partial = path.with_name(f'.{path.stem}.partial.gpkg')
     partial.unlink(missing_ok=True)
@@ -216,18 +216,15 @@ def save_layers(
             if old.isValid():
                 write_layer(old, partial, table, first, attributes=True)
                 first = False
-        for layer in layers:
-            own = next(
-                (t for t, ids in reading.items() if layer.id() in ids), None
-            )
-            name, index = own if own and own not in taken else layer.name(), 1
+        for layer, selected in items:
+            name, index = layer.name(), 1
             while name in taken:
                 index += 1
                 name = f'{layer.name()}_{index}'
             taken.add(name)
             write_layer(layer, partial, name, first, selected)
             first = False
-            found[layer.id()] = Dataset(str(path), name)
+            found.append(Dataset(str(path), name))
         try:
             os.replace(partial, path)
         except OSError as error:
@@ -249,28 +246,36 @@ def export_definition(
     """Writes the checked rules as a topology.toml, which the command line
     also runs, and returns why each layer that is not a file of its own was
     saved in a GeoPackage next to it, by name. Nothing is written if a layer
-    is gone from the project."""
+    is gone from the project.
+
+    As in the panel, the selection limits the layer that a rule checks and
+    not the layer it checks it against."""
     checked = [entry for entry in entries if entry.checked]
     if not checked:
         raise DefinitionError('Check at least one rule to export.')
-    wanted = [(entry.layer, entry.layer_name) for entry in checked] + [
-        (entry.other, entry.other_name) for entry in checked if entry.other
+    # Each layer with what is asked of it: the selection, or the whole
+    wanted = [((entry.layer, selected), entry.layer_name) for entry in checked]
+    wanted += [
+        ((entry.other, False), entry.other_name)
+        for entry in checked
+        if entry.other
     ]
-    datasets: dict[str, Dataset] = {}
-    unreadable: dict[str, QgsVectorLayer] = {}
+    datasets: dict[tuple[str | None, bool], Dataset] = {}
+    unreadable: dict[tuple[str | None, bool], QgsVectorLayer] = {}
+    readable: set[tuple[str | None, bool]] = set()
     gone: list[str] = []
-    readable: set[str] = set()
-    for layer_id, name in wanted:
-        if layer_id is None or layer_id in datasets or layer_id in unreadable:
+    for key, name in wanted:
+        layer_id, limited = key
+        if layer_id is None or key in datasets or key in unreadable:
             continue
         found = dataset_of(layer_id)
         layer = project_layer(layer_id)
-        if found is not None and not selected:
-            datasets[layer_id] = found
+        if found is not None and not limited:
+            datasets[key] = found
         elif layer is not None:
-            unreadable[layer_id] = layer
+            unreadable[key] = layer
             if found is not None:
-                readable.add(layer_id)
+                readable.add(key)
         else:
             gone.append(name)
     if gone:
@@ -283,22 +288,25 @@ def export_definition(
     if unreadable:
         if data.exists() and not overwrite(data):
             raise DefinitionError('Export canceled.')
-        datasets.update(save_layers(list(unreadable.values()), data, selected))
+        written = save_layers(
+            [(layer, key[1]) for key, layer in unreadable.items()], data
+        )
+        datasets.update(zip(unreadable, written, strict=True))
         saved = {
-            layer.name(): why_saved(layer, layer_id in readable)
-            for layer_id, layer in unreadable.items()
+            layer.name(): why_saved(layer, key in readable)
+            for key, layer in unreadable.items()
         }
     checks = [
         Check(
             entry.rule,
-            datasets[entry.layer],
-            datasets[entry.other] if entry.other else None,
+            datasets[(entry.layer, selected)],
+            datasets[(entry.other, False)] if entry.other else None,
         )
         for entry in checked
     ]
     names: dict[Dataset, str] = {}
-    for layer_id, name in wanted:
-        if layer_id is not None:
-            names.setdefault(datasets[layer_id], name)
+    for key, name in wanted:
+        if key[0] is not None:
+            names.setdefault(datasets[key], name)
     write_config(path, checks, tolerance, relative=True, names=names)
     return saved

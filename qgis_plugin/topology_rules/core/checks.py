@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import collections.abc as c
 import dataclasses
+import re
 import typing as t
 from pathlib import Path
 
@@ -33,6 +34,9 @@ ID_COLUMNS = (
     ('origin_layer', 'origin_fid'),
     ('destination_layer', 'destination_fid'),
 )
+# What the tool says when it cannot read a geometry or its envelope in a file
+# (crates/io), without saying which feature
+UNREADABLE = re.compile(r'WKB|GeoPackage envelope|non-finite')
 # How often a run is repeated without the features that the tool rejects
 MAX_ATTEMPTS = 25
 
@@ -80,10 +84,13 @@ def run_jobs(
 
     Layers go to the tool as they are where they can. If the tool rejects a
     feature, the run is repeated from exports that leave out the features
-    that it would reject, which are reported as errors.
+    that it would reject, which are reported as errors. Only the input that
+    held the feature is exported again: the others stay as they were.
     """
     skips: dict[object, dict[int, str]] = {}
-    direct = True
+    # The inputs that are exported and not read from their own file
+    exported: set[object] = set()
+    made: dict[object, tuple[object, Prepared]] = {}
     first: Rejected | None = None
     for attempt in range(MAX_ATTEMPTS):
         folder = directory / f'run{attempt}'
@@ -98,7 +105,8 @@ def run_jobs(
                 context,
                 feedback,
                 skips,
-                direct,
+                exported,
+                made,
             )
         except Rejected as rejected:
             # The first feature that was named is the one that is reported
@@ -110,8 +118,8 @@ def run_jobs(
                 if rejected.reason.startswith(REJECTED):
                     raise first from rejected
                 raise
-            if direct:
-                direct = False
+            if rejected.direct:
+                exported.add(rejected.key)
             elif rejected.fid in skips.get(rejected.key, {}):
                 raise first from rejected
             else:
@@ -119,6 +127,20 @@ def run_jobs(
                     rejected.reason
                 )
                 feedback.pushInfo(f'Left out of the run: {rejected}')
+            continue
+        except RunError as error:
+            # The tool cannot read a geometry of a file (crates/io codec),
+            # and does not say which: the export leaves out what it would
+            # reject
+            keys = {
+                item.key
+                for job in jobs
+                for item in (job.layer, job.other)
+                if item is not None
+            }
+            if not UNREADABLE.search(str(error)) or keys <= exported:
+                raise
+            exported.update(keys)
             continue
         if outcome.invalid:
             feedback.pushWarning(
@@ -138,7 +160,8 @@ def run_once(
     context: QgsProcessingContext,
     feedback: QgsProcessingFeedback,
     skips: dict[object, dict[int, str]],
-    direct: bool,
+    exported: set[object],
+    made: dict[object, tuple[object, Prepared]],
 ) -> Outcome:
     target = jobs[0].layer.source.sourceCrs()
     prepared: dict[object, Prepared] = {}
@@ -147,15 +170,25 @@ def run_once(
 
     def get(item: Input) -> Prepared:
         if item.key not in prepared:
-            prepared[item.key] = prepare(
-                item,
-                directory,
-                target,
-                context,
-                feedback,
-                skips.get(item.key),
-                direct,
+            # What was made for the same skips and way is made again for no
+            # one
+            how = (
+                item.key in exported,
+                tuple(sorted(skips.get(item.key, {}).items())),
             )
+            if item.key in made and made[item.key][0] == how:
+                prepared[item.key] = made[item.key][1]
+            else:
+                prepared[item.key] = prepare(
+                    item,
+                    directory,
+                    target,
+                    context,
+                    feedback,
+                    skips.get(item.key),
+                    item.key not in exported,
+                )
+                made[item.key] = (how, prepared[item.key])
             names[item.key] = item.name
             inputs[item.key] = item
         return prepared[item.key]
@@ -189,6 +222,7 @@ def run_once(
                 rejected = Rejected(
                     names[key], int(t.cast(int, fid)), failure[2], key
                 )
+                rejected.direct = item.ids is None
                 # A number outside the export names no feature of the layer
                 if item.ids is not None and not 1 <= failure[1] <= len(
                     item.ids

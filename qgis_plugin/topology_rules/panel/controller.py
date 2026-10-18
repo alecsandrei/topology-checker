@@ -232,13 +232,13 @@ def scope_of(
     if dock.selected_only.isChecked():
         chosen: dict[str, list[int]] = {}
         for entry in todo:
-            for layer_id in filter(None, (entry.layer, entry.other)):
-                layer = project_layer(layer_id)
-                if layer is None or layer_id in chosen:
-                    continue
-                chosen[layer_id] = layer.selectedFeatureIds()
-                if not chosen[layer_id]:
-                    unselected.append(layer.name())
+            # The layer a rule checks, not the one it checks it against
+            layer = project_layer(entry.layer)
+            if layer is None or entry.layer in chosen:
+                continue
+            chosen[entry.layer] = layer.selectedFeatureIds()
+            if not chosen[entry.layer]:
+                unselected.append(layer.name())
         scope['selected'] = chosen
     if dock.extent_only.isChecked():
         canvas = not_none(dock.iface.mapCanvas())

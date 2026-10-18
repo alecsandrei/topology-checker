@@ -15,12 +15,19 @@ from qgis.gui import QgisInterface
 
 import topology_rules
 
-from .helpers import message_text, wait_for, write_toml
+from .helpers import (
+    message_text,
+    run_algorithm,
+    saved_layer,
+    wait_for,
+    write_toml,
+)
 
 ROOT = Path(topology_rules.__file__).parent
 MODULES = sorted(ROOT.rglob('*.py'))
 PACKAGE = 'topology_rules'
 DANGLES = 'line/must-not-have-dangles'
+CHAIN = ('LINESTRING(0 0, 10 0)', 'LINESTRING(10 0, 20 0)')
 # Names that Python 3.11 and 3.12 added to the standard library
 LATE = {
     'typing': {
@@ -150,6 +157,33 @@ def test_the_provider_lists_its_algorithms_without_tomllib(
             return {algorithm.name() for algorithm in provider.algorithms()}
 
         wait_for(lambda: 'check_definition' in names(), 30)
+    finally:
+        wait_for(lambda: not QgsApplication.taskManager().activeTasks(), 30)
+        registry.removeProvider(provider)
+
+
+def test_a_definition_is_run_without_tomllib(
+    without_tomllib: None,
+    executable: str,
+    qgis_processing: None,
+    tmp_path: Path,
+):
+    # The algorithm cannot read the file to see which files it names, so it
+    # has no check of the outputs, and the tool reads the file
+    provider = importlib.import_module(f'{PACKAGE}.provider').Provider()
+    registry = QgsApplication.processingRegistry()
+    registry.addProvider(provider)
+    try:
+        wait_for(lambda: provider.algorithm('check_definition') is not None, 30)
+        saved_layer(tmp_path, CHAIN, 'roads')
+        definition = write_toml(
+            tmp_path / 'topology.toml',
+            {'roads': ('roads.gpkg', 'roads')},
+            [(DANGLES, 'roads', None)],
+        )
+        ran = run_algorithm('check_definition', {'DEFINITION': str(definition)})
+        assert ran.ok, ran.log
+        assert ran.results['COUNT'] == len(CHAIN)
     finally:
         wait_for(lambda: not QgsApplication.taskManager().activeTasks(), 30)
         registry.removeProvider(provider)

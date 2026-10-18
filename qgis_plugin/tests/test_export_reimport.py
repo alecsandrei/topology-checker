@@ -7,12 +7,20 @@ import typing as t
 from pathlib import Path
 
 import pytest
+import tomllib
 from qgis.core import Qgis, QgsFeature, QgsGeometry, QgsProject, QgsVectorLayer
 from qgis.PyQt.QtWidgets import QMessageBox
 
 from topology_rules.panel.dock import Dock
 
-from .helpers import add, line_layer, message_text
+from .helpers import (
+    add,
+    cli_counts,
+    click_run,
+    line_layer,
+    message_text,
+    queue_column,
+)
 from .test_definition_files import CHAIN, DANGLES
 
 COUNT = len(CHAIN)
@@ -120,14 +128,34 @@ def scratch_layer() -> QgsVectorLayer:
     )
 
 
-def test_the_data_file_has_the_unsaved_edits_after_the_export(
+def exported_table(toml: Path) -> tuple[Path, str]:
+    """The file and the table that the one layer of the exported rules is
+    read from."""
+    config = tomllib.loads(toml.read_text(encoding='utf-8'))
+    (entry,) = config['layers'].values()
+    return toml.parent / entry['path'], entry['layer']
+
+
+def test_the_edits_are_exported_in_a_new_table(
     dock: Dock, imported: Path, tmp_path: Path
 ):
     edit_without_saving(scratch_layer())
     dock.export_rules(imported)
-    layer = stored(tmp_path / 'topology_data.gpkg', 'scratch')
+    path, table = exported_table(imported)
+    assert table != 'scratch'
+    layer = stored(path, table)
     assert layer.isValid()
     assert layer.featureCount() == COUNT + 1
+
+
+def test_the_edits_are_not_saved_into_the_table_that_the_layer_reads(
+    dock: Dock, imported: Path, tmp_path: Path
+):
+    edit_without_saving(scratch_layer())
+    dock.export_rules(imported)
+    source = stored(tmp_path / 'topology_data.gpkg', 'scratch')
+    assert source.isValid()
+    assert source.featureCount() == COUNT
 
 
 def test_the_layer_that_was_edited_keeps_its_features_after_the_export(
@@ -139,6 +167,59 @@ def test_the_layer_that_was_edited_keeps_its_features_after_the_export(
     assert layer.isValid()
     assert layer.featureCount() == COUNT + 1
     assert layer.isModified()
+
+
+def narrow(dock: Dock, how: str) -> None:
+    """Makes the layer of the data file count only its first feature: the
+    selection, with the option of the selected features, or a filter."""
+    layer = scratch_layer()
+    if how == 'selected':
+        layer.selectByIds([1])
+        dock.selected_only.setChecked(True)
+    else:
+        assert layer.setSubsetString('"fid" = 1')
+
+
+def widen(how: str) -> None:
+    if how == 'filter':
+        assert scratch_layer().setSubsetString('')
+
+
+@pytest.mark.parametrize('how', ['selected', 'filter'])
+def test_a_narrow_export_leaves_the_table_that_the_layer_reads_whole(
+    dock: Dock, imported: Path, tmp_path: Path, how: str
+):
+    narrow(dock, how)
+    dock.export_rules(imported)
+    widen(how)
+    layer = stored(tmp_path / 'topology_data.gpkg', 'scratch')
+    assert layer.isValid()
+    assert layer.featureCount() == COUNT
+
+
+@pytest.mark.parametrize('how', ['selected', 'filter'])
+def test_a_narrow_export_leaves_the_source_of_the_project_layer_whole(
+    dock: Dock, imported: Path, how: str
+):
+    narrow(dock, how)
+    dock.export_rules(imported)
+    widen(how)
+    # Read anew from the source of the layer, as the layer itself reads the
+    # file that was replaced under it, which can take QGIS down
+    source = QgsVectorLayer(scratch_layer().source(), 'again', 'ogr')
+    assert source.isValid()
+    assert source.featureCount() == COUNT
+
+
+@pytest.mark.parametrize('how', ['selected', 'filter'])
+def test_a_narrow_export_checks_what_the_panel_checks(
+    dock: Dock, imported: Path, executable: str, how: str
+):
+    narrow(dock, how)
+    dock.export_rules(imported)
+    exported = cli_counts(executable, imported)
+    click_run(dock)
+    assert exported == [int(count) for count in queue_column(dock, 3)]
 
 
 def test_the_rules_exported_with_unsaved_edits_check_the_edits(

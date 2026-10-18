@@ -4,9 +4,9 @@ on:
   push:
     branches: [master]
     tags: ['v*']
-    paths: ['qgis_plugin/**', 'crates/cli/**', '.github/workflows/qgis-plugin.yml']
+    paths: ['qgis_plugin/**', 'crates/cli/**', 'crates/core/**', 'crates/io/**', '.github/workflows/qgis-plugin.yml']
   pull_request:
-    paths: ['qgis_plugin/**', 'crates/cli/**', '.github/workflows/qgis-plugin.yml']
+    paths: ['qgis_plugin/**', 'crates/cli/**', 'crates/core/**', 'crates/io/**', '.github/workflows/qgis-plugin.yml']
 
 permissions:
   contents: read
