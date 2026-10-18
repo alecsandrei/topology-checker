@@ -1,0 +1,4 @@
+plugin_path: qgis_plugin/topology_rules
+github_organization_slug: alecsandrei
+project_slug: topology-checker
+changelog_path: CHANGELOG.md

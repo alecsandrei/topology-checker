@@ -168,7 +168,77 @@ jobs:
 
             RustGIS: install `topology-checker-*.rgplugin` with Plugin Manager > Install from File.
 
+            QGIS: install the `topology_rules` zip with Plugins > Manage and Install Plugins > Install from ZIP. The plugin needs the CLI.
+
             macOS: the binaries are unsigned. If macOS blocks them, run `xattr -dr com.apple.quarantine .` in the unzipped folder.
         run: |
           gh release create "$TAG" ./*.zip ./*.rgplugin SHA256SUMS --repo "$GITHUB_REPOSITORY" --verify-tag \
             --title "topology-checker ${TAG#v}" --notes "$NOTES"
+
+  qgis-plugin:
+    # Builds the plugin zip from the tag, attaches it to the release and
+    # uploads it to plugins.qgis.org. Without the token it is skipped.
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    env:
+      QGIS_PLUGIN_TOKEN: ${{ secrets.QGIS_PLUGIN_TOKEN }}
+    steps:
+      - name: No token
+        if: env.QGIS_PLUGIN_TOKEN == ''
+        run: echo "::notice::QGIS_PLUGIN_TOKEN is not set, so the plugin is not published to plugins.qgis.org."
+      - uses: actions/checkout@v4
+        if: env.QGIS_PLUGIN_TOKEN != ''
+        with:
+          ref: ${{ env.TAG }}
+      - uses: astral-sh/setup-uv@v6
+        if: env.QGIS_PLUGIN_TOKEN != ''
+      # Run from the root of the repository: the settings are in .qgis-plugin-ci
+      - name: Release the plugin
+        if: env.QGIS_PLUGIN_TOKEN != ''
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: uvx qgis-plugin-ci@2.10.0 release "${TAG#v}" --release-tag "$TAG" --qgis-token "$QGIS_PLUGIN_TOKEN" --github-token "$GITHUB_TOKEN"
+
+  crates:
+    # Publishes to crates.io with the CARGO_REGISTRY_TOKEN secret, once the builds have
+    # passed. A version that is there already is skipped, so a run can be
+    # repeated. A manual run needs the tag of a release.
+    needs: [build, notices, rustgis-plugin]
+    if: startsWith(inputs.tag || github.ref_name, 'v')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          # A tag without the token must not pass for a release of the crates
+          if [[ -z "$CARGO_REGISTRY_TOKEN" ]]; then
+            echo "::error::The secret CARGO_REGISTRY_TOKEN is not set, so the crates are not published."
+            exit 1
+          fi
+          version="${TAG#v}"
+          # In the order of their dependencies; cargo waits for the index
+          for crate in topology-checker-core topology-checker-io topology-checker; do
+            status=$(curl -s -o /dev/null -w '%{http_code}' \
+              -A 'topology-checker-release (https://github.com/alecsandrei/topology-checker)' \
+              "https://crates.io/api/v1/crates/$crate/$version")
+            if [[ "$status" == 200 ]]; then
+              echo "$crate $version is on crates.io already."
+              continue
+            fi
+            if [[ "$status" != 404 ]]; then
+              echo "crates.io answered $status for $crate $version."
+              exit 1
+            fi
+            cargo publish -p "$crate" --locked
+          done

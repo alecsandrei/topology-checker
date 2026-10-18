@@ -22,11 +22,6 @@ lint = [
 package = false
 default-groups = ["dev", "lint"]
 
-[tool.qgis-plugin-ci]
-plugin_path = "topology_rules"
-project_slug = "topology-rules"
-github_organization_slug = "alecsandrei"
-
 [tool.pyright]
 include = ["topology_rules"]
 # Where the QGIS images keep the Processing plugin
