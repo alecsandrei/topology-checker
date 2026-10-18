@@ -6,6 +6,7 @@ from __future__ import annotations
 import atexit
 import collections.abc as c
 import contextlib
+import os
 import shutil
 import sys
 import tempfile
@@ -18,7 +19,7 @@ import pytest
 from qgis.core import QgsApplication, QgsProject, QgsSettings
 from qgis.gui import QgisInterface
 from qgis.PyQt.QtCore import QSettings
-from qgis.PyQt.QtGui import QFontInfo
+from qgis.PyQt.QtGui import QFontDatabase, QFontInfo
 from qgis.PyQt.QtWidgets import QApplication, QMainWindow
 
 from topology_rules.core import binary
@@ -51,8 +52,9 @@ def pytest_configure(config: pytest.Config) -> None:
 UI_TEXT_PIXELS = 12
 
 
-# The family of the text of QGIS on Windows
+# The family of the text of QGIS on Windows, and the file that it is in
 WINDOWS_FONT = 'Segoe UI'
+WINDOWS_FONT_FILE = 'segoeui.ttf'
 
 
 @pytest.fixture(autouse=True, scope='session')
@@ -66,10 +68,18 @@ def ui_font(qgis_app: QgsApplication) -> str | None:
     points at 96 dpi. What the layout tests measure is then much the same on
     Linux, macOS and Windows. The tests of a large font set their own size.
 
+    A platform without a screen does not load the fonts of Windows, so the file
+    of the font is added to Qt by hand, which works on every platform.
+
     Returns why the font is not the one that was asked for, or none. The
     tests of the layout in pixels are skipped for a font that is not there."""
     font = QApplication.font()
+    problem = ''
     if sys.platform == 'win32':
+        folder = Path(os.environ.get('WINDIR', r'C:\Windows')) / 'Fonts'
+        file = folder / WINDOWS_FONT_FILE
+        if QFontDatabase.addApplicationFont(str(file)) == -1:
+            problem = f' ({file} could not be loaded)'
         font.setFamily(WINDOWS_FONT)
     font.setPixelSize(UI_TEXT_PIXELS)
     QApplication.setFont(font)
@@ -78,7 +88,10 @@ def ui_font(qgis_app: QgsApplication) -> str | None:
     drawn = QFontInfo(QApplication.font())
     if drawn.family() == WINDOWS_FONT and drawn.exactMatch():
         return None
-    return f'{WINDOWS_FONT} is not here, and {drawn.family()} is drawn instead'
+    return (
+        f'{WINDOWS_FONT} is not here, and {drawn.family()!r} is drawn '
+        f'instead{problem}'
+    )
 
 
 @pytest.fixture
