@@ -11,7 +11,7 @@ server=False
 supportsQt6=True
 
 # Done automatically by qgis-plugin-ci
-changelog=Rules are queued in a panel and run in one pass; errors are a tree with zoom, selection and a map filter; rules are exported to and imported from a topology.toml and saved with the project; invalid geometries are reported.
+changelog=Release the QGIS plugin.
 version=0.2.0
 commitNumber=
 commitSha1=

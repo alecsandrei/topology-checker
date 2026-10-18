@@ -3,7 +3,7 @@ members = ["crates/core", "crates/io", "crates/cli", "crates/server", "crates/py
 resolver = "3"
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT"
@@ -12,8 +12,8 @@ repository = "https://github.com/alecsandrei/topology-checker"
 homepage = "https://alecsandrei.github.io/topology-checker/"
 
 [workspace.dependencies]
-topology-checker-core = { path = "crates/core", version = "0.1.0" }
-topology-checker-io = { path = "crates/io", version = "0.1.0" }
+topology-checker-core = { path = "crates/core", version = "0.2.0" }
+topology-checker-io = { path = "crates/io", version = "0.2.0" }
 geo = { version = "0.33", default-features = false, features = ["serde", "multithreading"] }
 rstar = "0.12"
 rayon = "1.10"

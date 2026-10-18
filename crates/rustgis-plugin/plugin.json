@@ -1082,5 +1082,5 @@
       "summary": "Find strictly contained points, with the polygon as the primary feature. Boundary points are allowed."
     }
   ],
-  "version": "0.1.0"
+  "version": "0.2.0"
 }
