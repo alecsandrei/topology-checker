@@ -299,3 +299,25 @@ fn reversed_long_parts_keep_vertices_snap_join_and_resolve_direction_tie() {
         )]
     );
 }
+
+#[test]
+fn invalid_tolerances_are_rejected() {
+    for tolerance in [-1., f64::NAN, f64::INFINITY] {
+        let error = merge_lines([], tolerance).unwrap_err();
+        assert!(matches!(error, topology_checker_core::Error::Tolerance(_)));
+    }
+}
+
+#[test]
+fn chains_are_ordered_by_their_earliest_part_even_when_walked_from_a_later_one() {
+    use geo::line_string;
+    let input = vec![
+        line_string![(x: 1., y: 0.), (x: 2., y: 0.)],
+        line_string![(x: 0., y: 0.), (x: 1., y: 0.)],
+        line_string![(x: 2., y: 0.), (x: 3., y: 0.)],
+    ];
+    assert_eq!(
+        merge_lines(input, 0.).unwrap(),
+        vec![line_string![(x: 0., y: 0.), (x: 1., y: 0.), (x: 2., y: 0.), (x: 3., y: 0.)]]
+    );
+}

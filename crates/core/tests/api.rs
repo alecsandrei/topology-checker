@@ -1,7 +1,10 @@
 use std::sync::Arc;
 use topology_checker_core::{
-    Error, Layer, Rule, Topology, ViolationKind, Warning, explode_lines,
-    geo::{Geometry, LineString, Point, Rect, coord},
+    Error, GeometryKind, Layer, Rule, RuleSummary, Topology, ViolationKind, Warning, explode_lines,
+    geo::{
+        Euclidean, Geometry, GeometryCollection, Length, Line, LineString, MultiPolygon, Point,
+        Polygon, Rect, Triangle, coord,
+    },
     merge_lines,
 };
 
@@ -260,4 +263,205 @@ fn cleared_rules_restart_ids_and_keep_layers() {
         report.violations().next().unwrap().kind,
         ViolationKind::Crossing
     );
+}
+
+#[test]
+fn violation_kinds_have_stable_kebab_case_names() {
+    for (kind, name) in [
+        (ViolationKind::Overlap, "overlap"),
+        (ViolationKind::Outside, "outside"),
+        (ViolationKind::Dangle, "dangle"),
+        (ViolationKind::PseudoNode, "pseudo-node"),
+        (ViolationKind::Crossing, "crossing"),
+        (ViolationKind::TouchInterior, "touch-interior"),
+        (ViolationKind::SelfOverlap, "self-overlap"),
+        (ViolationKind::SelfCrossing, "self-crossing"),
+        (ViolationKind::Gap, "gap"),
+        (ViolationKind::OuterBoundary, "outer-boundary"),
+        (ViolationKind::Multipart, "multipart"),
+        (ViolationKind::NotCovered, "not-covered"),
+        (ViolationKind::MissingPoint, "missing-point"),
+        (ViolationKind::PointCount, "point-count"),
+        (ViolationKind::Contained, "contained"),
+        (ViolationKind::Intersection, "intersection"),
+    ] {
+        assert_eq!(kind.name(), name);
+        assert_eq!(serde_json::to_value(kind).unwrap(), name);
+    }
+}
+
+#[test]
+fn geometry_kinds_classify_every_geometry_variant() {
+    let line = Line::new((0., 0.), (1., 0.));
+    let triangle = Triangle::new((0., 0.).into(), (1., 0.).into(), (0., 1.).into());
+    for (geometry, kind) in [
+        (Geometry::from(Point::new(0., 0.)), GeometryKind::Point),
+        (line.into(), GeometryKind::Line),
+        (triangle.into(), GeometryKind::Polygon),
+        (
+            Geometry::GeometryCollection(GeometryCollection(vec![Point::new(0., 0.).into()])),
+            GeometryKind::Collection,
+        ),
+    ] {
+        assert_eq!(GeometryKind::of(&geometry), kind);
+    }
+    assert!(!GeometryKind::Collection.satisfies(GeometryKind::Point));
+    assert!(GeometryKind::Collection.satisfies(GeometryKind::Any));
+}
+
+#[test]
+fn segments_rectangles_and_triangles_behave_like_lines_and_polygons() {
+    let mut t = Topology::new(0.).unwrap();
+    let lines = t.add_layer(Layer::from_features(
+        "segments",
+        [
+            (1, Line::new((0., 0.), (4., 0.)).into()),
+            (2, Line::new((2., 0.), (6., 0.)).into()),
+        ],
+    ));
+    let triangle = Triangle::new((0., 0.).into(), (4., 0.).into(), (0., 4.).into());
+    let polygons = t.add_layer(Layer::from_features(
+        "areas",
+        [
+            (1, triangle.into()),
+            (
+                2,
+                Rect::new(coord! {x: 1., y: 1.}, coord! {x: 3., y: 3.}).into(),
+            ),
+        ],
+    ));
+    t.add_rule(Rule::LineMustNotOverlap, lines, None).unwrap();
+    t.add_rule(Rule::PolygonMustNotOverlap, polygons, None)
+        .unwrap();
+    let report = t.validate().unwrap();
+    assert_eq!(report.rules[0].violations.len(), 1);
+    assert_eq!(report.rules[1].violations.len(), 1);
+}
+
+#[test]
+fn cleaned_polygons_keep_valid_holes() {
+    let shell = LineString::from(vec![
+        (0., 0.),
+        (0., 0.),
+        (10., 0.),
+        (10., 10.),
+        (0., 10.),
+        (0., 0.),
+    ]);
+    let hole = LineString::from(vec![(2., 2.), (4., 2.), (4., 4.), (2., 4.), (2., 2.)]);
+    let degenerate = LineString::from(vec![(6., 6.), (7., 7.), (6., 6.)]);
+    let mut t = Topology::new(0.).unwrap();
+    let id = t.add_layer(Layer::from_geometries(
+        "holed",
+        [Polygon::new(shell, vec![hole, degenerate]).into()],
+    ));
+    t.add_rule(Rule::PolygonMustNotHaveGaps, id, None).unwrap();
+    assert_eq!(t.warnings().unwrap().len(), 1);
+    let report = t.validate().unwrap();
+    let kinds = report.rules[0]
+        .violations
+        .iter()
+        .map(|v| v.kind)
+        .collect::<Vec<_>>();
+    assert_eq!(kinds, [ViolationKind::Gap, ViolationKind::OuterBoundary]);
+}
+
+#[test]
+fn unknown_layers_and_report_layer_names_are_reported() {
+    let mut first = Topology::new(0.).unwrap();
+    let mut second = Topology::new(0.).unwrap();
+    first.add_layer(Layer::from_geometries("a", [point(0., 0.)]));
+    let a = second.add_layer(Layer::from_geometries("padding", []));
+    let b = second.add_layer(Layer::from_geometries("b", [point(0., 0.)]));
+    assert!(first.layer(b).is_err());
+    assert!(matches!(first.shared_layer(b), Err(Error::UnknownLayer(id)) if id == b));
+    assert_eq!(second.shared_layer(b).unwrap().name(), "b");
+    assert!(second.layer(a).unwrap().check(a).is_ok());
+
+    let c = second.add_layer(Layer::from_geometries("c", [point(0., 0.)]));
+    second
+        .add_rule(Rule::PointMustNotOverlapWith, b, Some(c))
+        .unwrap();
+    let report = second.validate().unwrap();
+    let rule = &report.rules[0];
+    assert_eq!(rule.layer_name(b), Some("b"));
+    assert_eq!(rule.layer_name(c), Some("c"));
+    assert_eq!(rule.layer_name(a), None);
+    let summary = RuleSummary::from(rule);
+    assert_eq!(summary.total, rule.violations.len());
+    assert_eq!(summary.counts, rule.counts);
+    assert_eq!(summary.other.as_deref(), Some("c"));
+}
+
+#[test]
+fn collapsed_lines_warn_with_their_feature() {
+    let mut t = Topology::new(1.).unwrap();
+    t.add_layer(Layer::from_features(
+        "short",
+        [(7, line(&[(0., 0.), (0.25, 0.), (0.5, 0.)]))],
+    ));
+    let warnings = t.warnings().unwrap();
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.to_string() == "layer short, FID 7, part 0: line collapsed under tolerance"),
+        "{warnings:?}"
+    );
+}
+
+fn linear_length(geometry: &Geometry) -> f64 {
+    match geometry {
+        Geometry::LineString(l) => l.lines().map(|s| Euclidean.length(&s)).sum(),
+        Geometry::MultiLineString(m) => m.0.iter().map(|l| linear_length(&l.clone().into())).sum(),
+        Geometry::GeometryCollection(c) => c.0.iter().map(linear_length).sum(),
+        _ => 0.,
+    }
+}
+
+#[test]
+fn boundary_rules_see_holes_of_source_and_cleaned_polygons() {
+    let ring = |x: f64, size: f64, repeat: bool| {
+        let mut coords = vec![(x, x), (x + size, x), (x + size, x + size), (x, x + size)];
+        if repeat {
+            coords.insert(1, coords[0]);
+        }
+        coords.push(coords[0]);
+        LineString::from(coords)
+    };
+    let holed =
+        |x: f64, repeat: bool| Polygon::new(ring(x, 10., repeat), vec![ring(x + 2., 4., false)]);
+    // Each case has the polygons' shells (perimeter 40) and holes (perimeter 16).
+    let single = Polygon::new(ring(0., 10., false), vec![ring(2., 4., false)]);
+    let cases = [
+        (single.into(), 1, vec![ring(2., 4., false)]),
+        (
+            MultiPolygon(vec![holed(0., false), holed(20., true)]).into(),
+            2,
+            vec![ring(2., 4., false), ring(22., 4., false)],
+        ),
+        (holed(0., true).into(), 1, vec![ring(2., 4., false)]),
+    ];
+    for (geometry, polygons, holes) in cases {
+        let geometry: Geometry = geometry;
+        for (covering, boundary_length) in [(holes, 40.), (vec![], 56.)] {
+            let mut t = Topology::new(0.).unwrap();
+            let areas = t.add_layer(Layer::from_geometries("areas", [geometry.clone()]));
+            let lines = t.add_layer(Layer::from_geometries(
+                "lines",
+                covering.into_iter().map(Geometry::from),
+            ));
+            t.add_rule(
+                Rule::PolygonBoundariesMustBeCoveredByLines,
+                areas,
+                Some(lines),
+            )
+            .unwrap();
+            let report = t.validate().unwrap();
+            let length: f64 = report
+                .violations()
+                .map(|v| linear_length(&v.geometry))
+                .sum();
+            assert_eq!(length, boundary_length * polygons as f64);
+        }
+    }
 }

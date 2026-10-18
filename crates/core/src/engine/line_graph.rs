@@ -54,16 +54,18 @@ mod tests {
 
     #[test]
     fn multipart_restoration_allocates_roles_only_for_self_participants() {
-        for self_group in [false, true] {
+        // Horizontal and vertical support are measured on different axes.
+        for (self_group, vertical) in [(false, false), (true, false), (false, true), (true, true)] {
+            let place = |x: f64, y: f64| if vertical { (y, x) } else { (x, y) };
             let mut t = Topology::new(1.).unwrap();
-            let a = LineString::from(vec![(0., 0.), (3., 0.)]);
+            let a = LineString::from(vec![place(0., 0.), place(3., 0.)]);
             let b = geo::MultiLineString(
                 (0..6)
                     .map(|i| {
                         LineString::from(vec![
-                            (i as f64 / 2., 0.25),
-                            ((i + 1) as f64 / 2., 0.25),
-                            ((i + 1) as f64 / 2., -10.),
+                            place(i as f64 / 2., 0.25),
+                            place((i + 1) as f64 / 2., 0.25),
+                            place((i + 1) as f64 / 2., -10.),
                         ])
                     })
                     .collect(),
@@ -73,8 +75,8 @@ mod tests {
                     (
                         i,
                         LineString::from(vec![
-                            (100. + i as f64 * 20., 0.),
-                            (110. + i as f64 * 20., 0.),
+                            place(100. + i as f64 * 20., 0.),
+                            place(110. + i as f64 * 20., 0.),
                         ])
                         .into(),
                     )
@@ -111,6 +113,69 @@ mod tests {
         PASSAGE_ROLE_SLOTS.with(|n| n.set(0));
         assert!(g.selected_matches(None).next().is_none());
         assert_eq!(PASSAGE_ROLE_SLOTS.with(|n| n.get()), 0);
+    }
+
+    #[test]
+    fn parallel_non_finite_and_empty_inputs_have_no_exact_crossing_or_collapse() {
+        let line = |a: (f64, f64), b: (f64, f64)| {
+            Line::new(Coord { x: a.0, y: a.1 }, Coord { x: b.0, y: b.1 })
+        };
+        assert!(exact_crossing(line((0., 0.), (1., 0.)), line((0., 1.), (1., 1.))).is_none());
+        assert!(exact_crossing(line((0., 0.), (f64::NAN, 0.)), line((0., 1.), (1., 0.))).is_none());
+        assert!(exact_crossing(line((0., 0.), (1., 1.)), line((0., 1.), (1., 0.))).is_some());
+        assert!(collapsed(&LineString(vec![]), 1.));
+    }
+
+    #[test]
+    fn points_at_a_distance_fall_back_to_the_segment_start_when_it_has_no_width() {
+        let mut t = Topology::new(0.).unwrap();
+        let layer = t.add_layer(Layer::from_geometries(
+            "line",
+            [LineString::from(vec![(0., 0.), (1., 0.), (2., 0.)]).into()],
+        ));
+        let g = t.graph(vec![layer]).unwrap();
+        // The last segment is shorter than the spacing of the traversal distances.
+        let at = |position| g.point_at(0, &[0., 1., 1.], position);
+        assert_eq!(at(1.), Some(Coord { x: 1., y: 0. }));
+        assert_eq!(at(0.5), Some(Coord { x: 0.5, y: 0. }));
+        assert_eq!(at(2.), None);
+        assert_eq!(g.point_at(0, &[], 0.), None);
+    }
+
+    #[test]
+    fn matched_pairs_list_the_overlapping_matches_of_two_features() {
+        let mut t = Topology::new(0.).unwrap();
+        let layers = [
+            vec![(0., 0.), (4., 0.)],
+            vec![(2., 0.), (6., 0.)],
+            vec![(10., 0.), (12., 0.)],
+        ]
+        .map(|line| {
+            t.add_layer(Layer::from_geometries(
+                "line",
+                [LineString::from(line).into()],
+            ))
+        });
+        let g = t.graph(layers.to_vec()).unwrap();
+        assert_eq!(g.matched_pair((layers[0], 0), (layers[1], 0)).len(), 1);
+        assert_eq!(g.matched_pair((layers[1], 0), (layers[0], 0)).len(), 1);
+        assert!(g.matched_pair((layers[0], 0), (layers[2], 0)).is_empty());
+
+        // Within tolerance but too short to be shared linework.
+        let mut t = Topology::new(1.).unwrap();
+        let layers = [
+            vec![(0., 0.), (0.5, 0.), (0.5, 10.)],
+            vec![(0., 0.25), (0.5, 0.25), (0.5, -10.)],
+        ]
+        .map(|line| {
+            t.add_layer(Layer::from_geometries(
+                "line",
+                [LineString::from(line).into()],
+            ))
+        });
+        let g = t.graph(layers.to_vec()).unwrap();
+        assert!(!g.matches().is_empty());
+        assert!(g.matched_pair((layers[0], 0), (layers[1], 0)).is_empty());
     }
 
     #[test]

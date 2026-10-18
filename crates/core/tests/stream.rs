@@ -246,3 +246,24 @@ fn line_meeting_sinks_match_eager_reports_on_nearby_linework() {
         }
     }
 }
+
+#[test]
+fn panics_in_the_sink_propagate_unchanged() {
+    use topology_checker_core::CancellationToken;
+    let mut topology = Topology::new(0.).unwrap();
+    let layer = topology.add_layer(Layer::from_geometries(
+        "duplicates",
+        [Point::new(0., 0.).into(), Point::new(0., 0.).into()],
+    ));
+    topology
+        .add_rule(Rule::PointMustNotOverlap, layer, None)
+        .unwrap();
+    let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let _ = topology
+            .validate_into_cancellable(CancellationToken::default(), |_, _| -> Result<(), ()> {
+                panic!("sink failed")
+            });
+    }))
+    .unwrap_err();
+    assert_eq!(panic.downcast_ref::<&str>(), Some(&"sink failed"));
+}

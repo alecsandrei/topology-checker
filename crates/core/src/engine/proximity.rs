@@ -288,13 +288,8 @@ impl Expression {
 }
 impl Cut {
     pub(crate) fn rational(value: Q) -> Self {
-        let approx = value.to_f64().unwrap_or_else(|| {
-            if value.is_negative() {
-                f64::NEG_INFINITY
-            } else {
-                f64::INFINITY
-            }
-        });
+        // Rational conversion saturates to infinity instead of failing.
+        let approx = value.to_f64().expect("rational approximation");
         Self {
             bounds: Interval(approx.next_down(), approx.next_up()),
             value: OnceCell::from(ExactCut::rational(value)),

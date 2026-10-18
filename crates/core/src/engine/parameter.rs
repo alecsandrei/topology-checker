@@ -175,7 +175,11 @@ impl Parameter {
         self.exact.get_or_init(|| match self.kind {
             Kind::Start => Q::zero(),
             Kind::End => Q::one(),
-            Kind::On => {
+            Kind::On | Kind::Crossing => {
+                debug_assert!(
+                    self.kind == Kind::On,
+                    "crossings store their rational parameter"
+                );
                 let (dx, dy) = (
                     q(self.line.end.x) - q(self.line.start.x),
                     q(self.line.end.y) - q(self.line.start.y),
@@ -184,7 +188,6 @@ impl Parameter {
                     + (q(self.point.y) - q(self.line.start.y)) * &dy)
                     / (&dx * &dx + &dy * &dy)
             }
-            Kind::Crossing => unreachable!("crossings store their rational parameter"),
         })
     }
     /// Order along the line part: segment, then exact parameter.
@@ -238,6 +241,16 @@ mod tests {
     fn vertical(x: f64) -> Line {
         Line::new(Coord { x, y: -1. }, Coord { x, y: 2. })
     }
+    #[test]
+    fn crossings_near_the_start_of_a_huge_segment_have_subnormal_parameters() {
+        let huge = Line::new(Coord { x: 0., y: 0. }, Coord { x: 1e308, y: 1e308 });
+        let across = Line::new(Coord { x: -1., y: 2. }, Coord { x: 2., y: -1. });
+        let crossing = Parameter::crossing(0, huge, across).unwrap();
+        assert!(crossing.bounds.0 < 0. && crossing.bounds.1 > 0.);
+        assert!(crossing.bounds.1 <= f64::MIN_POSITIVE);
+        assert_eq!(crossing.cmp(&Parameter::start(0, huge)), Ordering::Greater);
+    }
+
     #[test]
     fn parameters_order_by_exact_value_when_bounds_overlap() {
         let line = Line::new(Coord { x: 0., y: 0. }, Coord { x: 3., y: 1. });

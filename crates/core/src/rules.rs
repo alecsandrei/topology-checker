@@ -37,8 +37,8 @@ pub(crate) fn run(t: &Topology, spec: RuleSpec) -> Result<Vec<Violation>, Error>
         Rule::LineMustNotOverlap | Rule::LineMustNotOverlapWith => {
             line::run(t, spec, LineCheck::Overlap)
         }
-        Rule::LineMustNotSelfOverlap => line::run(t, spec, LineCheck::SelfOverlap),
-        Rule::LineMustNotSelfIntersect => line::run(t, spec, LineCheck::SelfIntersect),
+        Rule::LineMustNotSelfOverlap => line::run_self(t, spec, false),
+        Rule::LineMustNotSelfIntersect => line::run_self(t, spec, true),
         Rule::LineMustNotIntersect | Rule::LineMustNotIntersectWith => {
             line::run(t, spec, LineCheck::Intersect { touch: false })
         }
@@ -78,14 +78,12 @@ pub(crate) fn run(t: &Topology, spec: RuleSpec) -> Result<Vec<Violation>, Error>
         }
         Rule::GeometryMustNotBeContainedBy => containment::contained(t, spec, other()?),
         Rule::LineMustBeCoveredByPolygonBoundaries => {
-            boundary::linework(t, spec, other()?, Boundary::LinesCovered)
+            boundary::uncovered(t, spec, other()?, Boundary::LinesCovered)
         }
         Rule::PolygonBoundariesMustBeCoveredByLines => {
-            boundary::linework(t, spec, other()?, Boundary::BoundariesCovered)
+            boundary::uncovered(t, spec, other()?, Boundary::BoundariesCovered)
         }
-        Rule::LineMustNotOverlapPolygonBoundaries => {
-            boundary::linework(t, spec, other()?, Boundary::NotShared)
-        }
+        Rule::LineMustNotOverlapPolygonBoundaries => boundary::shared(t, spec, other()?),
         Rule::LineMustBeProperlyInsidePolygons => line_polygon::properly_inside(t, spec, other()?),
         Rule::LineMustNotCrossPolygonBoundaries => {
             line_polygon::run(t, spec, other()?, LinePolygon::Cross)
@@ -250,4 +248,46 @@ fn feature_geometry(
             ),
         )
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Layer, model::PartRef};
+    use geo::{GeometryCollection, LineString, Polygon, Rect, coord};
+
+    #[test]
+    fn feature_emission_failures_name_their_layer_and_feature() {
+        // The union of these overlapping slivers cannot be rounded.
+        let x = 1f64.next_up();
+        let rect = Rect::new(coord! {x: 1., y: 0.}, coord! {x: x, y: 1.}).to_polygon();
+        let triangle = Polygon::new(
+            LineString::from(vec![(1., -1.), (x, -1.), (1., 1.), (1., -1.)]),
+            vec![],
+        );
+        let area = crate::engine::arrangement::overlay([&rect, &triangle], [], false);
+        let feature = crate::engine::cross::Feature {
+            reference: PartRef { fid: 5, part: None },
+            geometry: Geometry::GeometryCollection(GeometryCollection(vec![])),
+            points: Vec::new(),
+            locations: Vec::new(),
+            area: Some(area),
+            non_areal: Vec::new(),
+        };
+        let mut topology = Topology::new(0.).unwrap();
+        let polygons = topology.add_layer(Layer::from_geometries("parcels", []));
+        let points = topology.add_layer(Layer::from_geometries("wells", []));
+        let spec = topology
+            .add_rule(Rule::PolygonMustContainPoint, polygons, Some(points))
+            .unwrap();
+        let error = feature_geometry(&topology, spec, polygons, &feature).unwrap_err();
+        assert!(
+            matches!(
+                &error,
+                Error::Precision { operation, rule: Some(Rule::PolygonMustContainPoint), context, .. }
+                    if operation == "polygon feature emission" && context == ", layer parcels, FID 5"
+            ),
+            "{error:?}"
+        );
+    }
 }

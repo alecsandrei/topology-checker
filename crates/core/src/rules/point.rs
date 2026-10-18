@@ -6,14 +6,11 @@ use rayon::prelude::*;
 
 pub(crate) fn overlap(t: &Topology, spec: RuleSpec) -> Result<Vec<Violation>, Error> {
     let mut errors = Vec::new();
-    overlap_into(t, spec, |v| {
+    let mut collect = |v| {
         errors.push(v);
         Ok::<_, std::convert::Infallible>(())
-    })
-    .map_err(|e| match e {
-        crate::SinkError::Core(e) => e,
-        crate::SinkError::Consumer(e) => match e {},
-    })?;
+    };
+    overlap_into(t, spec, &mut collect)?;
     Ok(errors)
 }
 

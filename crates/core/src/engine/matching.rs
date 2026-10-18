@@ -150,3 +150,16 @@ pub(crate) fn union_within(mut spans: Vec<[f64; 2]>, gap: f64) -> Vec<[f64; 2]> 
     }
     result
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn zero_length_segments_have_no_evidence() {
+        let line = Line::new(Coord { x: 0., y: 0. }, Coord { x: 4., y: 0. });
+        let point = Line::new(Coord { x: 1., y: 0.5 }, Coord { x: 1., y: 0.5 });
+        assert!(evidence(line, point, 1.).is_none());
+        assert!(evidence(point, line, 1.).is_none());
+    }
+}

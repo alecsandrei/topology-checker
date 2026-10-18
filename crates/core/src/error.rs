@@ -112,3 +112,30 @@ impl Error {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn precision_context_only_rewrites_precision_errors() {
+        let error = Error::Precision {
+            operation: "overlay".into(),
+            rule: None,
+            context: String::new(),
+            reason: "rounding".into(),
+        }
+        .precision_context("emission", Rule::PolygonMustNotOverlap, ", layer a".into());
+        assert!(matches!(
+            &error,
+            Error::Precision { operation, rule: Some(Rule::PolygonMustNotOverlap), context, reason }
+                if operation == "emission" && context == ", layer a" && reason == "rounding"
+        ));
+        let other = Error::Tolerance(-1.).precision_context(
+            "emission",
+            Rule::PolygonMustNotOverlap,
+            String::new(),
+        );
+        assert!(matches!(other, Error::Tolerance(t) if t == -1.));
+    }
+}
