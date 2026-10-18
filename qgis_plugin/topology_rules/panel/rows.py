@@ -7,7 +7,7 @@ import typing as t
 
 from qgis.core import QgsFeature, QgsVectorLayer
 
-from ..core.binary import named_with, short_name
+from ..core.binary import named_with, plain_name, short_name
 from ..core.style import INVALID, Grouping, rule_grouping
 
 
@@ -85,7 +85,7 @@ class Row:
             return INVALID
         name = short_name(self.rule_name)
         if self.other_alias and self.other_alias != self.layer_alias:
-            name = named_with(name, self.other)
+            name = named_with(plain_name(self.rule_name), self.other)
         return f'{self.layer}: {name}'
 
     @property

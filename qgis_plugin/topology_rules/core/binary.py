@@ -46,6 +46,10 @@ class Rule:
     def short_name(self) -> str:
         return short_name(self.name)
 
+    @property
+    def plain_name(self) -> str:
+        return plain_name(self.name)
+
     def fits(self, kind: str) -> bool:
         """Whether the first layer of the rule can be of the geometry kind."""
         return self.layer in ('any', kind)
@@ -57,9 +61,22 @@ PROBE_TIMEOUT = 30
 MAX_VERSIONS = 4
 
 
-def display_name(name: str) -> str:
-    """'line/must-not-have-dangles' as 'Lines must not have dangles', which
-    says what the rule is about wherever the rule is named."""
+# The rules that compare two layers and end in 'with', named so that they do
+# not
+TWO_LAYER_NAMES = {
+    'point/must-not-overlap-with': 'Points must not overlap another layer',
+    'line/must-not-overlap-with': 'Lines must not overlap another layer',
+    'line/must-not-intersect-with': 'Lines must not intersect another layer',
+    'line/must-not-intersect-or-touch-interior-with': (
+        'Lines must not intersect or touch interior of another layer'
+    ),
+    'polygon/must-not-overlap-with': 'Polygons must not overlap another layer',
+}
+
+
+def spelled(name: str) -> str:
+    """'line/must-not-have-dangles' as 'Lines must not have dangles', the
+    words of the rule as they are."""
     group, _, rest = name.partition('/')
     try:
         noun = Group(group).noun
@@ -77,10 +94,19 @@ def display_name(name: str) -> str:
     return f'{noun} {" ".join(words)}'
 
 
-def short_name(name: str) -> str:
-    """'line/must-not-have-dangles' as 'Must not have dangles', for where
-    the geometry is already on the screen."""
-    full = display_name(name)
+def display_name(name: str) -> str:
+    """'line/must-not-have-dangles' as 'Lines must not have dangles', which
+    says what the rule is about wherever the rule is named. A rule that ends
+    in 'with' is named for the other layer it takes."""
+    known = TWO_LAYER_NAMES.get(name)
+    if known is not None:
+        return known
+    if name.endswith('-with'):
+        return f'{spelled(name.removesuffix("-with"))} (two layers)'
+    return spelled(name)
+
+
+def without_noun(name: str, full: str) -> str:
     group = name.partition('/')[0]
     try:
         noun = Group(group).noun
@@ -88,6 +114,19 @@ def short_name(name: str) -> str:
         return full
     rest = full[len(noun) + 1 :]
     return rest[:1].upper() + rest[1:]
+
+
+def short_name(name: str) -> str:
+    """'line/must-not-have-dangles' as 'Must not have dangles', for where
+    the geometry is already on the screen."""
+    return without_noun(name, display_name(name))
+
+
+def plain_name(name: str) -> str:
+    """The short name with the words of the rule as they are, so that a rule
+    that takes a second layer ends in 'with', for the name of that layer to
+    follow: 'Must not overlap with'."""
+    return without_noun(name, spelled(name))
 
 
 def named_with(short: str, other: str) -> str:
