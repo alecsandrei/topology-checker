@@ -54,6 +54,20 @@ WINDOWS_PATHS = [
 ]
 
 
+# The tests of other systems have nothing to say about Windows itself, where
+# their set-up, such as a call that ends a group of processes, does not exist
+not_on_windows = pytest.mark.skipif(
+    sys.platform == 'win32', reason='a test of a system that is not Windows'
+)
+
+
+def other_drive(folder: Path) -> str:
+    """A drive that the folder is not on, so that a path on it cannot be shown
+    relative to a file in the folder, on Windows itself too."""
+    own = ntpath.splitdrive(str(folder))[0].upper()
+    return 'Z:' if own != 'Z:' else 'Y:'
+
+
 def windows_os() -> types.SimpleNamespace:
     """The `os` of commands as it is on Windows."""
     return types.SimpleNamespace(path=ntpath, sep='\\')
@@ -109,6 +123,7 @@ def test_a_path_without_exe_finds_the_exe_on_windows(
     assert not answer.endswith('topology-checker')
 
 
+@not_on_windows
 def test_a_path_without_exe_is_not_guessed_elsewhere(
     tmp_path: Path, configure: c.Callable[[str | Path], None]
 ):
@@ -265,6 +280,7 @@ def test_a_command_on_windows_does_not_start_a_session(
     assert popen[0]['start_new_session'] is False
 
 
+@not_on_windows
 def test_a_command_elsewhere_has_no_creation_flags(
     popen: list[dict[str, t.Any]],
 ):
@@ -362,6 +378,7 @@ def test_a_program_that_outlives_its_tool_does_not_hold_up_a_cancel(
     assert process.stderr.closed
 
 
+@not_on_windows
 def test_canceling_elsewhere_ends_the_group_of_the_tool(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -497,7 +514,7 @@ def test_writing_data_on_another_drive_does_not_fail(
     tmp_path: Path, ntfs: None
 ):
     path = tmp_path / 'topology.toml'
-    source = 'C:\\data\\roads.gpkg'
+    source = f'{other_drive(tmp_path)}\\data\\roads.gpkg'
     write_config(
         path, [Check(DANGLES, Dataset(source, 'roads'))], relative=True
     )
@@ -508,7 +525,7 @@ def test_writing_data_on_another_drive_does_not_fail(
 def test_exporting_data_on_another_drive_does_not_fail(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    source = Dataset('C:\\data\\roads.gpkg', 'roads')
+    source = Dataset(f'{other_drive(tmp_path)}\\data\\roads.gpkg', 'roads')
     monkeypatch.setattr(exchange, 'dataset_of', lambda layer_id: source)
     monkeypatch.setattr(commands, 'os', windows_os())
     path = tmp_path / 'topology.toml'
@@ -518,11 +535,12 @@ def test_exporting_data_on_another_drive_does_not_fail(
 
 
 @pytest.mark.parametrize(
-    'source', ['C:\\a.gpkg', '\\\\h\\s\\a.gpkg', 'Z:\\b\\c.gpkg']
+    'template', ['{}\\a.gpkg', '\\\\h\\s\\a.gpkg', '{}\\b\\c.gpkg']
 )
 def test_exporting_keeps_the_path_of_any_other_drive(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source: str
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, template: str
 ):
+    source = template.format(other_drive(tmp_path))
     monkeypatch.setattr(
         exchange, 'dataset_of', lambda layer_id: Dataset(source, 'roads')
     )

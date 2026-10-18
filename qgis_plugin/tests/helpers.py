@@ -20,6 +20,7 @@ import time
 import typing as t
 from pathlib import Path
 
+import pytest
 from qgis.core import (
     Qgis,
     QgsApplication,
@@ -339,10 +340,13 @@ def save(layer: QgsVectorLayer, path: Path, driver: str, name: str) -> None:
     assert result[0] == QgsVectorFileWriter.WriterError.NoError
 
 
-# Windows cannot delete a file that a layer has open. A layer of a GeoPackage
-# keeps its file open, and one of a GeoJSON file reads it and lets go of it,
-# so a test of a file that vanishes uses a file of the second kind there
-VANISHING = 'GeoJSON' if sys.platform == 'win32' else 'GPKG'
+# A layer keeps its file open as long as it is loaded, and Windows does not
+# let a program delete a file that is open. So a test of a file that vanishes
+# under a layer that is loaded cannot be made there
+files_stay_open = pytest.mark.skipif(
+    sys.platform == 'win32',
+    reason='a file that a loaded layer has open cannot be deleted on Windows',
+)
 
 
 def remove_files(directory: Path, stem: str) -> None:

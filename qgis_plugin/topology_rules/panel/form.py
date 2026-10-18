@@ -21,6 +21,7 @@ from ..core.layers import wkb_kind
 from ..utils import not_none, tr
 from .entries import Entry, unit_of
 from .icons import decorate
+from .narrow import shrink_combo
 
 
 def layer_filter(kind: str) -> t.Any:
@@ -68,6 +69,8 @@ class RuleForm(QWidget):
         self.other_label = QLabel(tr('Other layer'))
         self.other_box = QgsMapLayerComboBox()
         self.add_button = QPushButton(tr('Add rule'))
+        for box in (self.input_box, self.rule_box, self.other_box):
+            shrink_combo(box)
         decorate(self.add_button, 'add', tr('Add the rule to the list'))
 
         form = QFormLayout()

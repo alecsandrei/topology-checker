@@ -26,6 +26,7 @@ from .base import (
     TOLERANCE,
     executable_path,
     failures,
+    memory_copy,
     refuse_overwrite,
     release_files,
     scratch,
@@ -193,15 +194,16 @@ class RuleAlgorithm(SinkAlgorithm):
                 context,
                 feedback,
             )
-            results = self.write_sinks(
-                parameters,
-                context,
-                outcome.crs,
-                path,
-                outcome.ids,
-                outcome.invalid,
-                self.rule.display_name,
-            )
+            with memory_copy(path) as source:
+                results = self.write_sinks(
+                    parameters,
+                    context,
+                    outcome.crs,
+                    source,
+                    outcome.ids,
+                    outcome.invalid,
+                    self.rule.display_name,
+                )
         count = sum(outcome.counts) + len(outcome.invalid)
         feedback.pushInfo(f'{count} topology errors')
         return {**results, COUNT: count}

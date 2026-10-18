@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from qgis.core import QgsSettings
 from qgis.gui import QgsCollapsibleGroupBox
+from qgis.PyQt.QtCore import QSize
 from qgis.PyQt.QtWidgets import (
     QCheckBox,
     QFormLayout,
@@ -14,11 +15,14 @@ from qgis.PyQt.QtWidgets import (
 from ..utils import tr
 from .form import RuleForm
 from .icons import decorate
+from .narrow import narrowest, shrink_buttons
 from .rule_list import RuleList
 from .tolerance import tolerance_box
 
 # Whether the box of options is closed, in the settings of the user
 COLLAPSED = 'topology_rules/options_collapsed'
+# The least width that the box asks for, whatever its title says
+MINIMUM_WIDTH = 120
 
 
 class OptionsBox(QgsCollapsibleGroupBox):
@@ -30,6 +34,11 @@ class OptionsBox(QgsCollapsibleGroupBox):
         self.setCollapsed(QgsSettings().value(COLLAPSED, True, type=bool))
         # A click on the title says so; setCollapsed does not
         self.collapsedStateChanged.connect(self.remember)
+
+    def minimumSizeHint(self) -> QSize:
+        """The title can say all that is set, and is long: the box is cut
+        short instead of making the dock wider."""
+        return narrowest(super().minimumSizeHint(), MINIMUM_WIDTH)
 
     def setCollapsed(self, collapse: bool) -> None:
         super().setCollapsed(collapse)
@@ -73,6 +82,7 @@ class RulesPage(QWidget):
         page.setContentsMargins(0, 2, 0, 2)
         page.addWidget(self.form)
         page.addWidget(self.rule_list, 1)
+        shrink_buttons(self.import_button, self.export_button)
         files_row = QHBoxLayout()
         files_row.addWidget(self.import_button)
         files_row.addWidget(self.export_button)
@@ -101,4 +111,6 @@ class RulesPage(QWidget):
             set_here.append(tr('selected features'))
         if self.extent_only.isChecked():
             set_here.append(tr('visible extent'))
-        self.options.setTitle(' · '.join([tr('Options'), *set_here]))
+        title = ' · '.join([tr('Options'), *set_here])
+        self.options.setTitle(title)
+        self.options.setToolTip(title)
