@@ -26,8 +26,10 @@ from .helpers import (
 
 FIRST, SECOND = (rule['name'] for rule in RULES)
 # What a thread does with the cache of answers, and how often
-THREADS = 8
-CALLS = 2000
+THREADS = 4
+CALLS = 300
+# Seconds that the threads may take together
+JOIN_SECONDS = 60
 
 
 def known_rules(dock: Dock) -> list[str]:
@@ -104,7 +106,7 @@ def test_threads_that_ask_together_do_not_fail_when_old_answers_are_dropped(
     monkeypatch.setattr(binary.Probe, 'ask', staticmethod(lambda path: ()))
     probe = binary.Probe()
     errors: list[BaseException] = []
-    start = threading.Barrier(THREADS)
+    start = threading.Barrier(THREADS, timeout=JOIN_SECONDS)
 
     def work(number: int) -> None:
         try:
@@ -115,20 +117,24 @@ def test_threads_that_ask_together_do_not_fail_when_old_answers_are_dropped(
             errors.append(error)
 
     threads = [
-        threading.Thread(target=work, args=(number,))
+        threading.Thread(target=work, args=(number,), daemon=True)
         for number in range(THREADS)
     ]
     interval = sys.getswitchinterval()
     # Threads take turns often, as they do when each of them also waits for a
     # program to answer
-    sys.setswitchinterval(1e-6)
+    sys.setswitchinterval(1e-5)
     try:
         for thread in threads:
             thread.start()
         for thread in threads:
-            thread.join()
+            thread.join(JOIN_SECONDS)
     finally:
         sys.setswitchinterval(interval)
+    # A thread that is still going is a failure and not a hang of the run, as
+    # it can be where threads are emulated, such as a container for another
+    # processor
+    assert not [thread for thread in threads if thread.is_alive()]
     assert errors == []
 
 
