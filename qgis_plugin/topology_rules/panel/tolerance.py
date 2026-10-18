@@ -1,0 +1,42 @@
+from __future__ import annotations
+
+from qgis.core import QgsVectorLayer
+from qgis.gui import QgsDoubleSpinBox
+from qgis.PyQt.QtCore import QCoreApplication
+
+from .entries import Entry, project_layer
+
+
+def tr(text: str) -> str:
+    return QCoreApplication.translate('TopologyRules', text)
+
+
+def tolerance_box() -> QgsDoubleSpinBox:
+    """A box for the tolerance, which starts at the default of the tool: the
+    lowest value, shown as the word."""
+    box = QgsDoubleSpinBox()
+    box.setDecimals(10)
+    box.setRange(-1.0, 1e12)
+    box.setSingleStep(0.001)
+    box.setSpecialValueText(tr('Default'))
+    box.setClearValueMode(QgsDoubleSpinBox.ClearValueMode.MinimumValue)
+    box.setShowClearButton(True)
+    box.setValue(box.minimum())
+    return box
+
+
+def show_unit(box: QgsDoubleSpinBox, first: Entry | None) -> None:
+    """Distances are in the units of the first layer of the list."""
+    box.setSuffix(f' {first.unit}' if first and first.unit else '')
+    box.setSpecialValueText(
+        default_tolerance(first and project_layer(first.layer))
+    )
+
+
+def default_tolerance(layer: QgsVectorLayer | None) -> str:
+    """What the tool does without a tolerance, for the CRS of the layer."""
+    if layer is None or not layer.crs().isValid():
+        return tr('Default')
+    if layer.crs().isGeographic():
+        return tr('Default (1e-8°)')
+    return tr('Default (1 mm)')

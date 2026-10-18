@@ -1,0 +1,63 @@
+[project]
+name = "topology-rules-qgis"
+version = "0.1.0"
+description = "QGIS plugin for the topology-checker command line tool"
+license = "MIT"
+requires-python = ">=3.12"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-qgis>=5.0.0",
+]
+lint = [
+    "bandit>=1.9.4",
+    "pyqt5-stubs>=5.15.6.0",
+    "pyright[nodejs]>=1.1.414",
+    "ruff>=0.16.9",
+]
+
+[tool.uv]
+package = false
+default-groups = ["dev", "lint"]
+
+[tool.qgis-plugin-ci]
+plugin_path = "topology_rules"
+project_slug = "topology-rules"
+github_organization_slug = "alecsandrei"
+
+[tool.pyright]
+include = ["topology_rules"]
+# Where the QGIS images keep the Processing plugin
+extraPaths = ["/usr/share/qgis/python/plugins"]
+pythonVersion = "3.12"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+qgis_gui_enabled = false
+# The slow tests are for CI; `pytest -m ""` runs everything
+addopts = "-m 'not slow'"
+markers = ['slow: runs for a while, left out unless -m "" is given']
+
+[tool.ruff]
+line-length = 80
+indent-width = 4
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "SIM", "RUF", "PT", "C4"]
+ignore = []
+fixable = ["ALL"]
+unfixable = []
+dummy-variable-rgx = "^(_+|(_+[a-zA-Z0-9_]*[a-zA-Z0-9]+?))$"
+
+[tool.ruff.lint.isort]
+required-imports = ["from __future__ import annotations"]
+
+[tool.ruff.format]
+quote-style = "single"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"

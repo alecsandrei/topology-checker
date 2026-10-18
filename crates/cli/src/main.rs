@@ -11,7 +11,7 @@ use std::{
     path::PathBuf,
     process::ExitCode,
 };
-use topology_checker_core::{LayerId, Rule, Topology};
+use topology_checker_core::{GeometryKind, LayerId, Rule, Topology};
 use topology_checker_io::{read, write};
 
 fn main() -> ExitCode {
@@ -111,6 +111,8 @@ fn run_command(
                 description: &'static str,
                 arcgis: Option<&'static str>,
                 qgis: Option<&'static str>,
+                layer: GeometryKind,
+                other: Option<GeometryKind>,
             }
             let rules = Rule::ALL
                 .iter()
@@ -119,6 +121,8 @@ fn run_command(
                     description: r.description(),
                     arcgis: r.arcgis(),
                     qgis: r.qgis(),
+                    layer: r.inputs().0,
+                    other: r.inputs().1,
                 })
                 .collect::<Vec<_>>();
             if matches.get_flag("json") {

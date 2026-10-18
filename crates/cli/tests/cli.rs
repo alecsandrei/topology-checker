@@ -31,11 +31,13 @@ fn registry_and_driver_commands_work() {
         .iter()
         .map(|rule| {
             format!(
-                "{{\"name\":{},\"description\":{},\"arcgis\":{},\"qgis\":{}}}",
+                "{{\"name\":{},\"description\":{},\"arcgis\":{},\"qgis\":{},\"layer\":{},\"other\":{}}}",
                 serde_json::to_string(rule.name()).unwrap(),
                 serde_json::to_string(rule.description()).unwrap(),
                 serde_json::to_string(&rule.arcgis()).unwrap(),
                 serde_json::to_string(&rule.qgis()).unwrap(),
+                serde_json::to_string(&rule.inputs().0).unwrap(),
+                serde_json::to_string(&rule.inputs().1).unwrap(),
             )
         })
         .collect::<Vec<_>>()
