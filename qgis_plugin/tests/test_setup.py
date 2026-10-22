@@ -10,10 +10,9 @@ from qgis.PyQt.QtWidgets import QFileDialog, QLabel
 
 from topology_rules.enums import Setting
 from topology_rules.panel.dock import Dock
+from topology_rules.panel.setup import INSTALL, PYPI, RELEASES, SetupPage
 
 from .helpers import message_text, script_executable, wait_for
-
-INSTALL = 'https://alecsandrei.github.io/topology-checker/stable/install/'
 
 
 def choose_file(monkeypatch: pytest.MonkeyPatch, path: object) -> None:
@@ -40,6 +39,56 @@ def test_the_setup_page_links_to_the_install_page(bare: Dock):
     ]
     assert len(links) == 1
     assert links[0].openExternalLinks()
+
+
+def test_the_setup_page_presents_pypi_and_releases(bare: Dock):
+    text = bare.setup_page.status.text()
+    assert f'href="{PYPI}"' in text
+    assert f'href="{RELEASES}"' in text
+    assert 'pip install topology-checker' in text
+    assert 'For maximum performance' in text
+    assert not bare.setup_page.browse_button.isHidden()
+
+
+def test_setup_page_escapes_reason(bare: Dock):
+    bare.setup_page.explain('<script>alert("test")&foo</script>')
+    text = bare.setup_page.status.text()
+    assert '<script>' not in text
+    assert '&lt;script&gt;' in text
+    assert '&amp;foo' in text
+
+
+def test_setup_page_explain_instructions():
+    page = SetupPage()
+    page.checking()
+    assert page.browse_button.isHidden()
+
+    reason = 'Tool not found: <check> & "verify"'
+    page.explain(reason)
+
+    assert not page.browse_button.isHidden()
+    assert page.status.openExternalLinks()
+
+    text = page.status.text()
+
+    # 1. Reason is HTML escaped
+    assert '&lt;check&gt; &amp; &quot;verify&quot;' in text
+    assert '<check>' not in text
+
+    # 2. PyPI instructions with link and command
+    assert f'href="{PYPI}"' in text
+    assert '>PyPI</a>' in text
+    assert 'pip install topology-checker' in text
+    assert 'For maximum performance' in text
+
+    # 3. GitHub Releases standalone CLI download link
+    assert f'href="{RELEASES}"' in text
+    assert '>GitHub Releases</a>' in text
+    assert 'standalone CLI executable' in text
+
+    # 4. Documentation install link
+    assert f'href="{INSTALL}"' in text
+    assert 'How to install topology-checker' in text
 
 
 def test_with_the_tool_the_tabs_are_shown(dock: Dock):

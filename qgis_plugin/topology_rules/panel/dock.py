@@ -23,6 +23,7 @@ from qgis.PyQt.QtWidgets import (
 )
 
 from ..algorithms.base import DOCS
+from ..core import engine
 from ..core.binary import Rule
 from ..enums import PROVIDER_ID
 from ..exceptions import ExecutableError
@@ -40,6 +41,13 @@ from .tolerance import show_unit
 
 # The part of the documentation about the plugin
 HELP_URL = f'{DOCS}install/#qgis'
+
+
+class _EngineStr(str):
+    """A string naming the active engine that can also be called."""
+
+    def __call__(self) -> str:
+        return str(self)
 
 
 class Dock(QgsDockWidget):
@@ -86,6 +94,8 @@ class Dock(QgsDockWidget):
         self.selected_only = self.rules_page.selected_only
         self.extent_only = self.rules_page.extent_only
         self.tolerance = self.rules_page.tolerance
+        self.engine_label = self.rules_page.engine_label
+        self.tip_label = self.rules_page.tip_label
         self.results = ResultsPanel(iface)
         self.results_view = self.results.view
         self.results_placeholder = self.results.placeholder
@@ -143,8 +153,17 @@ class Dock(QgsDockWidget):
     def entries(self) -> list[Entry]:
         return self.rule_list.entries
 
+    @property
+    def active_engine(self) -> _EngineStr:
+        return _EngineStr(engine.active_engine())
+
+    @property
+    def engine(self) -> str:
+        return engine.active_engine()
+
     def refresh(self, visible: bool = True) -> None:
         """Lists the rules of the executable, or says why there are none."""
+        self.rules_page.refresh_engine()
         if visible:
             startup.refresh(self)
 
@@ -193,6 +212,7 @@ class Dock(QgsDockWidget):
         return [entry for entry in self.entries if entry.checked]
 
     def update_buttons(self) -> None:
+        self.rules_page.refresh_engine()
         count = len(self.runnable())
         self.setup_page.setVisible(not self.available)
         for widget in (self.tabs, self.run_button):

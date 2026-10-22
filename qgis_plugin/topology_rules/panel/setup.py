@@ -16,6 +16,8 @@ from ..enums import SETTING_NAME, Setting
 from ..utils import tr
 
 INSTALL = 'https://alecsandrei.github.io/topology-checker/stable/install/'
+RELEASES = 'https://github.com/alecsandrei/topology-checker/releases'
+PYPI = 'https://pypi.org/project/topology-checker/'
 
 
 class SetupPage(QWidget):
@@ -40,9 +42,29 @@ class SetupPage(QWidget):
 
     def explain(self, reason: str) -> None:
         self.browse_button.show()
+        self.status.setOpenExternalLinks(True)
+        escaped_reason = html.escape(reason)
+        pypi_link = f'<a href="{PYPI}">{tr("PyPI")}</a>'
+        releases_link = f'<a href="{RELEASES}">{tr("GitHub Releases")}</a>'
+        docs_link = (
+            f'<a href="{INSTALL}">{tr("How to install topology-checker")}</a>'
+        )
+
+        option_pypi = tr(
+            'For maximum performance, install the Python package from {pypi} '
+            'into your Python environment: '
+            '<code>pip install topology-checker</code>'
+        ).format(pypi=pypi_link)
+        option_cli = tr(
+            'Or download the standalone CLI executable from {releases} '
+            'and click "Choose topology-checker…" below.'
+        ).format(releases=releases_link)
+
         self.status.setText(
-            f'{html.escape(reason)}<br><a href="{INSTALL}">'
-            f'{tr("How to install topology-checker")}</a>'
+            f'<p>{escaped_reason}</p>'
+            f'<p>1. {option_pypi}</p>'
+            f'<p>2. {option_cli}</p>'
+            f'<p>{docs_link}</p>'
         )
 
     def choose(self) -> bool:

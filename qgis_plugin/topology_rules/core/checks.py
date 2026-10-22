@@ -24,9 +24,11 @@ from .commands import (
     run_validate,
     write_config,
 )
+from .engine import native_available
 from .inputs import Prepared, prepare
 from .invalid import REJECTED, Invalid, Rejected, parse_failure
 from .layers import Input
+from .native_runner import run_native_jobs
 
 # The columns of an error that name a feature, and the layer it is in
 ID_COLUMNS = (
@@ -86,6 +88,13 @@ def run_jobs(
     that it would reject, which are reported as errors. Only the input that
     held the feature is exported again: the others stay as they were.
     """
+    if native_available():
+        try:
+            return run_native_jobs(jobs, tolerance, output, context, feedback)
+        except Exception as error:
+            feedback.pushInfo(
+                f'Native engine failed ({error}), falling back to CLI'
+            )
     skips: dict[object, dict[int, str]] = {}
     # The inputs that are exported and not read from their own file
     exported: set[object] = set()

@@ -15,6 +15,7 @@ from qgis.PyQt.QtWidgets import (
     QWidget,
 )
 
+from ..core import engine
 from ..utils import not_none, tr
 
 # How long a message that is not a failure stays
@@ -98,3 +99,14 @@ def push_summary(
         bar.pushWidget(item, level, SECONDS)
     item.setProperty(MARK, True)
     not_none(item.layout()).addWidget(button)
+
+
+def push_performance_tip(bar: QgsMessageBar) -> None:
+    """Shows the performance tip on the message bar if on the CLI engine."""
+    if not engine.native_available():
+        bar.pushMessage(
+            tr('Topology Rules'),
+            engine.PERFORMANCE_TIP,
+            Qgis.MessageLevel.Info,
+            SECONDS,
+        )

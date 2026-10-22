@@ -7,11 +7,13 @@ from qgis.PyQt.QtWidgets import (
     QCheckBox,
     QFormLayout,
     QHBoxLayout,
+    QLabel,
     QPushButton,
     QVBoxLayout,
     QWidget,
 )
 
+from ..core import engine
 from ..utils import tr
 from .form import RuleForm
 from .icons import decorate
@@ -88,6 +90,20 @@ class RulesPage(QWidget):
         files_row.addWidget(self.export_button)
         page.addLayout(files_row)
         page.addWidget(self.options)
+        self.engine_label = QLabel()
+        self.tip_label = QLabel(engine.PERFORMANCE_TIP)
+        self.tip_label.setWordWrap(True)
+        for label in (self.engine_label, self.tip_label):
+            font = label.font()
+            if font.pointSizeF() > 0:
+                font.setPointSizeF(font.pointSizeF() * 0.85)
+            elif font.pixelSize() > 0:
+                font.setPixelSize(max(1, int(font.pixelSize() * 0.85)))
+            label.setFont(font)
+            label.setStyleSheet('color: palette(mid);')
+        page.addWidget(self.engine_label)
+        page.addWidget(self.tip_label)
+        self.refresh_engine()
         for signal in (
             self.tolerance.valueChanged,
             self.selected_only.toggled,
@@ -95,6 +111,16 @@ class RulesPage(QWidget):
         ):
             signal.connect(self.update_title)
         self.update_title()
+
+    @property
+    def active_engine(self) -> str:
+        return engine.active_engine()
+
+    def refresh_engine(self) -> None:
+        """Updates the active engine display and performance tip."""
+        active = engine.active_engine()
+        self.engine_label.setText(tr('Engine: {engine}').format(engine=active))
+        self.tip_label.setVisible(not engine.native_available())
 
     def update_title(self) -> None:
         """Says in the title of the box what is set in it, since it is
