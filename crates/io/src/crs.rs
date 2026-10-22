@@ -176,6 +176,214 @@ fn is_gdal_web_mercator(definition: &str) -> bool {
     let squeezed = |text: &str| text.split_whitespace().collect::<String>();
     definition.starts_with("PROJCS[") && squeezed(definition) == squeezed(GDAL_WEB_MERCATOR)
 }
+/// Stereo70 and its base Pulkovo 1942(58) geographic CRS carry datum EPSG:6179, which
+/// `proj-core` only connects to WGS84 and serializes to WKT through a coded CRS.
+fn canonicalize_untagged(native: proj_core::CrsDef) -> Option<(String, proj_core::CrsDef)> {
+    if native.epsg() != 0 || native.datum().epsg() != 6179 {
+        return None;
+    }
+    [3844, 4179].into_iter().find_map(|code| {
+        let registry = proj_core::lookup_epsg(code)?;
+        native
+            .semantically_equivalent(&registry)
+            .then(|| (format!("EPSG:{code}"), registry))
+    })
+}
+fn projjson_epsg_id(value: &serde_json::Value) -> Option<u32> {
+    let check = |id: &serde_json::Value| -> Option<u32> {
+        id.get("authority")?
+            .as_str()?
+            .eq_ignore_ascii_case("EPSG")
+            .then_some(())?;
+        match id.get("code")? {
+            serde_json::Value::Number(n) => n.as_u64().and_then(|n| u32::try_from(n).ok()),
+            serde_json::Value::String(s) => s.parse().ok(),
+            _ => None,
+        }
+    };
+    value
+        .get("id")
+        .and_then(check)
+        .or_else(|| value.get("ids")?.as_array()?.iter().find_map(check))
+}
+fn swap_projjson_axes(crs: &mut serde_json::Value) -> bool {
+    let mut swapped = false;
+    if let Some(base) = crs.get_mut("base_crs") {
+        swapped |= swap_projjson_axes(base);
+    }
+    if let Some(components) = crs
+        .get_mut("components")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        for component in components {
+            swapped |= swap_projjson_axes(component);
+        }
+    }
+    let Some(axes) = crs
+        .get_mut("coordinate_system")
+        .and_then(|cs| cs.get_mut("axis"))
+        .and_then(serde_json::Value::as_array_mut)
+    else {
+        return swapped;
+    };
+    let is_dir = |axis: &serde_json::Value, expected: &str| {
+        axis.get("direction")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|d| d.trim().eq_ignore_ascii_case(expected))
+    };
+    let should_swap = match axes.as_slice() {
+        [first, second] => is_dir(first, "north") && is_dir(second, "east"),
+        [first, second, third] => {
+            is_dir(first, "north") && is_dir(second, "east") && is_dir(third, "up")
+        }
+        _ => false,
+    };
+    if should_swap {
+        axes.swap(0, 1);
+        swapped = true;
+    }
+    swapped
+}
+/// Normalize authority-native `north, east` axis order in EPSG-tagged PROJJSON (as written
+/// in GeoParquet metadata) so `proj-wkt` can validate the remaining CRS semantics.
+fn normalize_projjson_axes(definition: &str) -> Option<String> {
+    if !definition.starts_with('{') {
+        return None;
+    }
+    let mut value: serde_json::Value = serde_json::from_str(definition).ok()?;
+    let code = projjson_epsg_id(&value)?;
+    proj_core::lookup_epsg(code)?;
+    swap_projjson_axes(&mut value).then(|| serde_json::to_string(&value).ok())?
+}
+fn wkt_element(s: &str) -> Option<(&str, &str)> {
+    let s = s.trim();
+    let open = s.find('[')?;
+    if !s.ends_with(']')
+        || !s[..open]
+            .trim()
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+    {
+        return None;
+    }
+    Some((s[..open].trim(), &s[open + 1..s.len() - 1]))
+}
+fn split_wkt_fields(inner: &str) -> Vec<&str> {
+    let mut fields = Vec::new();
+    let mut start = 0;
+    let mut depth = 0usize;
+    let mut in_quotes = false;
+    let bytes = inner.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'"' => {
+                if in_quotes && bytes.get(i + 1) == Some(&b'"') {
+                    i += 2;
+                    continue;
+                }
+                in_quotes = !in_quotes;
+            }
+            _ if in_quotes => {}
+            b'[' => depth += 1,
+            b']' => depth = depth.saturating_sub(1),
+            b',' if depth == 0 => {
+                fields.push(inner[start..i].trim());
+                start = i + 1;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    fields.push(inner[start..].trim());
+    fields
+}
+fn is_wkt2(definition: &str) -> bool {
+    wkt_element(definition).is_some_and(|(name, _)| {
+        name.eq_ignore_ascii_case("PROJCRS")
+            || name.eq_ignore_ascii_case("GEOGCRS")
+            || name.eq_ignore_ascii_case("GEODCRS")
+            || name.eq_ignore_ascii_case("COMPOUNDCRS")
+    })
+}
+fn normalize_wkt_axes(definition: &str) -> Option<String> {
+    let (name, inner) = wkt_element(definition)?;
+    let mut fields = split_wkt_fields(inner)
+        .into_iter()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    let mut changed = false;
+    for field in &mut fields {
+        if let Some((child_name, _)) = wkt_element(field)
+            && (child_name.eq_ignore_ascii_case("BASEGEOGCRS")
+                || child_name.eq_ignore_ascii_case("GEOGCRS")
+                || child_name.eq_ignore_ascii_case("GEODCRS")
+                || child_name.eq_ignore_ascii_case("PROJCRS")
+                || child_name.eq_ignore_ascii_case("GEOGCS")
+                || child_name.eq_ignore_ascii_case("PROJCS"))
+            && let Some(normalized_child) = normalize_wkt_axes(field)
+        {
+            *field = normalized_child;
+            changed = true;
+        }
+    }
+    let axes = fields
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, field)| {
+            let (elem, axis_inner) = wkt_element(field)?;
+            elem.eq_ignore_ascii_case("AXIS").then(|| {
+                let dir = split_wkt_fields(axis_inner)
+                    .get(1)
+                    .map(|f| f.trim().trim_matches('"').to_owned())
+                    .unwrap_or_default();
+                (idx, dir)
+            })
+        })
+        .collect::<Vec<_>>();
+    let swap_pair = match axes.as_slice() {
+        [(i, first), (j, second)] => Some((*i, *j, first.as_str(), second.as_str())),
+        [(i, first), (j, second), (_, third)] if third.eq_ignore_ascii_case("up") => {
+            Some((*i, *j, first.as_str(), second.as_str()))
+        }
+        _ => None,
+    };
+    if let Some((i, j, first, second)) = swap_pair
+        && first.eq_ignore_ascii_case("north")
+        && second.eq_ignore_ascii_case("east")
+    {
+        fields.swap(i, j);
+        changed = true;
+    }
+    changed.then(|| format!("{name}[{}]", fields.join(",")))
+}
+fn parse_native(
+    definition: &str,
+) -> std::result::Result<(String, proj_core::CrsDef), proj_wkt::ParseError> {
+    match proj_wkt::parse_crs(definition) {
+        Ok(native) => Ok(
+            canonicalize_untagged(native.clone()).unwrap_or_else(|| (definition.into(), native))
+        ),
+        Err(error) => {
+            if let Some(normalized) = normalize_projjson_axes(definition)
+                && let Ok(native) = proj_wkt::parse_crs(&normalized)
+            {
+                return Ok((normalized, native));
+            }
+            if let Some(normalized) = normalize_wkt_axes(definition)
+                && let Ok(native) = proj_wkt::parse_crs(&normalized)
+            {
+                if let Some(canonical) = canonicalize_untagged(native.clone()) {
+                    return Ok(canonical);
+                }
+                if is_wkt2(definition) && native.epsg() != 0 {
+                    return Ok((normalized, native));
+                }
+            }
+            Err(error)
+        }
+    }
+}
 /// Parse an EPSG, WKT, PROJ or PROJJSON definition.
 /// # Errors
 /// Returns an error for invalid or unsupported CRS definitions.
@@ -191,9 +399,9 @@ pub fn parse(definition: &str) -> Result<Crs> {
     } else {
         definition
     };
-    match proj_wkt::parse_crs(definition) {
-        Ok(native) => Ok(Crs {
-            definition: definition.into(),
+    match parse_native(definition) {
+        Ok((definition, native)) => Ok(Crs {
+            definition,
             backend: Backend::Native(native),
         }),
         Err(error) => {
