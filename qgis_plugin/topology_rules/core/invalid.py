@@ -144,6 +144,10 @@ def append_invalid(
             context.transformContext(),
             options,
         )
-        if writer is None or not all(map(writer.addFeature, features)):
+        if writer is None:
+            raise RunError(f'Could not write the {kind} errors')
+        res = writer.addFeatures(features)
+        ok = res[0] if isinstance(res, tuple) else bool(res)
+        if not ok:
             raise RunError(f'Could not write the {kind} errors')
         del writer

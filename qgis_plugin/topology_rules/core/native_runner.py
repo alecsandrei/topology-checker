@@ -268,9 +268,10 @@ def run_native_jobs(
         ):
             message = '' if writer is None else writer.errorMessage()
             raise RunError(f'Could not write {layer_name}: {message}')
-        for feat in layer_features:
-            if not writer.addFeature(feat):
-                raise RunError(f'Could not write feature to {layer_name}')
+        res = writer.addFeatures(layer_features)
+        ok = res[0] if isinstance(res, tuple) else bool(res)
+        if not ok:
+            raise RunError(f'Could not write feature to {layer_name}')
         del writer
         wrote_any = True
 

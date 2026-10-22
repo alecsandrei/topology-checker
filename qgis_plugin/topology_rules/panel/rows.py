@@ -18,6 +18,13 @@ def field_text(layer: QgsVectorLayer, feature: QgsFeature, name: str) -> str:
     return '' if value is None or str(value) == 'NULL' else str(value)
 
 
+def fast_field_text(feature: QgsFeature, idx: int) -> str:
+    if idx < 0:
+        return ''
+    val = feature.attribute(idx)
+    return '' if val is None or str(val) == 'NULL' else str(val)
+
+
 def shape_of(feature: QgsFeature) -> str:
     geometry = feature.geometry()
     if geometry.isNull():
@@ -113,17 +120,25 @@ def read_rows(
     grouping = grouping or rule_grouping()
     rows: list[Row] = []
     for layer in layers:
+        fields = layer.fields()
+        idx_origin = fields.indexOf('origin_layer')
+        idx_other = fields.indexOf('destination_layer')
+        idx_rule = fields.indexOf('rule')
+        idx_error = fields.indexOf('error_type')
+        idx_ofid = fields.indexOf('origin_fid')
+        idx_dfid = fields.indexOf('destination_fid')
+
         for feature in t.cast('c.Iterable[QgsFeature]', layer.getFeatures()):
-            origin = field_text(layer, feature, 'origin_layer')
-            other = field_text(layer, feature, 'destination_layer')
+            origin = fast_field_text(feature, idx_origin)
+            other = fast_field_text(feature, idx_other)
             rows.append(
                 Row(
-                    field_text(layer, feature, 'rule'),
-                    field_text(layer, feature, 'error_type'),
+                    fast_field_text(feature, idx_rule),
+                    fast_field_text(feature, idx_error),
                     names.get(origin, origin),
-                    number(field_text(layer, feature, 'origin_fid')),
+                    number(fast_field_text(feature, idx_ofid)),
                     names.get(other, other),
-                    number(field_text(layer, feature, 'destination_fid')),
+                    number(fast_field_text(feature, idx_dfid)),
                     origin,
                     other,
                     layer.id(),

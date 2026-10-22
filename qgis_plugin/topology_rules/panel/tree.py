@@ -45,6 +45,7 @@ def fill(
             kind_item = QStandardItem(f'{plural(error)} ({len(group)})')
             kind_item.setData(('group', key, error), ROLE)
             ordered = sorted(group, key=lambda r: (r.layer, r.feature or -1))
+            items: list[QStandardItem] = []
             for number, row in enumerate(ordered, start=1):
                 item = QStandardItem(
                     row.features or f'{humanize(error)} {number}'
@@ -52,7 +53,8 @@ def fill(
                 item.setData(row, ROLE)
                 if ignored(row):
                     item.setForeground(QBrush(QColor(Qt.GlobalColor.gray)))
-                kind_item.appendRow(item)
+                items.append(item)
+            kind_item.appendRows(items)
             group_item.appendRow(kind_item)
         model.appendRow(group_item)
 

@@ -193,6 +193,7 @@ def export_dataset(
         request.setFilterFids(list(item.ids))
     ids: list[int] = []
     skipped: list[Skipped] = []
+    batch: list[QgsFeature] = []
     try:
         for feature in features(item.source, request):
             if feedback.isCanceled():
@@ -217,11 +218,24 @@ def export_dataset(
                 continue
             exported = QgsFeature()
             exported.setGeometry(geometry)
-            if not writer.addFeature(exported):
+            batch.append(exported)
+            ids.append(feature.id())
+            if len(batch) >= 2000:
+                res = writer.addFeatures(batch)
+                ok = res[0] if isinstance(res, tuple) else bool(res)
+                if not ok:
+                    raise RunError(
+                        f'Could not export {item.name}: {writer.errorMessage()}'
+                    )
+                batch.clear()
+        if batch:
+            res = writer.addFeatures(batch)
+            ok = res[0] if isinstance(res, tuple) else bool(res)
+            if not ok:
                 raise RunError(
                     f'Could not export {item.name}: {writer.errorMessage()}'
                 )
-            ids.append(feature.id())
+            batch.clear()
     finally:
         # Closes the file also when the export fails
         del writer
