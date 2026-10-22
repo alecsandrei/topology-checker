@@ -42,6 +42,15 @@ POINTS_OVERLAP = 'point/must-not-overlap'
 INVALID_REASON = 'invalid polygon: self-intersection or closing spike'
 OTHER_REASON = 'the geometry kind is not supported by this rule'
 
+
+@pytest.fixture(autouse=True)
+def cli_engine(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These tests verify CLI runner features and tool exit codes."""
+    monkeypatch.setattr(
+        'topology_rules.core.checks.native_available', lambda: False
+    )
+
+
 # A tool that rejects the fifth feature of an export of six, and, when that
 # one is left out, another feature for another reason
 REJECTING = f"""

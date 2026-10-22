@@ -68,6 +68,11 @@ def not_finite(geometry: QgsGeometry) -> bool:
         return False
     if not box.isFinite():
         return True
+    kind = wkb_kind(geometry.wkbType())
+    if kind == 'line':
+        return not math.isfinite(geometry.length())
+    if kind == 'point' and not geometry.isMultipart():
+        return False
     return any(
         not math.isfinite(vertex.x() + vertex.y())
         for vertex in t.cast('c.Iterable[QgsPoint]', geometry.vertices())
