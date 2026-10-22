@@ -148,3 +148,124 @@ fn shapefile_cpg_naming_an_undecodable_encoding_is_an_error() {
         assert!(format!("{error:#}").contains("unsupported Shapefile CPG encoding"));
     }
 }
+
+/// EPSG:3844 as GDAL writes it into GeoPackages (WKT1), FlatGeobuf (WKT2), GeoParquet (PROJJSON),
+/// and Shapefile `.prj` sidecars (ESRI WKT1).
+const GDAL_STEREO70_WKT1: &str = r#"PROJCS["Pulkovo 1942(58) / Stereo70",GEOGCS["Pulkovo 1942(58)",DATUM["Pulkovo_1942_58",SPHEROID["Krassowsky 1940",6378245,298.3,AUTHORITY["EPSG","7024"]],AUTHORITY["EPSG","6179"]],PRIMEM["Greenwich",0,AUTHORITY["EPSG","8901"]],UNIT["degree",0.0174532925199433,AUTHORITY["EPSG","9122"]],AUTHORITY["EPSG","4179"]],PROJECTION["Oblique_Stereographic"],PARAMETER["latitude_of_origin",46],PARAMETER["central_meridian",25],PARAMETER["scale_factor",0.99975],PARAMETER["false_easting",500000],PARAMETER["false_northing",500000],UNIT["metre",1,AUTHORITY["EPSG","9001"]],AXIS["Northing",NORTH],AXIS["Easting",EAST],AUTHORITY["EPSG","3844"]]"#;
+const GDAL_STEREO70_WKT2: &str = r#"PROJCRS["Pulkovo 1942(58) / Stereo70",BASEGEOGCRS["Pulkovo 1942(58)",DATUM["Pulkovo 1942(58)",ELLIPSOID["Krassowsky 1940",6378245,298.3,LENGTHUNIT["metre",1]]],PRIMEM["Greenwich",0,ANGLEUNIT["degree",0.0174532925199433]],ID["EPSG",4179]],CONVERSION["Stereo 70",METHOD["Oblique Stereographic",ID["EPSG",9809]],PARAMETER["Latitude of natural origin",46,ANGLEUNIT["degree",0.0174532925199433],ID["EPSG",8801]],PARAMETER["Longitude of natural origin",25,ANGLEUNIT["degree",0.0174532925199433],ID["EPSG",8802]],PARAMETER["Scale factor at natural origin",0.99975,SCALEUNIT["unity",1],ID["EPSG",8805]],PARAMETER["False easting",500000,LENGTHUNIT["metre",1],ID["EPSG",8806]],PARAMETER["False northing",500000,LENGTHUNIT["metre",1],ID["EPSG",8807]]],CS[cartesian,2],AXIS["northing (X)",north,ORDER[1],LENGTHUNIT["metre",1]],AXIS["easting (Y)",east,ORDER[2],LENGTHUNIT["metre",1]],USAGE[SCOPE["Engineering survey, topographic mapping."],AREA["Romania - onshore and offshore."],BBOX[43.44,20.26,48.27,31.41]],ID["EPSG",3844]]"#;
+const GDAL_STEREO70_PROJJSON: &str = r#"{"$schema":"https://proj.org/schemas/v0.7/projjson.schema.json","type":"ProjectedCRS","name":"Pulkovo 1942(58) / Stereo70","base_crs":{"name":"Pulkovo 1942(58)","datum":{"type":"GeodeticReferenceFrame","name":"Pulkovo 1942(58)","ellipsoid":{"name":"Krassowsky 1940","semi_major_axis":6378245,"inverse_flattening":298.3}},"coordinate_system":{"subtype":"ellipsoidal","axis":[{"name":"Geodetic latitude","abbreviation":"Lat","direction":"north","unit":"degree"},{"name":"Geodetic longitude","abbreviation":"Lon","direction":"east","unit":"degree"}]},"id":{"authority":"EPSG","code":4179}},"conversion":{"name":"Stereo 70","method":{"name":"Oblique Stereographic","id":{"authority":"EPSG","code":9809}},"parameters":[{"name":"Latitude of natural origin","value":46,"unit":"degree","id":{"authority":"EPSG","code":8801}},{"name":"Longitude of natural origin","value":25,"unit":"degree","id":{"authority":"EPSG","code":8802}},{"name":"Scale factor at natural origin","value":0.99975,"unit":"unity","id":{"authority":"EPSG","code":8805}},{"name":"False easting","value":500000,"unit":"metre","id":{"authority":"EPSG","code":8806}},{"name":"False northing","value":500000,"unit":"metre","id":{"authority":"EPSG","code":8807}}]},"coordinate_system":{"subtype":"Cartesian","axis":[{"name":"Northing","abbreviation":"X","direction":"north","unit":"metre"},{"name":"Easting","abbreviation":"Y","direction":"east","unit":"metre"}]},"id":{"authority":"EPSG","code":3844}}"#;
+const GDAL_STEREO70_ESRI: &str = r#"PROJCS["Pulkovo_1942_Adj_58_Stereo_70",GEOGCS["GCS_Pulkovo_1942_Adj_1958",DATUM["D_Pulkovo_1942_Adj_1958",SPHEROID["Krasovsky_1940",6378245.0,298.3]],PRIMEM["Greenwich",0.0],UNIT["Degree",0.0174532925199433]],PROJECTION["Double_Stereographic"],PARAMETER["False_Easting",500000.0],PARAMETER["False_Northing",500000.0],PARAMETER["Central_Meridian",25.0],PARAMETER["Scale_Factor",0.99975],PARAMETER["Latitude_Of_Origin",46.0],UNIT["Meter",1.0]]"#;
+const GDAL_STEREO70_NOCT: &str = r#"PROJCS["Pulkovo 1942(58) / Stereo70",GEOGCS["Pulkovo 1942(58)",DATUM["Pulkovo_1942_58",SPHEROID["Krassowsky 1940",6378245,298.3]],PRIMEM["Greenwich",0],UNIT["degree",0.0174532925199433]],PROJECTION["Oblique_Stereographic"],PARAMETER["latitude_of_origin",46],PARAMETER["central_meridian",25],PARAMETER["scale_factor",0.99975],PARAMETER["false_easting",500000],PARAMETER["false_northing",500000],UNIT["metre",1],AXIS["Northing",NORTH],AXIS["Easting",EAST]]"#;
+
+#[test]
+fn gdal_stereo70_definitions_parse_and_transform_as_epsg_3844() {
+    let canonical = crs::parse("EPSG:3844").unwrap();
+    let wgs84 = crs::parse("EPSG:4326").unwrap();
+    let web_mercator = crs::parse("EPSG:3857").unwrap();
+    for (label, definition) in [
+        ("wkt1", GDAL_STEREO70_WKT1),
+        ("wkt2", GDAL_STEREO70_WKT2),
+        ("projjson", GDAL_STEREO70_PROJJSON),
+        ("esri", GDAL_STEREO70_ESRI),
+        ("noct", GDAL_STEREO70_NOCT),
+    ] {
+        let parsed = crs::parse(definition).unwrap_or_else(|e| panic!("{label}: {e:#}"));
+        assert_eq!(parsed.epsg(), Some(3844), "{label}");
+        assert_eq!(parsed, canonical, "{label}");
+        assert_eq!(
+            crs::parse(&parsed.to_wkt().unwrap()).unwrap(),
+            canonical,
+            "{label} to_wkt"
+        );
+        assert_eq!(
+            crs::parse(&parsed.to_projjson().unwrap()).unwrap(),
+            canonical,
+            "{label} to_projjson"
+        );
+        let to_wgs84 = crs::Transform::new(&parsed, &wgs84).unwrap();
+        let mut x = [500_000.];
+        let mut y = [500_000.];
+        to_wgs84.transform_coords(&mut x, &mut y, &mut []).unwrap();
+        assert!((x[0] - 25.).abs() < 1e-2, "{label} lon {}", x[0]);
+        assert!((y[0] - 46.).abs() < 1e-2, "{label} lat {}", y[0]);
+        assert!(
+            crs::Transform::new(&parsed, &web_mercator).is_ok(),
+            "{label}"
+        );
+    }
+}
+
+#[cfg(not(feature = "gdal-system"))]
+#[test]
+fn altered_stereo70_definitions_are_rejected_or_stay_custom() {
+    for (from, to) in [
+        (
+            r#"PARAMETER["False easting",500000"#,
+            r#"PARAMETER["False easting",0"#,
+        ),
+        (
+            r#"PARAMETER["Longitude of natural origin",25"#,
+            r#"PARAMETER["Longitude of natural origin",20"#,
+        ),
+        (
+            r#"PARAMETER["Scale factor at natural origin",0.99975"#,
+            r#"PARAMETER["Scale factor at natural origin",1"#,
+        ),
+        (
+            r#"ELLIPSOID["Krassowsky 1940",6378245,298.3"#,
+            r#"ELLIPSOID["Krassowsky 1940",6378137,298.3"#,
+        ),
+    ] {
+        assert!(GDAL_STEREO70_WKT2.contains(from), "{from}");
+        let altered = GDAL_STEREO70_WKT2.replace(from, to);
+        assert!(crs::parse(&altered).is_err(), "{to}");
+    }
+    for (from, to) in [
+        (
+            r#""name":"False easting","value":500000"#,
+            r#""name":"False easting","value":0"#,
+        ),
+        (
+            r#""semi_major_axis":6378245"#,
+            r#""semi_major_axis":6378137"#,
+        ),
+    ] {
+        assert!(GDAL_STEREO70_PROJJSON.contains(from), "{from}");
+        let altered = GDAL_STEREO70_PROJJSON.replace(from, to);
+        assert!(crs::parse(&altered).is_err(), "{to}");
+    }
+    let altered_esri = GDAL_STEREO70_ESRI.replace(
+        r#"PARAMETER["False_Easting",500000.0]"#,
+        r#"PARAMETER["False_Easting",0.0]"#,
+    );
+    let parsed_altered_esri = crs::parse(&altered_esri).unwrap();
+    assert_eq!(parsed_altered_esri.epsg(), None);
+    assert_ne!(parsed_altered_esri, crs::parse("EPSG:3844").unwrap());
+}
+
+#[test]
+fn datasets_in_epsg_3844_read_across_all_formats() {
+    let dir = tempfile::tempdir().unwrap();
+    let canonical = crs::parse("EPSG:3844").unwrap();
+    let layer = DatasetLayer::new(
+        "places",
+        Some(canonical.clone()),
+        vec![Record {
+            id: Some(1),
+            geometry: Some(Point::new(500_000., 500_000.).into()),
+            properties: json!({"name": "center"}).as_object().unwrap().clone(),
+        }],
+    );
+    for ext in ["gpkg", "fgb", "parquet", "shp"] {
+        let path = dir.path().join(format!("stereo70.{ext}"));
+        write::dataset(&path, None, false, std::slice::from_ref(&layer)).unwrap();
+        if ext == "shp" {
+            std::fs::write(path.with_extension("prj"), GDAL_STEREO70_ESRI).unwrap();
+        }
+        let read = read::read(&path, None, "places").unwrap_or_else(|e| panic!("{ext}: {e:#}"));
+        let srs = read[0].srs.as_ref().expect(ext);
+        assert_eq!(srs.epsg(), Some(3844), "{ext}");
+        assert_eq!(srs, &canonical, "{ext}");
+        assert!(crs::Transform::new(srs, &crs::parse("EPSG:3857").unwrap()).is_ok());
+    }
+}
