@@ -29,11 +29,13 @@ from ..algorithms.base import DOCS
 from ..core import engine, install
 from ..core.binary import Rule
 from ..core.engine import Engine
+from ..core.style import ColourBy, Legend
 from ..enums import PROVIDER_ID
 from ..exceptions import ExecutableError
 from ..utils import not_none, tr
 from . import controller, exchange, startup
 from .entries import Entry
+from .groups import restyle_errors
 from .icons import icon
 from .installer import InstallDialog
 from .menu import PanelMenu, installable, reason, relist
@@ -73,6 +75,8 @@ class Dock(QgsDockWidget):
         self.run_keys: dict[tuple[str, str, str | None], str] = {}
         # The install of the package that is open
         self.installer: InstallDialog | None = None
+        # The groups that the errors of the last run are drawn in
+        self.legends: dict[ColourBy, Legend] = {}
 
         self.setup_page = SetupPage()
         self.status = self.setup_page.status
@@ -117,6 +121,7 @@ class Dock(QgsDockWidget):
             QToolButton.ToolButtonPopupMode.InstantPopup
         )
         self.menu_button.setMenu(self.menu)
+        self.style_menu = self.menu.style_menu
         self.progress = QProgressBar()
         self.progress.setRange(0, 0)
         self.progress.hide()
@@ -161,6 +166,7 @@ class Dock(QgsDockWidget):
         self.extent_only.toggled.connect(self.state.save)
         self.rule_list.opened.connect(self.open_errors)
         self.results.ignored_changed.connect(self.errors_ignored)
+        self.style_menu.changed.connect(self.restyle)
         self.visibilityChanged.connect(self.refresh)
         project = not_none(QgsProject.instance())
         project.layersRemoved.connect(self.layers_removed)
@@ -346,6 +352,10 @@ class Dock(QgsDockWidget):
             else tr('Errors'),
         )
 
+    def restyle(self) -> None:
+        """Draws the errors in the style that the user chose."""
+        restyle_errors(self.legends)
+
     def errors_ignored(self) -> None:
         """Counts the errors that are left, and keeps the ignored ones."""
         controller.recount(self)
@@ -365,6 +375,8 @@ class Dock(QgsDockWidget):
         self.state.pending = None
         self.results.ignored.clear()
         self.results.clear()
+        # Error layers that the project has are drawn by what they store
+        self.legends = {}
         self.set_error_count(0)
         with self.state.quiet():
             self.rule_list.clear()

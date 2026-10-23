@@ -22,8 +22,8 @@ executable, and shows what they find.
     (tree, ignored), setup and hint are its parts
   * entries, rows: the rules of the list and the errors, as data
   * controller, startup: the run, and asking the tool in the background
-  * menu, installer, offer: the gear menu of the engine; the install of the
-    Python package; the bar that offers it
+  * menu, style_menu, installer, offer: the gear menu of the engine and its
+    Style submenu; the install of the Python package; the bar that offers it
   * exchange, state: topology.toml and the project
   * groups, focus, messages, icons, tolerance: map layers, zoom, messages,
     button icons, tolerance

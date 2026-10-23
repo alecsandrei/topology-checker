@@ -11,7 +11,7 @@ from qgis.core import (
 )
 
 from ..core.commands import ERROR_LAYERS
-from ..core.style import Grouping, style_layer
+from ..core.style import STYLED, ColourBy, Legend, style_layer
 from ..utils import not_none
 
 GROUP_NAME = 'Topology errors'
@@ -39,12 +39,10 @@ def remove_errors() -> None:
 
 
 def add_errors(
-    path: Path,
-    grouping: Grouping,
-    labels: c.Mapping[str, str],
-    order: c.Iterable[str],
+    path: Path, legends: c.Mapping[ColourBy, Legend]
 ) -> list[QgsVectorLayer]:
-    """Adds the error layers of a run that have errors, in a group on top."""
+    """Adds the error layers of a run that have errors, in a group on top,
+    drawn by the groups of the run."""
     project = not_none(QgsProject.instance())
     group = not_none(
         not_none(project.layerTreeRoot()).insertGroup(0, GROUP_NAME)
@@ -61,7 +59,7 @@ def add_errors(
         layer = not_none(found.materialize(QgsFeatureRequest()))
         layer.setName(f'{kind.capitalize()} errors')
         layer.setCustomProperty(PROPERTY, True)
-        style_layer(layer, grouping, labels, order)
+        style_layer(layer, legends)
         project.addMapLayer(layer, False)
         group.addLayer(layer)
         layers.append(layer)
@@ -70,3 +68,15 @@ def add_errors(
         if isinstance(parent, QgsLayerTreeGroup):
             parent.removeChildNode(group)
     return layers
+
+
+def restyle_errors(legends: c.Mapping[ColourBy, Legend]) -> None:
+    """Draws the error layers of the last run again, by its groups, and
+    those that Processing loaded, in the style that the user chose now."""
+    for layer in not_none(QgsProject.instance()).mapLayers().values():
+        if not isinstance(layer, QgsVectorLayer):
+            continue
+        if layer.customProperty(PROPERTY):
+            style_layer(layer, legends)
+        elif layer.customProperty(STYLED):
+            style_layer(layer)

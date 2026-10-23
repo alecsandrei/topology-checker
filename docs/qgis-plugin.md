@@ -42,6 +42,8 @@ The gear button next to **?** sets the engine for the panel and the Processing t
 
 The errors are a tree by rule and kind. Selecting one zooms to it, highlights it and filters the map to its group. **Select features** selects the features an error is about, and **Ignore error** hides an error until you stop ignoring it, also in later runs.
 
+**Style** in the gear menu sets how errors are drawn in every project, Processing outputs included: **Colour by** rule and layer, rule, layer or one colour; **Size** small, normal or large; **Colour ramp** the default or any saved ramp, with **Invert** and **Edit…**. Invalid geometries stay red; no other group gets a colour near it. **Reset style** restores the default.
+
 Under **Options**, **Selected features only** and **Only the visible extent** limit the layer each rule checks, not the layer it is checked against. **Export…** writes the ticked rules as a `topology.toml` for the [CLI](cli.md#check-a-topology-definition), saving layers that are not files of their own in a GeoPackage next to it. **Import…** reads one. The list, the options and the ignored errors are saved with the project.
 
 ## Processing
