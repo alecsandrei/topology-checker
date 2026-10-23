@@ -4,16 +4,16 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from functools import cached_property
+from typing import TYPE_CHECKING, Any, cast
 
-from pyproj import CRS
-from shapely.geometry import mapping
-from shapely.geometry.base import BaseGeometry
-
+from . import _optional
 from ._enums import ErrorType, GeometryKind, Rule, RuleVariant
 
 if TYPE_CHECKING:
     from geopandas import GeoDataFrame
+    from pyproj import CRS
+    from shapely.geometry.base import BaseGeometry
 
 
 @dataclass(frozen=True, init=False)
@@ -47,12 +47,13 @@ class Layer:
 
     The kind is a concrete retained family, COLLECTION for mixed families, or
     None when unknown. Empty inputs can retain a typed hint or an explicit kind.
+    `wkb` holds one 2D little-endian ISO WKB snapshot per retained FID.
     """
 
     id: LayerId
     name: str
     fids: tuple[int, ...]
-    geometries: tuple[BaseGeometry, ...]
+    wkb: tuple[bytes, ...] = field(repr=False)
     crs: CRS | None
     _parts: Mapping[int, tuple[int, ...]] = field(repr=False, compare=False)
     warnings: tuple[str, ...] = field(repr=False)
@@ -61,11 +62,22 @@ class Layer:
     def __len__(self) -> int:
         return len(self.fids)
 
+    @cached_property
+    def geometries(self) -> tuple[BaseGeometry, ...]:
+        """Decode the snapshots as shapely geometries.
+
+        Raises:
+            ImportError: Shapely is missing; install topology-checker[io].
+        """
+        shapely = _optional.shapely()
+        decoded = shapely.from_wkb(list(self.wkb))  # pyright: ignore[reportUnknownMemberType]
+        return tuple(cast("list[BaseGeometry]", decoded.tolist()))
+
     def reference(self, fid: int, part: int | None) -> FeatureRef:
         """Map a native part index to original feature provenance."""
-        return FeatureRef(
-            self.id, fid, None if part is None else self._parts[fid][part]
-        )
+        if part is not None and (positions := self._parts.get(fid)) is not None:
+            part = positions[part]
+        return FeatureRef(self.id, fid, part)
 
 
 @dataclass(frozen=True)
@@ -101,22 +113,41 @@ class RuleSpec:
 
 @dataclass(frozen=True)
 class Violation:
-    """A topology violation with Shapely geometry and original provenance."""
+    """A topology violation with WKB geometry and original provenance."""
 
     rule: Rule
     error_type: ErrorType
-    geometry: BaseGeometry
+    _wkb: bytes = field(repr=False)
     origin: FeatureRef | None
     destination: FeatureRef | None
     resolved_rule: RuleVariant
 
+    @property
+    def wkb(self) -> bytes:
+        """Return the geometry as 2D little-endian ISO WKB."""
+        return self._wkb
+
+    @cached_property
+    def geometry(self) -> BaseGeometry:
+        """Decode the geometry as a shapely geometry.
+
+        Raises:
+            ImportError: Shapely is missing; install topology-checker[io].
+        """
+        return _optional.shapely().from_wkb(self._wkb)
+
     def to_dict(self) -> dict[str, Any]:
-        """Serialize enums as values and geometry as a GeoJSON mapping."""
+        """Serialize enums as values and geometry as a GeoJSON mapping.
+
+        Raises:
+            ImportError: Shapely is missing; install topology-checker[io].
+        """
+        shapely = _optional.shapely()
         return {
             "rule": self.rule.value,
             "resolved_rule": self.resolved_rule.value,
             "error_type": self.error_type.value,
-            "geometry": mapping(self.geometry),
+            "geometry": shapely.geometry.mapping(self.geometry),
             "origin": None if self.origin is None else self.origin.to_dict(),
             "destination": (
                 None if self.destination is None else self.destination.to_dict()
@@ -158,7 +189,12 @@ class RuleReport:
         return len(self.violations)
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize this ordered rule result."""
+        """Serialize this ordered rule result.
+
+        Raises:
+            ImportError: Violations exist and shapely is missing; install
+                topology-checker[io].
+        """
         return {
             "rule": self.rule.value,
             "resolved_rule": self.resolved_rule.value,
@@ -201,7 +237,12 @@ class Report:
         return sum(rule.error_count for rule in self.rules)
 
     def to_dict(self) -> dict[str, Any]:
-        """Return JSON-compatible metadata, GeoJSON geometries, and enum values."""
+        """Return JSON-compatible metadata, GeoJSON geometries, and enum values.
+
+        Raises:
+            ImportError: Violations exist and shapely is missing; install
+                topology-checker[io].
+        """
         return {
             "tolerance": self.tolerance,
             "warnings": list(self.warnings),
@@ -218,14 +259,14 @@ class Report:
             A GeoDataFrame retaining a common known CRS, including for no errors.
 
         Raises:
-            ImportError: The optional GeoPandas dependency is unavailable.
+            ImportError: GeoPandas is missing; install topology-checker[io].
         """
         try:
             import geopandas as gpd
             import pandas as pd
         except ImportError as exc:
             raise ImportError(
-                "GeoDataFrame export requires topology-checker[geopandas]"
+                "GeoDataFrame export requires topology-checker[io]"
             ) from exc
         columns = [
             "rule",

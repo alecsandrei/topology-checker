@@ -1,11 +1,11 @@
 # Python usage
 
-Install from PyPI with `uv add topology-checker`, or use
-`uv add 'topology-checker[geopandas]'` for GeoDataFrame exports and file loading
-through GeoPandas. Python 3.10 through 3.14 on regular CPython are supported.
-The base package uses Shapely and pyproj. It does not require GeoPandas or a
-separate Rust installation when a compatible wheel is available. See the
-[API reference](python-api.md) for every class and function.
+Install with `pip install "topology-checker[io]"` for Shapely geometries,
+GeoPandas input and export, and CRS metadata. `pip install topology-checker`
+has no dependencies and works with [WKB](#wkb-input-and-output) only. Python
+3.10 through 3.14 on regular CPython are supported. Wheels need no Rust
+installation. See the [API reference](python-api.md) for every class and
+function.
 
 ## Register and validate
 
@@ -21,8 +21,9 @@ errors = report.to_geodataframe()
 print(report.is_valid, report.error_count, report.warnings)
 ```
 
-`add_rule` accepts a Shapely geometry, a geometry iterable, a GeoSeries,
-a GeoDataFrame, a GeoJSON mapping, or an object with `__geo_interface__`.
+`add_rule` accepts a Shapely geometry, a sequence of geometries or WKB items,
+a GeoSeries, a GeoDataFrame, a GeoJSON mapping, or an object with
+`__geo_interface__`.
 Pass the second layer with the keyword argument `other=`. Use enum members
 such as `Rule.MUST_NOT_OVERLAP`; parse serialized names with
 `Rule("must-not-overlap")` before registration.
@@ -67,6 +68,29 @@ Missing and empty features are skipped with warnings, extra dimensions are
 discarded, and nonfinite retained XY coordinates are rejected. Mixed nonempty
 families are accepted only by rules with an `ANY` input signature.
 
+## WKB input and output
+
+```python
+import struct
+from topology_checker import Rule, Topology
+
+def line(*coords):
+    header = struct.pack("<BII", 1, 2, len(coords))
+    return header + b"".join(struct.pack("<dd", x, y) for x, y in coords)
+
+topology = Topology(tolerance=0.001)
+roads = topology.add_layer([line((0, 0), (1, 0)), line((1, 0), (2, 0))], fids=[41, 92])
+topology.add_rule(Rule.MUST_NOT_HAVE_DANGLES, roads)
+for violation in topology.validate().violations:
+    print(violation.origin, violation.wkb.hex())
+```
+
+WKB items are `bytes`, `bytearray` or `memoryview` in ISO or extended WKB,
+either byte order; `None` is a missing feature. Unreadable WKB raises
+`ValueError` naming the layer and FID. `Violation.wkb` and `Layer.wkb` are 2D
+little-endian ISO WKB. `Violation.geometry` and `Layer.geometries` decode them
+with Shapely.
+
 ## Declare ambiguous empty layers
 
 ```python
@@ -105,8 +129,8 @@ floating-point slivers become reportable.
 All known layer CRSs must agree. Explicit CRS metadata must agree with metadata
 on the input. Unknown CRSs are accepted as caller-supplied coordinates. When
 known and unknown metadata are mixed, validation continues with a warning and
-the export CRS is unset. `Report.to_dict()` works without GeoPandas;
-`Report.to_geodataframe()` requires the `geopandas` extra.
+the export CRS is unset. `crs=`, `to_dict()` with violations and
+`Report.to_geodataframe()` require the `io` extra.
 
 ## Geometry-dependent semantics
 
@@ -160,8 +184,9 @@ segments = explode_lines(merged)
 assert len(segments) == 2
 ```
 
-Both utilities return tuples of Shapely lines. They accept the same input
-adapters and operate on planar snapshots.
+Both utilities accept the same inputs as `add_layer` and operate on planar
+snapshots. They return tuples of Shapely lines, or of WKB bytes when every
+input is WKB.
 
 ## Input validity and tolerance
 

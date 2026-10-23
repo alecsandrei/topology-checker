@@ -59,6 +59,16 @@ class NativeTopology:
 
 def registry() -> str: ...
 def lines(geometries: list[bytes], tolerance: float | None = None) -> list[bytes]: ...
+def prepare(
+    name: str, fids: list[int], items: list[bytes | None]
+) -> tuple[
+    list[tuple[int, bytes]],
+    list[bytes],
+    list[tuple[int, list[int]]],
+    list[str],
+    list[str],
+    list[str],
+]: ...
 
 class PrecisionError(RuntimeError):
     """Exact polygon topology could not be emitted with bounded coordinate rounding."""

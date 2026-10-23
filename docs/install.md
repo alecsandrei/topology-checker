@@ -20,7 +20,13 @@ cargo install topology-checker --locked --features gdal-system
 ## Python
 
 ```sh
-uv add 'topology-checker[geopandas]'
+pip install "topology-checker[io]"
+```
+
+This adds Shapely, GeoPandas and CRS support. For WKB input and output only, with no dependencies:
+
+```sh
+pip install topology-checker
 ```
 
 Python 3.10 to 3.14. See [Python usage](python-usage.md).
