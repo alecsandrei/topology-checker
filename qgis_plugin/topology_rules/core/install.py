@@ -29,7 +29,7 @@ from qgis.core import (
     QgsNetworkAccessManager,
     QgsTask,
 )
-from qgis.PyQt.QtCore import QCoreApplication, QUrl, pyqtSignal
+from qgis.PyQt.QtCore import QCoreApplication, QObject, QUrl, pyqtSignal
 from qgis.PyQt.QtNetwork import QNetworkRequest
 
 from ..utils import not_none, tr
@@ -123,6 +123,21 @@ def forget(url: str) -> None:
         cache.remove(QUrl(url))
 
 
+def ignore(*args: object) -> None:
+    """A slot that does nothing, for prime()."""
+
+
+def prime(*objects: QObject) -> None:
+    """Has sip look up now whether Python overrides disconnectNotify on the
+    objects, which it then remembers. Else it looks it up as a download
+    ends, on the thread of the download while Qt holds a lock, and waits
+    there for the GIL: a main thread that holds the GIL and waits for the
+    lock hangs QGIS."""
+    for item in objects:
+        item.objectNameChanged.connect(ignore)
+        item.objectNameChanged.disconnect(ignore)
+
+
 def terminal() -> str:
     """Where command() is run."""
     if platform.system() == 'Windows':
@@ -161,6 +176,7 @@ class Task(QgsTask):
         authentication settings of QGIS. Raises Failed with missing, when
         given, for a URL that is not found."""
         request = QgsBlockingNetworkRequest()
+        prime(request, self.feedback, not_none(QCoreApplication.instance()))
         request.downloadProgress.connect(
             lambda done, total: (
                 self.setProgress(100 * done / total) if total > 0 else None

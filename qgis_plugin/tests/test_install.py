@@ -13,6 +13,7 @@ import inspect
 import os
 import platform
 import shlex
+import subprocess
 import sys
 import threading
 import time
@@ -433,6 +434,31 @@ def test_no_network_fails_with_the_error(
     [error] = outcome.failed
     assert error.startswith(f'Cannot fetch http://127.0.0.1:{port}/pypi')
     assert 'refused' in error.lower()
+
+
+@pytest.mark.slow
+def test_downloads_end_while_the_main_thread_holds_the_gil(tmp_path: Path):
+    # A hang would stop the tests, so the fetches run in a QGIS of their own
+    script = Path(__file__).with_name('fetch_under_load.py')
+    plugin = Path(topology_rules.__file__).parents[1]
+    env = {
+        **os.environ,
+        # The tests drop both for the fake executables
+        'PYTHONHOME': sys.base_prefix,
+        'PYTHONPATH': os.pathsep.join(sys.path),
+        'QGIS_CUSTOM_CONFIG_PATH': str(tmp_path),
+        'QT_QPA_PLATFORM': 'offscreen',
+    }
+    done = subprocess.run(
+        [sys.executable, str(script), str(plugin), '30'],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=300,
+        check=False,
+    )
+    assert done.returncode == 0, done.stderr[-4000:]
+    assert done.stdout.splitlines()[-1] == '30'
 
 
 def test_an_answer_that_is_not_json_fails(pypi: Index):
