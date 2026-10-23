@@ -28,9 +28,16 @@ from qgis.core import (
     QgsVectorLayer,
 )
 from qgis.gui import QgsColorButton
-from qgis.PyQt.QtCore import QTimer
+from qgis.PyQt.QtCore import QRect, Qt, QTimer
 from qgis.PyQt.QtGui import QColor
-from qgis.PyQt.QtWidgets import QAction, QApplication, QDialog, QMenu
+from qgis.PyQt.QtWidgets import (
+    QAction,
+    QApplication,
+    QDialog,
+    QMainWindow,
+    QMenu,
+    QWidget,
+)
 
 from topology_rules.core.style import (
     APART,
@@ -499,6 +506,64 @@ def test_an_editor_left_alone_changes_nothing(
     assert len(seen) == 1
     assert spy.calls == 0
     assert ramp_text(colour_ramp()) == before
+
+
+def placed_editor(menu: StyleMenu) -> tuple[QWidget, QRect]:
+    """The window that the editor of the ramp opens over, and where it
+    opens, the first time: then it opens where it was left."""
+    settings = QgsSettings()
+    for key in settings.allKeys():
+        if key.startswith('Windows/') and key.endswith('/geometry'):
+            settings.remove(key)
+    seen: list[tuple[QWidget, QRect]] = []
+
+    def look(dialog: QDialog) -> None:
+        parent = not_none(dialog.parentWidget())
+        seen.append((not_none(parent.window()), dialog.frameGeometry()))
+        dialog.reject()
+
+    answer_dialog(look)
+    pick(menu, 'Edit…')
+    assert len(seen) == 1
+    return seen[0]
+
+
+def assert_centred(inner: QRect, outer: QRect) -> None:
+    centre, middle = inner.center(), outer.center()
+    assert abs(centre.x() - middle.x()) <= 2, (inner, outer)
+    assert abs(centre.y() - middle.y()) <= 2, (inner, outer)
+
+
+# Within the screen of the tests, of 800 by 600, as the dialog is kept in it
+@pytest.mark.parametrize('left', [20, 140])
+def test_the_ramp_editor_opens_over_the_main_window(
+    dock: Dock, window: QMainWindow, left: int
+):
+    window.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
+    window.setGeometry(left, 20, 640, 480)
+    window.show()
+    owner, placed = placed_editor(dock.style_menu)
+    assert owner is window
+    assert_centred(placed, window.frameGeometry())
+
+
+def test_the_ramp_editor_opens_over_a_floating_panel(
+    dock: Dock, window: QMainWindow
+):
+    window.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, dock)
+    window.show()
+    dock.setFloating(True)
+    dock.setGeometry(150, 100, 500, 450)
+    owner, placed = placed_editor(dock.style_menu)
+    assert owner is dock
+    assert_centred(placed, dock.frameGeometry())
+
+
+def test_a_submenu_of_style_opens_the_editor_over_the_panel(dock: Dock):
+    outer = QMenu(dock)
+    inner = StyleMenu(outer)
+    outer.addMenu(inner)
+    assert inner.window_of_editor() is dock.window()
 
 
 def test_the_ramp_menu_only_chooses_ramps(menu: StyleMenu):

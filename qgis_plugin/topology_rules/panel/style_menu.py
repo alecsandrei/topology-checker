@@ -6,7 +6,13 @@ from qgis.core import QgsColorRamp, QgsStyle, QgsSymbolLayerUtils
 from qgis.gui import QgsColorRampButton
 from qgis.PyQt.QtCore import QSize, pyqtSignal
 from qgis.PyQt.QtGui import QIcon
-from qgis.PyQt.QtWidgets import QAction, QActionGroup, QMenu, QWidget
+from qgis.PyQt.QtWidgets import (
+    QAction,
+    QActionGroup,
+    QApplication,
+    QMenu,
+    QWidget,
+)
 
 from ..core.style import (
     ColourBy,
@@ -68,10 +74,6 @@ class StyleMenu(QMenu):
         self.all_ramps = QActionGroup(self.all_menu)
         self.invert_action = QAction(tr('Invert'), self)
         self.edit_action = QAction(tr('Edit…'), self)
-        # Never shown: a click on it opens the editor of QGIS for the kind of
-        # the ramp, and it says when the ramp was changed there
-        self.ramp_button = QgsColorRampButton(self, tr('Colour ramp'))
-        self.ramp_button.hide()
         self.addSeparator()
         self.reset_action = not_none(self.addAction(tr('Reset style')))
 
@@ -81,7 +83,6 @@ class StyleMenu(QMenu):
             group.triggered.connect(self.named_ramp_chosen)
         self.invert_action.triggered.connect(self.invert)
         self.edit_action.triggered.connect(self.edit)
-        self.ramp_button.colorRampChanged.connect(self.ramp_edited)
         self.reset_action.triggered.connect(self.reset)
         self.aboutToShow.connect(self.show_current)
         self.ramp_menu.aboutToShow.connect(self.fill_ramps)
@@ -159,16 +160,29 @@ class StyleMenu(QMenu):
         self.use_ramp(ramp)
 
     def edit(self) -> None:
-        """Opens the editor of QGIS for the ramp in use."""
-        self.ramp_button.blockSignals(True)
-        self.ramp_button.setColorRamp(colour_ramp())
-        self.ramp_button.blockSignals(False)
-        self.ramp_button.click()
-
-    def ramp_edited(self) -> None:
-        ramp = self.ramp_button.colorRamp()
+        """Opens the editor of QGIS for the kind of the ramp in use, as a
+        dialog over the window that the menu was opened from."""
+        # Never shown: a click on it opens the editor, which takes the
+        # window of the button, and sets the ramp of the button when it is
+        # accepted
+        button = QgsColorRampButton(self.window_of_editor(), tr('Colour ramp'))
+        button.hide()
+        button.setColorRamp(colour_ramp())
+        button.click()
+        ramp = button.colorRamp()
+        button.deleteLater()
         if ramp is not None:
             self.use_ramp(ramp)
+
+    def window_of_editor(self) -> QWidget | None:
+        """The window of the panel that has the menu, past the menus that
+        it is a submenu of, which close when an item is chosen."""
+        widget = self.parentWidget()
+        while isinstance(widget, QMenu):
+            widget = widget.parentWidget()
+        if widget is None:
+            return QApplication.activeWindow()
+        return widget.window()
 
     def use_ramp(self, ramp: QgsColorRamp) -> None:
         """Draws the errors with the ramp, unless they already are."""
