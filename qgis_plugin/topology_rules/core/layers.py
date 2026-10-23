@@ -76,6 +76,9 @@ class Input:
     gone: str = dataclasses.field(init=False)
     # The layer in its own file, if the tool can read it from there
     direct: Dataset | None = dataclasses.field(init=False)
+    # The source of a layer in a GeoPackage, which QGIS may have to open
+    # again to read it (see inputs.reconnect)
+    shared: str | None = dataclasses.field(init=False)
     crs: QgsCoordinateReferenceSystem = dataclasses.field(init=False)
     # The source gives its features in the order of their ids, which a part
     # of a layer and the new features of an edit session do not
@@ -105,6 +108,7 @@ class Input:
             path=None,
             gone='',
             direct=None,
+            shared=None,
             crs=(layer.crs() if layer is not None else self.source.sourceCrs()),
             ordered=(
                 self.whole
@@ -115,6 +119,7 @@ class Input:
         )
         if layer is None or not layer.isValid():
             return
+        keep(shared=geopackage_source(layer))
         if self.whole or self.restricted:
             keep(reader=QgsVectorLayerFeatureSource(layer))
         try:
@@ -138,6 +143,18 @@ def added_features(layer: QgsVectorLayer) -> bool:
     """Whether the layer has features that were added and not saved."""
     buffer = layer.editBuffer()
     return buffer is not None and bool(buffer.addedFeatures())
+
+
+def geopackage_source(layer: QgsVectorLayer) -> str | None:
+    """The source of the provider of a layer in a GeoPackage."""
+    provider = layer.dataProvider()
+    if (
+        layer.providerType() != 'ogr'
+        or provider is None
+        or provider.storageType() != 'GPKG'
+    ):
+        return None
+    return provider.dataSourceUri()
 
 
 def wkb_kind(wkb_type: t.Any) -> str:

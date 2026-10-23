@@ -40,6 +40,7 @@ from .inputs import (
     left_out,
     not_finite,
     own_file,
+    reconnect,
     reprojection,
     require_readable,
     stem,
@@ -177,6 +178,9 @@ def read(
     rather than its file, which by default is whether the input is checked.
     """
     require_readable(item)
+    # A connection that QGIS broke earlier hides features from the run, and
+    # from the map
+    reconnect(item)
     transform = reprojection(item, target, context, feedback)
     crs = (
         item.source.sourceCrs()

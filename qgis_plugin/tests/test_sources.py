@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -12,13 +13,17 @@ from qgis.core import (
     QgsFeature,
     QgsGeometry,
     QgsProcessingFeatureSourceDefinition,
+    QgsProcessingFeedback,
     QgsProcessingParameterDistance,
     QgsProject,
     QgsVectorLayer,
+    QgsVectorLayerFeatureSource,
 )
 
 from topology_rules.algorithms.rule import COUNT
 from topology_rules.core.engine import Engine
+from topology_rules.core.inputs import chosen
+from topology_rules.core.layers import Input, layer_file
 from topology_rules.enums import PROVIDER_ID
 
 from .helpers import (
@@ -181,6 +186,66 @@ def test_error_ids_of_a_layer_with_a_hole_in_its_ids(tmp_path: Path):
     assert layer.deleteFeature(1)
     assert layer.commitChanges()
     assert_errors_point_at_features(layer, layer.id(), 2)
+
+
+# Windows can refuse to write a file that a loaded layer has open
+rewrites_open_files = pytest.mark.skipif(
+    sys.platform == 'win32',
+    reason='rewrites the file of a loaded layer',
+)
+
+
+def fail_to_open(layer: QgsVectorLayer) -> None:
+    """Has QGIS fail once to open the GeoPackage of the layer, as it can
+    where it opens the file while an edit session starts or ends. It keeps
+    the connection and reads no feature of the file through it."""
+    path = Path(str(layer_file(layer)))
+    data = path.read_bytes()
+    path.write_bytes(b'not a GeoPackage' * 64)
+    reader = QgsVectorLayerFeatureSource(layer)
+    list(reader.getFeatures())
+    path.write_bytes(data)
+
+
+@rewrites_open_files
+def test_a_geopackage_that_qgis_failed_to_open(tmp_path: Path):
+    layer = project_layer(tmp_path, *CHAIN, FAR)
+    fail_to_open(layer)
+    assert_errors_point_at_features(layer, layer.id(), 4)
+
+
+@rewrites_open_files
+def test_an_edited_geopackage_that_qgis_failed_to_open(tmp_path: Path):
+    layer = project_layer(tmp_path, *CHAIN)
+    assert layer.startEditing()
+    feature = QgsFeature(layer.fields())
+    feature.setGeometry(QgsGeometry.fromWkt(FAR))
+    assert layer.addFeature(feature)
+    layer.selectByIds([1])
+    try:
+        fail_to_open(layer)
+        assert_errors_point_at_features(layer, layer.id(), 4)
+        # QGIS opens the file again, for the layer as it is
+        assert layer.selectedFeatureIds() == [1]
+        assert layer.isModified()
+    finally:
+        layer.rollBack()
+
+
+@rewrites_open_files
+def test_a_read_that_gives_no_saved_feature_is_done_again(tmp_path: Path):
+    layer = project_layer(tmp_path, *CHAIN)
+    assert layer.startEditing()
+    feature = QgsFeature(layer.fields())
+    feature.setGeometry(QgsGeometry.fromWkt(FAR))
+    assert layer.addFeature(feature)
+    try:
+        item = Input(layer.name(), layer, layer)
+        fail_to_open(layer)
+        ids = [found.id() for found in chosen(item, QgsProcessingFeedback())]
+    finally:
+        layer.rollBack()
+    assert ids == [feature.id(), 1, 2]
 
 
 def crs_pair(

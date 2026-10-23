@@ -22,6 +22,7 @@ from qgis.core import (
     QgsProcessingContext,
     QgsProcessingFeatureSource,
     QgsProcessingFeedback,
+    QgsProviderRegistry,
     QgsVectorFileWriter,
     QgsWkbTypes,
 )
@@ -145,6 +146,46 @@ def features(
     return t.cast('c.Iterable[QgsFeature]', source.getFeatures(request))
 
 
+def reconnect(item: Input) -> bool:
+    """Makes QGIS open the GeoPackage of the input again, and says whether
+    it did.
+
+    QGIS keeps the connection of a read that could not open a GeoPackage
+    and reads no feature through it from then on, without an error. A read
+    fails so when it opens the file while an edit session starts or ends, as
+    the map does when it draws the layer. A provider of its own reloads the
+    file, which drops those connections and leaves the layer, its selection
+    and its edits as they are.
+    """
+    if item.shared is None:
+        return False
+    provider = not_none(QgsProviderRegistry.instance()).createProvider(
+        'ogr', item.shared
+    )
+    if provider is None or not provider.isValid():
+        return False
+    provider.reloadData()
+    return True
+
+
+def read_features(
+    item: Input, request: QgsFeatureRequest, saved: bool = True
+) -> c.Iterator[QgsFeature]:
+    """The features of the reader for the request, read again after a
+    reconnect where none of the saved ones came and the request can give
+    some (saved). The new features of an edit session, whose ids are
+    negative, are in QGIS and not in the file, so they come once."""
+    found = False
+    for feature in features(item.reader, request):
+        found = found or feature.id() >= 0
+        yield feature
+    if found or not saved or not reconnect(item):
+        return
+    for feature in features(item.reader, request):
+        if feature.id() >= 0:
+            yield feature
+
+
 def aborts_on_invalid(context: QgsProcessingContext) -> bool:
     """Whether the user asked to stop at the first invalid geometry."""
     scoped = getattr(Qgis, 'InvalidGeometryCheck', None)
@@ -242,10 +283,14 @@ def chosen(
         request = QgsFeatureRequest()
         request.setSubsetOfAttributes([])
         if batch is None:
-            found = features(item.reader, request)
+            found = read_features(item, request)
         else:
             request.setFilterFids(batch)
-            found = sorted(features(item.reader, request), key=QgsFeature.id)
+            # The ids are in order, so the last is saved if any one is
+            found = sorted(
+                read_features(item, request, batch[-1] >= 0),
+                key=QgsFeature.id,
+            )
         for feature in found:
             if feedback.isCanceled():
                 raise RunError('Canceled')
@@ -272,7 +317,7 @@ def wanted(item: Input) -> list[int] | None:
     )
     return sorted(
         feature.id()
-        for feature in features(item.reader, request)
+        for feature in read_features(item, request)
         if item.ids is None or feature.id() in item.ids
     )
 
@@ -384,6 +429,9 @@ def prepare(
     """The file for the tool: the layer's own file where that serves, else an
     export of the features, which leaves out those the tool would reject."""
     require_readable(item)
+    # A connection that QGIS broke earlier hides features from the run, and
+    # from the map
+    reconnect(item)
     found = own_file(item, target)
     if direct and not skip and found is not None:
         return Prepared(found)
