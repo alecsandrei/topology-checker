@@ -28,7 +28,7 @@ from qgis.core import (
     QgsVectorLayer,
 )
 from qgis.gui import QgsColorButton
-from qgis.PyQt.QtCore import QRect, Qt, QTimer
+from qgis.PyQt.QtCore import QPoint, QRect, Qt, QTimer
 from qgis.PyQt.QtGui import QColor
 from qgis.PyQt.QtWidgets import (
     QAction,
@@ -640,6 +640,36 @@ def test_the_run_is_drawn_as_the_user_chose(
     pick(dock.style_menu, COLOURS[chosen])
     assert labels(three_groups) == expected
     assert len(set(colours(three_groups).values())) == len(expected)
+
+
+def gear_style(dock: Dock) -> StyleMenu:
+    """The Style submenu of the gear menu, which the user opens first."""
+    gear = not_none(dock.menu_button.menu())
+    gear.popup(QPoint(0, 0))
+    found = [
+        action.menu() for action in gear.actions() if action.text() == 'Style'
+    ]
+    gear.hide()
+    assert len(found) == 1
+    style = found[0]
+    assert isinstance(style, StyleMenu)
+    return style
+
+
+def test_the_gear_menu_has_the_style(dock: Dock, three_groups: QgsVectorLayer):
+    pick(gear_style(dock), 'Layer')
+    assert labels(three_groups) == {'roads', 'tracks', 'stops'}
+    # The gear menu is filled again each time it opens
+    style = gear_style(dock)
+    style.aboutToShow.emit()
+    assert checked(style.colour_menu) == ['Layer']
+    pick(style, 'Rule')
+    assert labels(three_groups) == {
+        'Lines must not have dangles',
+        'Points must be covered by lines',
+    }
+    pick(gear_style(dock), 'Large')
+    assert measures(three_groups) == [4.5, 0.6]
 
 
 def test_every_error_is_in_a_group_of_the_legend(

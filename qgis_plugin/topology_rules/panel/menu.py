@@ -1,5 +1,6 @@
-"""The menu of the gear button: the engine that runs the checks, and the
-Python package and the executable that it can be."""
+"""The menu of the gear button: the engine that runs the checks, the
+Python package and the executable that it can be, and how the errors are
+drawn."""
 
 from __future__ import annotations
 
@@ -21,6 +22,7 @@ from ..core.wheels import PACKAGE
 from ..enums import PROVIDER_ID
 from ..exceptions import ExecutableError, MissingError, PackageError
 from ..utils import not_none, tr
+from .style_menu import StyleMenu
 
 
 def engine_names() -> dict[Engine, str]:
@@ -74,9 +76,9 @@ def reason(error: ExecutableError) -> str:
 
 
 class PanelMenu(QMenu):
-    """What the engine is, and what can be done about it. It is filled in
-    each time it opens, as the package and the executable change outside
-    it."""
+    """What the engine is, what can be done about it, and the style of the
+    errors. It is filled in each time it opens, as the package and the
+    executable change outside it."""
 
     engine_chosen = pyqtSignal(object)
 
@@ -91,6 +93,7 @@ class PanelMenu(QMenu):
         self.update_action = QAction(self)
         self.remove_action = QAction(tr('Remove Python package'), self)
         self.choose_action = QAction(tr('Choose executable…'), self)
+        self.style_menu = StyleMenu(self)
 
         # The sections, in the order of the menu
         self.add_engines()
@@ -103,6 +106,8 @@ class PanelMenu(QMenu):
                 self.choose_action,
             ]
         )
+        self.addSeparator()
+        self.addMenu(self.style_menu)
 
         self.group.triggered.connect(self.engine_triggered)
         self.aboutToShow.connect(self.fill)

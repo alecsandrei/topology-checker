@@ -258,7 +258,7 @@ def row_of(layout: QLayout, widget: QWidget) -> list[QWidget | None]:
 # The menu
 
 
-def test_the_menu_has_the_engines_then_the_installs():
+def test_the_menu_has_the_engines_then_the_installs_then_the_style():
     menu = PanelMenu()
     menu.fill()
     assert texts(menu) == [
@@ -269,6 +269,8 @@ def test_the_menu_has_the_engines_then_the_installs():
         '---',
         'Install Python package…',
         'Choose executable…',
+        '---',
+        'Style',
     ]
 
 
@@ -368,7 +370,10 @@ def test_an_installed_package_can_be_removed_and_not_installed(home: Path):
     version_folder(home, VERSION)
     menu = PanelMenu()
     menu.fill()
-    assert texts(menu)[-2:] == ['Remove Python package', 'Choose executable…']
+    assert texts(menu)[-4:-2] == [
+        'Remove Python package',
+        'Choose executable…',
+    ]
     assert not menu.update_action.isVisible()
     assert not menu.install_action.isVisible()
 
@@ -377,7 +382,7 @@ def test_an_older_package_can_be_updated(home: Path):
     version_folder(home, '0.0.1')
     menu = PanelMenu()
     menu.fill()
-    assert texts(menu)[-3:] == [
+    assert texts(menu)[-5:-2] == [
         f'Update Python package to {VERSION}…',
         'Remove Python package',
         'Choose executable…',
@@ -389,7 +394,7 @@ def test_a_package_that_qgis_has_is_not_installed_or_removed(
 ):
     menu = PanelMenu()
     menu.fill()
-    assert texts(menu)[-2:] == ['---', 'Choose executable…']
+    assert texts(menu)[-4:-2] == ['---', 'Choose executable…']
 
 
 def test_the_menu_is_filled_as_it_opens(home: Path):

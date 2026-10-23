@@ -46,7 +46,6 @@ from .results import ResultsPanel
 from .rules_page import RulesPage
 from .setup import SetupPage
 from .state import ProjectState
-from .style_menu import StyleMenu
 from .tolerance import show_unit
 
 # The part of the documentation about the plugin
@@ -122,7 +121,7 @@ class Dock(QgsDockWidget):
             QToolButton.ToolButtonPopupMode.InstantPopup
         )
         self.menu_button.setMenu(self.menu)
-        self.style_menu = StyleMenu(self)
+        self.style_menu = self.menu.style_menu
         self.progress = QProgressBar()
         self.progress.setRange(0, 0)
         self.progress.hide()
