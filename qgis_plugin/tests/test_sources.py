@@ -21,8 +21,10 @@ from topology_rules.algorithms.rule import COUNT
 from topology_rules.enums import PROVIDER_ID
 
 from .helpers import (
+    Ran,
     add_features,
     errors_layer,
+    line_layer,
     run_algorithm,
     saved_layer,
 )
@@ -112,6 +114,51 @@ def test_error_ids_of_the_selected_features(tmp_path: Path):
     layer.selectByIds([2, 3])
     source = QgsProcessingFeatureSourceDefinition(layer.id(), True)
     assert_errors_point_at_features(layer, source, 2)
+
+
+def origin_ids(ran: Ran) -> list[int]:
+    """The ids of the features of the point errors, in the order of the
+    layer."""
+    errors = errors_layer(ran, 'ERRORS_POINT')
+    return [int(error['origin_fid']) for error in errors.getFeatures()]
+
+
+def test_the_errors_of_a_selection_are_in_the_order_of_the_ids():
+    """QGIS gives the selection of a memory layer in an order of its own,
+    which changes from one session to the next."""
+    layer = line_layer(
+        *(f'LINESTRING({x} 0, {x} 5)' for x in range(0, 400, 10))
+    )
+    QgsProject.instance().addMapLayer(layer)
+    layer.selectByIds(list(range(5, 35)))
+    ran = run_algorithm(
+        DANGLES,
+        {'INPUT': QgsProcessingFeatureSourceDefinition(layer.id(), True)},
+    )
+    assert ran.ok, ran.log
+    assert origin_ids(ran) == sorted(2 * list(range(5, 35)))
+
+
+def test_the_errors_of_new_features_are_in_the_order_of_the_ids(
+    tmp_path: Path,
+):
+    layer = project_layer(tmp_path, *CHAIN)
+    assert layer.startEditing()
+    try:
+        for y in (100, 200, 300):
+            feature = QgsFeature(layer.fields())
+            feature.setGeometry(
+                QgsGeometry.fromWkt(f'LINESTRING(0 {y}, 10 {y})')
+            )
+            assert layer.addFeature(feature)
+        ran = run_algorithm(DANGLES, {'INPUT': layer.id()})
+    finally:
+        layer.rollBack()
+    assert ran.ok, ran.log
+    found = origin_ids(ran)
+    assert found == sorted(found)
+    # Two dangles of the chain, and two of each new line
+    assert len(found) == 8
 
 
 def test_error_ids_of_an_edited_layer(tmp_path: Path):

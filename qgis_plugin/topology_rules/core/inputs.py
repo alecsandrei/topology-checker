@@ -27,6 +27,9 @@ from ..exceptions import RunError
 from ..utils import QgsCsException, named
 from .layers import Dataset, Input, wkb_kind
 
+# How many features are read by their ids at once
+BATCH = 2000
+
 
 @dataclasses.dataclass(frozen=True)
 class Skipped:
@@ -131,6 +134,60 @@ def moves(
     return source.isValid() and target.isValid() and source != target
 
 
+def chosen(
+    item: Input, feedback: QgsProcessingFeedback
+) -> c.Iterator[QgsFeature]:
+    """The features that were asked for, without their attributes, in the
+    order of their ids, which is the order of the errors.
+
+    QGIS gives the features of a selection in no set order, those of an area
+    in the order of its index, and the new features of an edit session first,
+    so those are read by their ids, a batch at a time.
+    """
+    ids = wanted(item)
+    if ids is None:
+        batches: c.Iterable[list[int] | None] = [None]
+    else:
+        batches = (ids[i : i + BATCH] for i in range(0, len(ids), BATCH))
+    for batch in batches:
+        request = QgsFeatureRequest()
+        request.setSubsetOfAttributes([])
+        if batch is None:
+            found = features(item.source, request)
+        else:
+            request.setFilterFids(batch)
+            found = sorted(features(item.source, request), key=QgsFeature.id)
+        for feature in found:
+            if feedback.isCanceled():
+                raise RunError('Canceled')
+            yield feature
+
+
+def wanted(item: Input) -> list[int] | None:
+    """The ids of the features that were asked for, in order, or none where
+    the source gives its features in that order: the features that cross
+    the area, whole, and among them the ones that were chosen."""
+    if item.ordered:
+        return None
+    if item.area is None and item.ids is not None:
+        return sorted(item.ids)
+    request = QgsFeatureRequest()
+    if item.area is not None:
+        request.setFilterRect(item.area)
+    request.setNoAttributes()
+    scoped = getattr(Qgis, 'FeatureRequestFlag', None)
+    request.setFlags(
+        scoped.NoGeometry
+        if scoped is not None
+        else named(QgsFeatureRequest, 'NoGeometry')
+    )
+    return sorted(
+        feature.id()
+        for feature in features(item.source, request)
+        if item.ids is None or feature.id() in item.ids
+    )
+
+
 def export_dataset(
     item: Input,
     directory: Path,
@@ -183,23 +240,11 @@ def export_dataset(
     ):
         message = '' if writer is None else writer.errorMessage()
         raise RunError(f'Could not export {item.name}: {message}')
-    request = QgsFeatureRequest()
-    request.setSubsetOfAttributes([])
-    # The part of the layer that was asked for: the features that cross the
-    # area, whole, and among them the ones that were chosen
-    if item.area is not None:
-        request.setFilterRect(item.area)
-    elif item.ids is not None:
-        request.setFilterFids(list(item.ids))
     ids: list[int] = []
     skipped: list[Skipped] = []
     batch: list[QgsFeature] = []
     try:
-        for feature in features(item.source, request):
-            if feedback.isCanceled():
-                raise RunError('Canceled')
-            if item.ids is not None and feature.id() not in item.ids:
-                continue
+        for feature in chosen(item, feedback):
             geometry = feature.geometry()
             if transform is not None and not geometry.isNull():
                 try:

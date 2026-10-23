@@ -70,6 +70,9 @@ class Input:
     # The layer in its own file, if the tool can read it from there
     direct: Dataset | None = dataclasses.field(init=False)
     crs: QgsCoordinateReferenceSystem = dataclasses.field(init=False)
+    # The source gives its features in the order of their ids, which a part
+    # of a layer and the new features of an edit session do not
+    ordered: bool = dataclasses.field(init=False)
 
     def __post_init__(self) -> None:
         layer = self.layer
@@ -90,6 +93,11 @@ class Input:
             gone='',
             direct=None,
             crs=(layer.crs() if layer is not None else self.source.sourceCrs()),
+            ordered=(
+                self.whole
+                and not self.restricted
+                and (layer is None or not added_features(layer))
+            ),
         )
         if layer is None or not layer.isValid():
             return
@@ -108,6 +116,12 @@ class Input:
     @property
     def kind(self) -> str:
         return wkb_kind(self.source.wkbType())
+
+
+def added_features(layer: QgsVectorLayer) -> bool:
+    """Whether the layer has features that were added and not saved."""
+    buffer = layer.editBuffer()
+    return buffer is not None and bool(buffer.addedFeatures())
 
 
 def wkb_kind(wkb_type: t.Any) -> str:
