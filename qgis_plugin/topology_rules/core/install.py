@@ -331,16 +331,35 @@ def unsupported() -> str | None:
     return None
 
 
-def environment() -> str:
-    """The versions that decide whether the package loads, for the log."""
-    parts = [f'Python {platform.python_version()}']
+def dependencies() -> dict[str, str | None]:
+    """The versions of the modules of QGIS that the package uses, such as
+    {'shapely': '2.0.6', 'pyproj': '3.7.0'}, with None for one that does not
+    load. The install adds none of them."""
+    found: dict[str, str | None] = {}
     for name, least in NEEDS.items():
         try:
-            version = dependency(name, least)
+            found[name] = dependency(name, least)
         except Unsupported:
-            version = tr('missing')
-        parts.append(f'{name} {version}')
+            found[name] = None
+    return found
+
+
+def environment(found: dict[str, str | None] | None = None) -> str:
+    """The versions that decide whether the package loads, for the log."""
+    found = dependencies() if found is None else found
+    parts = [f'Python {platform.python_version()}']
+    for name, version in found.items():
+        parts.append(f'{name} {version or tr("missing")}')
     return ', '.join(parts)
+
+
+def nothing_else(found: dict[str, str | None]) -> str:
+    """That the install adds no other package, for the log: 'No other
+    packages installed. Uses QGIS's shapely 2.0.6 and pyproj 3.7.0.'"""
+    return tr(
+        "No other packages installed. Uses QGIS's shapely {shapely} and "
+        'pyproj {pyproj}.'
+    ).format(shapely=found.get('shapely'), pyproj=found.get('pyproj'))
 
 
 def described() -> str:
@@ -833,13 +852,14 @@ class ReleaseTask(Task):
         self.release: Release | None = None
         # Asked here, as the modules are imported on the main thread
         self.reason = unsupported()
-        self.facts = environment()
+        self.dependencies = dependencies()
 
     def work(self) -> None:
-        self.say(self.facts)
+        self.say(environment(self.dependencies))
         self.say(tr('Platform {platform}').format(platform=described()))
         if self.reason is not None:
             raise Failed(self.reason)
+        self.say(nothing_else(self.dependencies))
         self.say(tr('Fetching {url}').format(url=self.url))
         content = self.get(
             self.url,

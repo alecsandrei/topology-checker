@@ -30,6 +30,7 @@ from qgis.PyQt.QtCore import QCoreApplication
 
 import topology_rules
 from topology_rules.core import install
+from topology_rules.utils import not_none
 
 from .helpers import wait_for
 
@@ -270,7 +271,7 @@ def messages() -> c.Iterator[list[str]]:
         if tag == install.TAG:
             found.append(message)
 
-    log = QgsApplication.messageLog()
+    log = not_none(QgsApplication.messageLog())
     # The signal that the panel listens to, which QGIS 4 renamed
     signal = getattr(log, 'messageReceivedWithFormat', log.messageReceived)
     signal.connect(received)
@@ -319,7 +320,7 @@ def start(task: install.Task) -> Outcome:
         task.found.connect(outcome.found.append)
     if isinstance(task, install.InstallTask):
         task.done.connect(outcome.done.append)
-    QgsApplication.taskManager().addTask(task)
+    not_none(QgsApplication.taskManager()).addTask(task)
     return outcome
 
 
@@ -472,6 +473,12 @@ def test_this_qgis_can_use_it():
     assert install.unsupported() is None
 
 
+def test_the_dependencies_are_those_of_qgis(monkeypatch: pytest.MonkeyPatch):
+    assert install.dependencies() == {'shapely': '2.0.6', 'pyproj': '3.7.0'}
+    monkeypatch.setitem(sys.modules, 'pyproj', None)
+    assert install.dependencies() == {'shapely': '2.0.6', 'pyproj': None}
+
+
 def thirty_two_bits(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sys, 'maxsize', 2**31 - 1)
 
@@ -560,6 +567,7 @@ def test_a_qgis_that_cannot_use_it_asks_pypi_nothing(
     outcome = run(install.ReleaseTask())
     assert outcome.failed == ['No wheel for Linux aarch64']
     assert outcome.found == []
+    assert not any(line.startswith('No other') for line in outcome.lines)
     assert pypi.asked == []
     assert not (home / VERSION).exists()
 
@@ -812,6 +820,8 @@ def test_each_step_is_logged_live_in_qgis_and_in_the_folder(
     expected = [
         'Python 3.12.8, shapely 2.0.6, pyproj 3.7.0',
         'Platform Linux x86_64 glibc 2.35',
+        "No other packages installed. Uses QGIS's shapely 2.0.6 and "
+        'pyproj 3.7.0.',
         f'Fetching {pypi.url}/pypi/topology-checker/{VERSION}/json',
         f'Found {name} ({size}), SHA-256 {digest}',
         f'Downloading {name} ({size})',
@@ -1099,4 +1109,5 @@ def test_the_about_text_says_how_to_get_the_package():
     about = parser['general']['about']
     assert 'pip install --no-deps --target' in about
     assert 'OSGeo4W Shell' in about
+    assert 'Installs nothing else' in about
     assert 'cargo install topology-checker' in about
