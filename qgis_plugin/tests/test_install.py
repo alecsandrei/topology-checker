@@ -331,7 +331,6 @@ def test_the_panel_finds_what_it_uses_in_install():
         'installed',
         'outdated',
         'restart_needed',
-        'dependencies',
         'command',
         'terminal',
         'remove',
@@ -662,16 +661,14 @@ def test_each_step_is_logged_live_in_qgis_and_in_the_folder(
     size = install.size_text(len(content))
     digest = sha256(content)
     expected = [
-        'Python 3.12.8, shapely 2.0.6, pyproj 3.7.0',
-        'Platform Linux x86_64 glibc 2.35',
-        "No other packages installed. Uses QGIS's shapely 2.0.6 and "
-        'pyproj 3.7.0.',
+        'Python 3.12.8 on Linux x86_64 glibc 2.35',
         f'Fetching {pypi.url}/pypi/topology-checker/{VERSION}/json',
         f'Found {name} ({size}), SHA-256 {digest}',
         f'Downloading {name} ({size})',
         f'From {pypi.url}/files/{name}',
         f'SHA-256 {digest} matches PyPI',
         f'Unpacked 4 files into {home / VERSION}',
+        'No other packages installed.',
         f'Loaded topology-checker {VERSION}',
     ]
     assert found.lines + installed.lines == expected
@@ -953,8 +950,9 @@ def test_the_about_text_names_the_package_and_links_the_guide():
     parser.read(folders.METADATA, encoding='utf-8')
     about = parser['general']['about']
     assert 'topology-checker Python package' in about
-    assert 'uses the shapely and pyproj that come with QGIS' in about
     assert f'{GUIDE}#install' in about
+    assert 'shapely' not in about
+    assert 'pyproj' not in about
 
 
 def test_the_guide_has_the_command_for_each_system():
@@ -964,6 +962,8 @@ def test_the_guide_has_the_command_for_each_system():
     text = page.read_text(encoding='utf-8')
     assert '\n## Install\n' in text
     assert 'Installs nothing else' in text
+    assert 'shapely' not in text
+    assert 'pyproj' not in text
     for system in ('Windows, in the OSGeo4W Shell', 'macOS', 'Linux'):
         assert f'\n{system}' in text
     assert text.count('-m pip install --no-deps --target') == 3

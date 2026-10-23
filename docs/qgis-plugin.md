@@ -6,7 +6,7 @@
 
 1. In QGIS 3.34 or newer, open **Plugins > Manage and Install Plugins** and install **Topology Rules**.
 2. Install the Python package or the CLI:
-    - **Install Python package…** in the panel's menu. It first shows the file, its size, URL and SHA-256. Then it downloads the file from PyPI, checks the SHA-256 and unpacks the package into `python/dependencies/topology_rules/<version>` in the QGIS profile. Installs nothing else; uses the shapely and pyproj that come with QGIS. Each step goes to the **Topology Rules** log tab and to `install.log`. Needs Python 3.10, shapely 2 and pyproj 3.4 or newer, on Windows x64, macOS, or Linux x86_64. A new plugin version offers its package version; QGIS loads it after a restart.
+    - **Install Python package…** in the panel's menu. It first shows the file, its size, URL and SHA-256. Then it downloads the file from PyPI, checks the SHA-256 and unpacks the package into `python/dependencies/topology_rules/<version>` in the QGIS profile. Installs nothing else. Each step goes to the **Topology Rules** log tab and to `install.log`. Needs Python 3.10 or newer, on Windows x64, macOS, or Linux x86_64. A new plugin version offers its package version; QGIS loads it after a restart.
     - The [CLI](install.md#cli), 0.2.0 or newer. If `topology-checker` is not on the `PATH`, choose it in the panel, or set its path under **Settings > Options > Processing > Providers > Topology Rules**.
 
 ### Python package by hand

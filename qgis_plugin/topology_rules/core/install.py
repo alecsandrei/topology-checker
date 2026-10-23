@@ -3,8 +3,8 @@ of QGIS, so that the checks run in QGIS rather than in the executable.
 
 There is no pip: the wheel of this platform is fetched with the network
 settings of QGIS, checked against the SHA-256 that PyPI gives, and only the
-package is unpacked, as its dependencies are those of QGIS. Each version has a
-folder of its own, as Windows locks a library that is loaded.
+package is unpacked, as it needs no other. Each version has a folder of its
+own, as Windows locks a library that is loaded.
 
 What the panel uses is here. The wheel that fits and its unpacking are in
 wheels, the folders of the profile in folders; a test patches a name in the
@@ -38,7 +38,7 @@ from .folders import (
     restart_needed,
     wanted,
 )
-from .wheels import PACKAGE, Failed, Release, dependencies, unsupported
+from .wheels import PACKAGE, Failed, Release, unsupported
 
 __all__ = [
     'PYPI',
@@ -49,7 +49,6 @@ __all__ = [
     'Task',
     'activate',
     'command',
-    'dependencies',
     'folder',
     'folder_of',
     'installed',
@@ -68,23 +67,6 @@ PYPI = 'https://pypi.org/pypi'
 
 
 # Words and commands
-
-
-def environment(found: dict[str, str | None]) -> str:
-    """The versions that decide whether the package loads, for the log."""
-    parts = [f'Python {platform.python_version()}']
-    for name, version in found.items():
-        parts.append(f'{name} {version or tr("missing")}')
-    return ', '.join(parts)
-
-
-def nothing_else(found: dict[str, str | None]) -> str:
-    """That the install adds no other package, for the log: 'No other
-    packages installed. Uses QGIS's shapely 2.0.6 and pyproj 3.7.0.'"""
-    return tr(
-        "No other packages installed. Uses QGIS's shapely {shapely} and "
-        'pyproj {pyproj}.'
-    ).format(shapely=found.get('shapely'), pyproj=found.get('pyproj'))
 
 
 def size_text(size: int) -> str:
@@ -240,16 +222,16 @@ class ReleaseTask(Task):
         self.version = version
         self.url = f'{PYPI}/{PACKAGE}/{version}/json'
         self.release: Release | None = None
-        # Asked here, as the modules are imported on the main thread
         self.reason = wheels.unsupported()
-        self.dependencies = wheels.dependencies()
 
     def work(self) -> None:
-        self.say(environment(self.dependencies))
-        self.say(tr('Platform {platform}').format(platform=wheels.described()))
+        self.say(
+            tr('Python {python} on {platform}').format(
+                python=platform.python_version(), platform=wheels.described()
+            )
+        )
         if self.reason is not None:
             raise Failed(self.reason)
-        self.say(nothing_else(self.dependencies))
         self.say(tr('Fetching {url}').format(url=self.url))
         content = self.get(
             self.url,
@@ -325,6 +307,7 @@ class InstallTask(Task):
                 count=count, folder=self.target
             )
         )
+        self.say(tr('No other packages installed.'))
 
     def succeed(self) -> None:
         version = self.release.version

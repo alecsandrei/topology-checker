@@ -4,6 +4,7 @@ any."""
 from __future__ import annotations
 
 import collections.abc as c
+import importlib
 import platform
 import sys
 
@@ -15,7 +16,6 @@ from .wheel_helpers import (
     VERSION,
     WHEELS,
     answer,
-    fake_module,
     listed,
     mac,
     pretend_linux,
@@ -140,14 +140,12 @@ def test_a_release_holds_what_the_consent_shows():
 # Why this QGIS cannot use the package
 
 
-def test_this_qgis_can_use_it():
+def test_this_qgis_can_use_it_without_shapely_or_pyproj():
+    # The linux fixture hides both
+    for name in ('shapely', 'pyproj'):
+        with pytest.raises(ImportError):
+            importlib.import_module(name)
     assert wheels.unsupported() is None
-
-
-def test_the_dependencies_are_those_of_qgis(monkeypatch: pytest.MonkeyPatch):
-    assert wheels.dependencies() == {'shapely': '2.0.6', 'pyproj': '3.7.0'}
-    monkeypatch.setitem(sys.modules, 'pyproj', None)
-    assert wheels.dependencies() == {'shapely': '2.0.6', 'pyproj': None}
 
 
 def thirty_two_bits(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -201,26 +199,6 @@ def thirty_two_bits(monkeypatch: pytest.MonkeyPatch) -> None:
         (
             lambda m: m.setattr(platform, 'system', lambda: 'FreeBSD'),
             'No wheel for FreeBSD x86_64',
-        ),
-        (
-            lambda m: m.setitem(sys.modules, 'shapely', None),
-            'Needs shapely 2 or newer, which does not load',
-        ),
-        (
-            lambda m: m.setitem(
-                sys.modules, 'shapely', fake_module('shapely', '1.8.5')
-            ),
-            'Needs shapely 2 or newer, QGIS has shapely 1.8.5',
-        ),
-        (
-            lambda m: m.setitem(sys.modules, 'pyproj', None),
-            'Needs pyproj 3.4 or newer, which does not load',
-        ),
-        (
-            lambda m: m.setitem(
-                sys.modules, 'pyproj', fake_module('pyproj', '3.3.1')
-            ),
-            'Needs pyproj 3.4 or newer, QGIS has pyproj 3.3.1',
         ),
     ],
 )

@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import collections.abc as c
 import dataclasses
-import importlib
 import importlib.metadata
 import io
 import platform
@@ -23,9 +22,8 @@ from ..utils import tr
 
 PACKAGE = 'topology-checker'
 MODULE = 'topology_checker'
-# What the package needs, which QGIS brings
+# What the wheel needs
 PYTHON = (3, 10)
-NEEDS = {'shapely': (2,), 'pyproj': (3, 4)}
 GLIBC = (2, 17)
 # The names of a version folder, and of the folder that an install fills
 # before it becomes one
@@ -66,21 +64,6 @@ def numbers(text: str) -> tuple[int, ...]:
 # This Python
 
 
-def dependency(name: str, least: tuple[int, ...]) -> str:
-    """The version of a module of QGIS that the package needs. Raises
-    Unsupported when it does not import."""
-    needed = '.'.join(map(str, least))
-    try:
-        module = importlib.import_module(name)
-    except Exception as error:
-        raise Unsupported(
-            tr(
-                'Needs {name} {needed} or newer, which does not load: {error}'
-            ).format(name=name, needed=needed, error=error)
-        ) from error
-    return str(getattr(module, '__version__', ''))
-
-
 def check() -> None:
     """Raises Unsupported when this QGIS cannot load the package."""
     python = platform.python_version()
@@ -98,18 +81,6 @@ def check() -> None:
             )
         )
     platform_tags()
-    for name, least in NEEDS.items():
-        version = dependency(name, least)
-        if numbers(version) < least:
-            raise Unsupported(
-                tr(
-                    'Needs {name} {needed} or newer, QGIS has {name} {version}'
-                ).format(
-                    name=name,
-                    needed='.'.join(map(str, least)),
-                    version=version or tr('of no version'),
-                )
-            )
 
 
 def unsupported() -> str | None:
@@ -120,19 +91,6 @@ def unsupported() -> str | None:
     except Unsupported as error:
         return str(error)
     return None
-
-
-def dependencies() -> dict[str, str | None]:
-    """The versions of the modules of QGIS that the package uses, such as
-    {'shapely': '2.0.6', 'pyproj': '3.7.0'}, with None for one that does not
-    load. The install adds none of them."""
-    found: dict[str, str | None] = {}
-    for name, least in NEEDS.items():
-        try:
-            found[name] = dependency(name, least)
-        except Unsupported:
-            found[name] = None
-    return found
 
 
 def described() -> str:

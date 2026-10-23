@@ -113,15 +113,16 @@ def fake_module(name: str, version: str) -> types.ModuleType:
 
 
 def pretend_linux(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Linux x86_64 with glibc 2.35, Python 3.12.8, shapely 2.0.6 and
-    pyproj 3.7.0, whatever the machine of the tests."""
+    """Linux x86_64 with glibc 2.35 and Python 3.12.8, whatever the machine
+    of the tests. shapely and pyproj do not import, as the package does not
+    need them."""
     monkeypatch.setattr(platform, 'system', lambda: 'Linux')
     monkeypatch.setattr(platform, 'machine', lambda: 'x86_64')
     monkeypatch.setattr(platform, 'libc_ver', lambda: ('glibc', '2.35'))
     monkeypatch.setattr(platform, 'python_version', lambda: '3.12.8')
     monkeypatch.setattr(platform, 'python_implementation', lambda: 'CPython')
-    monkeypatch.setitem(sys.modules, 'shapely', fake_module('shapely', '2.0.6'))
-    monkeypatch.setitem(sys.modules, 'pyproj', fake_module('pyproj', '3.7.0'))
+    for name in ('shapely', 'pyproj'):
+        monkeypatch.setitem(sys.modules, name, None)
 
 
 def mac(monkeypatch: pytest.MonkeyPatch, machine: str, version: str) -> None:
