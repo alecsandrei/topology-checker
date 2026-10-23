@@ -23,7 +23,7 @@ from qgis.core import (
 )
 
 from .._typing import Parameters
-from ..core import binary
+from ..core import engine
 from ..core.checks import Job, renumber_errors, run_jobs
 from ..core.invalid import append_invalid
 from ..core.layers import Input, require_kind
@@ -33,7 +33,6 @@ from .base import (
     OUTPUT,
     TOLERANCE,
     Planned,
-    executable_path,
     failures,
     free_file,
     geopackage_name,
@@ -65,14 +64,14 @@ def hidden_flags() -> t.Any:
 class Plan:
     """What the main thread found out for the run."""
 
-    executable: str
+    tool: engine.Tool
     jobs: list[Job]
     tolerance: float | None
     output: str
 
 
 class CheckRulesAlgorithm(Planned):
-    """Runs several rules on project layers in one pass of the executable.
+    """Runs several rules on project layers in one pass of the engine.
 
     The rules are a JSON list of {"rule": name, "layer": id, "other": id or
     null}, which the dock builds, so the algorithm is not in the toolbox. The
@@ -145,8 +144,8 @@ class CheckRulesAlgorithm(Planned):
         main thread, so that the run only has to use them."""
 
         def prepare() -> None:
-            executable = executable_path()
-            known = {rule.name: rule for rule in binary.rules()}
+            tool = engine.tool()
+            known = {rule.name: rule for rule in engine.rules(tool)}
             requested = self.parameterAsFileOutput(parameters, OUTPUT, context)
             output = geopackage_name(requested)
             if output != requested and feedback is not None:
@@ -181,7 +180,7 @@ class CheckRulesAlgorithm(Planned):
             refuse_overwrite([requested, output], inputs.values())
             release_files([output])
             self.plan = Plan(
-                executable,
+                tool,
                 jobs,
                 tolerance_of(self, parameters, context),
                 output,
@@ -210,7 +209,7 @@ class CheckRulesAlgorithm(Planned):
             with scratch() as tmp:
                 outcome = run_jobs(
                     plan.jobs,
-                    plan.executable,
+                    plan.tool,
                     plan.tolerance,
                     output,
                     Path(tmp),

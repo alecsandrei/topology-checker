@@ -23,9 +23,11 @@ from topology_rules.panel.dock import Dock
 
 from .helpers import (
     add,
+    both_engines,
     calls,
     click_run,
     error_layers,
+    executable_only,
     layer_nodes,
     message_text,
     polygon_layer,
@@ -35,21 +37,14 @@ from .helpers import (
 )
 from .test_invalid import ELSEWHERE, FAKE_RULES, OVERLAPS, SQUARE
 
+pytestmark = both_engines
+
 DANGLES = 'line/must-not-have-dangles'
 POINTS_OVERLAP = 'point/must-not-overlap'
 # What the tool says about a feature that it cannot take, and about one that
 # is not the fault of the feature
 INVALID_REASON = 'invalid polygon: self-intersection or closing spike'
 OTHER_REASON = 'the geometry kind is not supported by this rule'
-
-
-@pytest.fixture(autouse=True)
-def cli_engine(monkeypatch: pytest.MonkeyPatch) -> None:
-    """These tests verify CLI runner features and tool exit codes."""
-    monkeypatch.setattr(
-        'topology_rules.core.checks.native_available', lambda: False
-    )
-
 
 # A tool that rejects the fifth feature of an export of six, and, when that
 # one is left out, another feature for another reason
@@ -77,6 +72,7 @@ def parcels() -> QgsVectorLayer:
     return layer
 
 
+@executable_only
 def test_the_message_names_the_error_that_stopped_the_run(
     dock: Dock,
     tmp_path: Path,
@@ -203,6 +199,7 @@ def counted(
 
 
 @pytest.mark.parametrize('kind', ['point', 'line'])
+@executable_only
 def test_features_with_coordinates_that_are_not_finite_cost_one_run(
     dock: Dock, counted: Path, kind: str, tmp_path: Path
 ):
@@ -213,6 +210,7 @@ def test_features_with_coordinates_that_are_not_finite_cost_one_run(
 
 
 @pytest.mark.parametrize('kind', ['point', 'line'])
+@executable_only
 def test_every_feature_with_coordinates_that_are_not_finite_is_reported(
     dock: Dock, counted: Path, kind: str, tmp_path: Path
 ):

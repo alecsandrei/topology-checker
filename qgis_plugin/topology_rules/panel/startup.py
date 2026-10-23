@@ -2,24 +2,51 @@ from __future__ import annotations
 
 import typing as t
 
+from qgis.core import QgsApplication
 from qgis.PyQt import sip
 
 from .. import probing
-from ..core import binary
+from ..core import binary, engine
 from ..core.binary import Rule
-from ..exceptions import ExecutableError
+from ..core.engine import Engine
+from ..enums import PROVIDER_ID
+from ..exceptions import ExecutableError, PackageError
+from ..utils import not_none
 
 if t.TYPE_CHECKING:
     from .dock import Dock
 
 
-def refresh(dock: Dock) -> None:
-    """Lists the rules of the executable, or says why there are none.
+def switch(dock: Dock, chosen: Engine) -> None:
+    """Has the engine run the checks from now on, and the toolbox and the
+    dock list its rules."""
+    engine.choose(chosen)
+    registry = not_none(QgsApplication.processingRegistry())
+    provider = registry.providerById(PROVIDER_ID)
+    if provider is not None:
+        provider.refreshAlgorithms()
+    refresh(dock)
 
-    An executable that was asked before answers at once. One that was not can
-    take seconds when it starts for the first time, so the dock says that it
-    is checking and fills in when the answer comes.
+
+def refresh(dock: Dock) -> None:
+    """Lists the rules of the engine, or says why there are none, which is
+    also what follows a change of the engine.
+
+    The package and an executable that was asked before answer at once. An
+    executable that was not can take seconds when it starts for the first
+    time, so the dock says that it is checking and fills in when the answer
+    comes.
     """
+    if engine.resolved() is Engine.PACKAGE:
+        # No answer of an executable that was asked is wanted any more
+        dock.probing = None
+        try:
+            rules = engine.package_rules()
+        except PackageError as error:
+            dock.rules_failed(error)
+            return
+        dock.rules_known(rules)
+        return
     try:
         path, modified = binary.locate()
     except ExecutableError as error:

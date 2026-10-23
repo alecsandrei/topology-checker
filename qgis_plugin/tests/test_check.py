@@ -18,7 +18,15 @@ from topology_rules.algorithms import CheckRulesAlgorithm
 from topology_rules.algorithms.check import COUNTS, RULES, SCOPE, hidden_flags
 from topology_rules.algorithms.rule import COUNT, OUTPUT, TOLERANCE
 
-from .helpers import fake_executable, line_layer, point_layer
+from .helpers import (
+    both_engines,
+    executable_only,
+    fake_executable,
+    line_layer,
+    point_layer,
+)
+
+pytestmark = both_engines
 
 DANGLES = 'line/must-not-have-dangles'
 COVERED = 'point/must-be-covered-by-lines'
@@ -134,6 +142,7 @@ def test_bad_rules_fail_the_algorithm(
     assert message in feedback.textLog()
 
 
+@executable_only
 def test_missing_executable_fails_the_algorithm(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):

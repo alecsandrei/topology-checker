@@ -29,8 +29,10 @@ from topology_rules.plugin import TopologyRules
 
 from .helpers import (
     add,
+    both_engines,
     checked,
     click_run,
+    executable_only,
     node_text,
     point_layer,
     queue_column,
@@ -41,6 +43,8 @@ from .helpers import (
     shown,
     wait_for,
 )
+
+pytestmark = both_engines
 
 DANGLES = 'line/must-not-have-dangles'
 COVERED = 'point/must-be-covered-by-lines'
@@ -161,6 +165,7 @@ def test_switching_the_tabs_keeps_the_state(worked: Dock):
     assert state(worked) == before
 
 
+@executable_only
 def test_switching_the_tabs_during_a_run_keeps_the_list(
     plugin: TopologyRules,
     layers: Layers,
@@ -251,6 +256,7 @@ def test_the_provider_loading_its_algorithms_again_keeps_the_state(
     assert state(worked) == before
 
 
+@executable_only
 def test_the_same_executable_set_again_keeps_the_state(
     plugin: TopologyRules,
     worked: Dock,

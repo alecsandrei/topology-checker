@@ -13,6 +13,7 @@ from topology_rules.provider import Provider
 
 from .helpers import (
     add,
+    both_engines,
     click_run,
     layer_nodes,
     line_layer,
@@ -126,6 +127,7 @@ def test_no_two_rules_have_the_same_name(executable: str):
         ),
     ],
 )
+@both_engines
 def test_processing_shows_the_same_names(
     executable: str, provider: Provider, slug: str, display: str
 ):
@@ -150,6 +152,7 @@ def polygons(name: str) -> object:
     return layer
 
 
+@both_engines
 def test_the_rule_box_drops_the_geometry_word(dock: Dock):
     dock.input_box.setLayer(polygons('countries'))
     texts = {
@@ -161,11 +164,13 @@ def test_the_rule_box_drops_the_geometry_word(dock: Dock):
     assert texts['geometry/must-not-be-multipart'] == 'Must not be multipart'
 
 
+@both_engines
 def test_the_list_drops_the_geometry_word(dock: Dock):
     add(dock, OVERLAPS, polygons('countries'))
     assert [item.text(0) for item in rule_items(dock)] == ['Must not overlap']
 
 
+@both_engines
 def test_the_list_names_the_other_layer_after_the_rule(dock: Dock):
     add(dock, OVERLAPS_WITH, polygons('lakes'), polygons('countries'))
     assert [item.text(0) for item in rule_items(dock)] == [
@@ -174,6 +179,7 @@ def test_the_list_names_the_other_layer_after_the_rule(dock: Dock):
     assert layer_nodes(dock)[0].text(0) == 'lakes'
 
 
+@both_engines
 def test_the_tooltip_of_a_rule_keeps_the_geometry_word(dock: Dock):
     add(dock, OVERLAPS, polygons('countries'))
     (item,) = rule_items(dock)
@@ -182,6 +188,7 @@ def test_the_tooltip_of_a_rule_keeps_the_geometry_word(dock: Dock):
 
 
 @pytest.mark.parametrize(('name', 'display'), WITH_ANOTHER)
+@both_engines
 def test_the_rule_box_says_another_layer_for_a_second_layer_of_the_same_kind(
     dock: Dock, name: str, display: str
 ):
@@ -212,6 +219,7 @@ LABELS = [
 
 
 @pytest.mark.parametrize(('name', 'label'), LABELS)
+@both_engines
 def test_the_list_keeps_with_and_the_other_layer(
     dock: Dock, name: str, label: str
 ):
@@ -223,6 +231,7 @@ def test_the_list_keeps_with_and_the_other_layer(
     assert [item.text(0) for item in rule_items(dock)] == [label]
 
 
+@both_engines
 def test_the_list_keeps_with_for_points(dock: Dock):
     first = point_layer('POINT(0 0)', name='wells')
     other = point_layer('POINT(0 0)', name='pumps')
@@ -234,6 +243,7 @@ def test_the_list_keeps_with_for_points(dock: Dock):
     ]
 
 
+@both_engines
 def test_the_results_keep_with_and_the_other_layer(dock: Dock):
     first = line_layer('LINESTRING(0 0, 10 0)', name='lakes')
     other = line_layer('LINESTRING(5 0, 15 0)', name='countries')

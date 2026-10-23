@@ -10,6 +10,7 @@ from topology_rules.panel.dock import Dock
 
 from .helpers import (
     add,
+    both_engines,
     checked,
     layer_nodes,
     queue_column,
@@ -18,6 +19,8 @@ from .helpers import (
     set_checked,
     wait_for,
 )
+
+pytestmark = both_engines
 
 DANGLES = 'line/must-not-have-dangles'
 COVERED = 'point/must-be-covered-by-lines'

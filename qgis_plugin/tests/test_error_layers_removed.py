@@ -10,6 +10,7 @@ from topology_rules.panel.dock import Dock
 
 from .helpers import (
     add,
+    both_engines,
     click_run,
     error_layers,
     line_layer,
@@ -17,6 +18,8 @@ from .helpers import (
     result_nodes,
     select_error,
 )
+
+pytestmark = both_engines
 
 DANGLES = 'line/must-not-have-dangles'
 OVERLAPS = 'line/must-not-overlap-with'

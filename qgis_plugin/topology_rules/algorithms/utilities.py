@@ -18,9 +18,10 @@ from qgis.core import (
 )
 
 from .._typing import Parameters
+from ..core import engine
 from ..core.checks import UNREADABLE
 from ..core.commands import utility_command
-from ..core.inputs import prepare
+from ..core.inputs import Skipped, prepare
 from ..core.layers import Input, require_kind
 from ..core.runner import error_message, execute
 from ..utils import QgsProcessingException, not_none, source_type
@@ -28,7 +29,6 @@ from .base import (
     INPUT,
     OUTPUT,
     Planned,
-    executable_path,
     failures,
     memory_copy,
     refuse_overwrite,
@@ -44,7 +44,7 @@ SKIPPED = 'INVALID'
 class Plan:
     """What the main thread found out for the run."""
 
-    executable: str
+    tool: engine.Tool
     item: Input
 
 
@@ -116,7 +116,7 @@ class UtilityAlgorithm(Planned):
             sink = self.parameterAsOutputLayer(parameters, OUTPUT, context)
             refuse_overwrite([sink], [item])
             release_files([sink])
-            self.plan = Plan(executable_path(), item)
+            self.plan = Plan(engine.tool(), item)
 
         return self.prepare_with(prepare)
 
@@ -135,39 +135,18 @@ class UtilityAlgorithm(Planned):
             contextlib.ExitStack() as stack,
         ):
             output = str(Path(tmp) / 'output.gpkg')
-            found = prepare(plan.item, Path(tmp), None, context, feedback)
-            command = utility_command(
-                plan.executable, self.command, found.dataset, output
-            )
-            completed = execute(command, feedback)
-            if (
-                completed.exit_code != 0
-                and found.ids is None
-                and UNREADABLE.search(error_message(completed))
-            ):
-                # The tool cannot read the file as it is: the export leaves
-                # out what it would reject
-                found = prepare(
-                    plan.item, Path(tmp), None, context, feedback, direct=False
+            feedback.pushInfo(engine.describe(plan.tool))
+            if isinstance(plan.tool, engine.Package):
+                from ..core import package
+
+                skipped = package.run_utility(
+                    self.command, plan.item, output, context, feedback
                 )
-                completed = execute(
-                    utility_command(
-                        plan.executable, self.command, found.dataset, output
-                    ),
-                    feedback,
+                report_skipped(plan.item, skipped, feedback)
+            else:
+                skipped = self.run_executable(
+                    plan.tool, plan.item, output, context, feedback
                 )
-            if found.skipped:
-                feedback.pushWarning(
-                    f'{len(found.skipped)} features of {plan.item.name} '
-                    'were left out of the run'
-                )
-            for left_out in found.skipped:
-                feedback.pushInfo(
-                    f'Left out of the run: {plan.item.name}, feature '
-                    f'{left_out.fid}: {left_out.reason}'
-                )
-            if completed.exit_code != 0:
-                raise QgsProcessingException(error_message(completed))
             copy = stack.enter_context(memory_copy(output))
             result = QgsVectorLayer(copy, 'output', 'ogr')
             try:
@@ -194,7 +173,65 @@ class UtilityAlgorithm(Planned):
             finally:
                 # Closed before the folder of the file goes, also on failure
                 del result
-        return {OUTPUT: destination, SKIPPED: len(found.skipped)}
+        return {OUTPUT: destination, SKIPPED: len(skipped)}
+
+    def run_executable(
+        self,
+        executable: str,
+        item: Input,
+        output: str,
+        context: QgsProcessingContext,
+        feedback: QgsProcessingFeedback,
+    ) -> tuple[Skipped, ...]:
+        """Runs the command of the executable, which writes the lines to the
+        GeoPackage at the output, and returns the features that were left
+        out."""
+        # The exports have a folder of their own, where a layer named after
+        # the output does not take its place
+        directory = Path(output).parent / 'inputs'
+        directory.mkdir()
+        found = prepare(item, directory, None, context, feedback)
+        completed = execute(
+            utility_command(executable, self.command, found.dataset, output),
+            feedback,
+        )
+        if (
+            completed.exit_code != 0
+            and found.ids is None
+            and UNREADABLE.search(error_message(completed))
+        ):
+            # The tool cannot read the file as it is: the export leaves out
+            # what it would reject
+            found = prepare(
+                item, directory, None, context, feedback, direct=False
+            )
+            completed = execute(
+                utility_command(
+                    executable, self.command, found.dataset, output
+                ),
+                feedback,
+            )
+        report_skipped(item, found.skipped, feedback)
+        if completed.exit_code != 0:
+            raise QgsProcessingException(error_message(completed))
+        return found.skipped
+
+
+def report_skipped(
+    item: Input,
+    skipped: t.Sequence[Skipped],
+    feedback: QgsProcessingFeedback,
+) -> None:
+    """Says in the log which features were left out of the run."""
+    if skipped:
+        feedback.pushWarning(
+            f'{len(skipped)} features of {item.name} were left out of the run'
+        )
+    for left_out in skipped:
+        feedback.pushInfo(
+            f'Left out of the run: {item.name}, feature {left_out.fid}: '
+            f'{left_out.reason}'
+        )
 
 
 class MergeLines(UtilityAlgorithm):

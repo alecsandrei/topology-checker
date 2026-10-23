@@ -11,9 +11,11 @@ from topology_rules.panel.dock import Dock
 
 from .helpers import (
     add,
+    both_engines,
     cell,
     choose_rule,
     click_run,
+    executable_only,
     layer_nodes,
     point_layer,
     queue_column,
@@ -23,6 +25,8 @@ from .helpers import (
     shown,
     wait_for,
 )
+
+pytestmark = both_engines
 
 DANGLES = 'line/must-not-have-dangles'
 COVERED = 'point/must-be-covered-by-lines'
@@ -188,6 +192,7 @@ def test_the_list_survives_a_run(dock: Dock, tmp_path: Path):
     assert queue_column(dock, 0) == ['Must not have dangles']
 
 
+@executable_only
 def test_the_list_cannot_change_during_a_run(
     dock: Dock,
     tmp_path: Path,

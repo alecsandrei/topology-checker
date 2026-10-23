@@ -14,6 +14,7 @@ from topology_rules.panel.dock import Dock
 
 from .helpers import (
     add,
+    both_engines,
     checked,
     cli_counts,
     click_run,
@@ -26,6 +27,8 @@ from .helpers import (
     write_toml,
 )
 from .test_inputs import geopackage_with_other_layers
+
+pytestmark = both_engines
 
 DANGLES = 'line/must-not-have-dangles'
 COVERED = 'point/must-be-covered-by-lines'

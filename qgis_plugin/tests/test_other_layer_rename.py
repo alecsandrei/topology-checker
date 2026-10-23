@@ -12,7 +12,15 @@ from qgis.core import QgsProject, QgsVectorLayer
 
 from topology_rules.panel.dock import Dock
 
-from .helpers import add, queue_column, saved_layer, saved_points
+from .helpers import (
+    add,
+    both_engines,
+    queue_column,
+    saved_layer,
+    saved_points,
+)
+
+pytestmark = both_engines
 
 COVERED = 'point/must-be-covered-by-lines'
 CHAIN = ('LINESTRING(0 0, 10 0)', 'LINESTRING(10 0, 20 0)')

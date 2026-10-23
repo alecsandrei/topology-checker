@@ -18,7 +18,17 @@ from qgis.core import (
 
 from topology_rules.panel.dock import Dock
 
-from .helpers import add, cli_counts, click_run, line_layer, queue_column, shown
+from .helpers import (
+    add,
+    both_engines,
+    cli_counts,
+    click_run,
+    line_layer,
+    queue_column,
+    shown,
+)
+
+pytestmark = both_engines
 
 DANGLES = 'line/must-not-have-dangles'
 CHAIN = ('LINESTRING(0 0, 10 0)', 'LINESTRING(10 0, 20 0)')

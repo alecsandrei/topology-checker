@@ -17,9 +17,12 @@ from qgis.core import (
 )
 
 from topology_rules.algorithms.rule import COUNT
+from topology_rules.core.engine import Engine
+from topology_rules.core.inputs import BATCH
 
 from .helpers import (
     add_features,
+    errors_layer,
     files_stay_open,
     line_layer,
     remove_files,
@@ -36,8 +39,9 @@ FAR = 'LINESTRING(0 50, 10 50)'
 
 
 @pytest.fixture(autouse=True)
-def ready(executable: str, provider: object) -> None:
-    """The real executable and the provider, as in a QGIS session."""
+def ready(run_engine: Engine, executable: str, provider: object) -> None:
+    """The real executable and the provider, as in a QGIS session, and
+    each of the two engines in turn."""
 
 
 def dangles(layer: QgsVectorLayer, tmp_path: Path, name: str = DANGLES):
@@ -214,6 +218,21 @@ def test_a_big_memory_layer_in_a_task(tmp_path: Path):
     )
     assert ran.ok, ran.log
     assert ran.results[COUNT] == 202
+
+
+def test_a_layer_bigger_than_a_batch_is_checked_whole(tmp_path: Path):
+    """More features than are written at once, and more errors."""
+    far = [f'LINESTRING(0 {y}, 5 {y})' for y in range(BATCH + 1)]
+    layer = line_layer(*far)
+    QgsProject.instance().addMapLayer(layer)
+    ran = run_algorithm(DANGLES, {'INPUT': layer.id()})
+    assert ran.ok, ran.log
+    assert ran.results[COUNT] == 2 * (BATCH + 1)
+    errors = errors_layer(ran, 'ERRORS_POINT')
+    assert errors.featureCount() == 2 * (BATCH + 1)
+    assert {feature['origin_fid'] for feature in errors.getFeatures()} == set(
+        range(1, BATCH + 2)
+    )
 
 
 def odd(kind: str, crs: str, *wkts: str) -> c.Callable[[], QgsVectorLayer]:

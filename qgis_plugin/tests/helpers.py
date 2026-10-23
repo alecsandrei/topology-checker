@@ -30,12 +30,15 @@ from qgis.core import (
     QgsProcessingContext,
     QgsProcessingFeedback,
     QgsProject,
+    QgsSettings,
     QgsVectorFileWriter,
     QgsVectorLayer,
 )
 from qgis.PyQt.QtCore import QItemSelectionModel, QModelIndex, Qt
 from qgis.PyQt.QtWidgets import QApplication, QLabel, QTreeWidgetItem
 
+from topology_rules.core import engine
+from topology_rules.core.engine import Engine
 from topology_rules.enums import PROVIDER_ID
 
 if t.TYPE_CHECKING:
@@ -295,6 +298,24 @@ NAMED_PATH = str(Path(NAMED).absolute()) if NAMED else None
 def real_executable() -> str | None:
     """The tool named by TOPOLOGY_CHECKER, or the one on the PATH."""
     return NAMED_PATH or shutil.which('topology-checker')
+
+
+def choose_engine(chosen: Engine) -> None:
+    """Has the engine run the checks, as the user chooses it."""
+    engine.choose(chosen)
+    # A task reads the setting on a thread of its own, which sees only what
+    # is in the file
+    QgsSettings().sync()
+
+
+# Runs a test, or each test of a module, once with the executable and once
+# with the Python package
+both_engines = pytest.mark.usefixtures('run_engine')
+# Runs a test of such a module with the executable alone, as it is about the
+# executable
+executable_only = pytest.mark.parametrize(
+    'run_engine', [Engine.EXECUTABLE], ids=['executable'], indirect=True
+)
 
 
 # Layers

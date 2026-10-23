@@ -15,6 +15,7 @@ from qgis.core import (
 
 from .._typing import Parameters
 from ..core.commands import ERROR_LAYERS, rule_counts, run_validate
+from ..core.engine import describe
 from ..core.toml import TomlUnavailable, loads
 from ..utils import QgsProcessingException, double_type, not_none
 from .base import (
@@ -97,7 +98,8 @@ class CheckDefinition(SinkAlgorithm):
         return (
             'Runs the rules of a topology.toml on the data that it names. '
             'The paths in the file are relative to the file. A tolerance '
-            'given here replaces the one of the file.'
+            'given here replaces the one of the file. The topology-checker '
+            'executable runs the file, as on the command line.'
         )
 
     def initAlgorithm(self, configuration: Parameters | None = None):
@@ -160,6 +162,7 @@ class CheckDefinition(SinkAlgorithm):
             scratch() as tmp,
         ):
             path = str(Path(tmp) / 'errors.gpkg')
+            feedback.pushInfo(describe(plan.executable))
             counts = rule_counts(
                 run_validate(
                     plan.executable,

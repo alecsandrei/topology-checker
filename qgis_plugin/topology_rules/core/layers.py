@@ -29,6 +29,11 @@ class Dataset:
     path: str
     layer: str | None = None
 
+    @property
+    def name(self) -> str:
+        """What the dataset is called: its layer, else its file."""
+        return self.layer or Path(self.path).stem
+
     def arguments(self, layer_flag: str) -> list[str]:
         args = [self.path]
         if self.layer is not None:
@@ -199,7 +204,10 @@ def plain_dataset(layer: QgsVectorLayer) -> Dataset | None:
 
 def file_dataset(layer: QgsVectorLayer) -> Dataset | None:
     """The file behind a layer, if the tool also gives the features the ids
-    of the layer, which it does for the layers of a container."""
+    of the layer, which it does for the layers of a container. Curves are
+    exported as straight segments, which is what the tool reads."""
+    if QgsWkbTypes.isCurvedType(layer.wkbType()):
+        return None
     found = plain_dataset(layer)
     return found if found is not None and found.layer is not None else None
 

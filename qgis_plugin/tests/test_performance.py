@@ -11,9 +11,14 @@ from qgis.PyQt.QtWidgets import QApplication
 
 from topology_rules.panel.dock import Dock
 
-from .helpers import add, queue_column, shown
+from .helpers import (
+    add,
+    both_engines,
+    queue_column,
+    shown,
+)
 
-pytestmark = pytest.mark.slow
+pytestmark = [both_engines, pytest.mark.slow]
 
 DANGLES = 'line/must-not-have-dangles'
 CHAIN = 99_000

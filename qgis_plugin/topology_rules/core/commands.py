@@ -46,6 +46,17 @@ def shown_path(source: str, config: Path, relative: bool) -> str:
         return source
 
 
+def unique(base: str, taken: set[str]) -> str:
+    """The name, or the first of `name_2`, `name_3` and so on that is not
+    taken, which it takes."""
+    name, index = base, 1
+    while name in taken:
+        index += 1
+        name = f'{base}_{index}'
+    taken.add(name)
+    return name
+
+
 def write_config(
     path: Path,
     checks: t.Sequence[Check],
@@ -65,15 +76,9 @@ def write_config(
         for source in (check.layer, check.other):
             if source is None or source in aliases:
                 continue
-            base = (names or {}).get(source) or (
-                source.layer or Path(source.path).stem
+            aliases[source] = unique(
+                (names or {}).get(source) or source.name, taken
             )
-            alias, index = base, 1
-            while alias in taken:
-                index += 1
-                alias = f'{base}_{index}'
-            taken.add(alias)
-            aliases[source] = alias
     lines = [] if tolerance is None else [f'tolerance = {tolerance!r}', '']
     lines.append('[layers]')
     for source, alias in aliases.items():

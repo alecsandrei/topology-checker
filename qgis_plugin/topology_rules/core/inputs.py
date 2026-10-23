@@ -9,6 +9,7 @@ from pathlib import Path
 
 from qgis.core import (
     Qgis,
+    QgsAbstractGeometry,
     QgsCoordinateReferenceSystem,
     QgsCoordinateTransform,
     QgsFeature,
@@ -21,13 +22,14 @@ from qgis.core import (
     QgsProcessingFeatureSource,
     QgsProcessingFeedback,
     QgsVectorFileWriter,
+    QgsWkbTypes,
 )
 
 from ..exceptions import RunError
-from ..utils import QgsCsException, named
+from ..utils import QgsCsException, named, not_none
 from .layers import Dataset, Input, wkb_kind
 
-# How many features are read by their ids at once
+# How many features are read by their ids, or written, at once
 BATCH = 2000
 
 
@@ -54,32 +56,57 @@ class Prepared:
     skipped: tuple[Skipped, ...] = ()
 
 
-def not_finite(geometry: QgsGeometry) -> bool:
-    """Whether a coordinate is not a number or is infinite. The box shows
-    most of them at once, and a point is empty to QGIS when one of its
-    coordinates is not a number, so it is the box that tells; the vertices
-    tell about the others."""
-    box = geometry.boundingBox()
-    corners = (
-        box.xMinimum(),
-        box.yMinimum(),
-        box.xMaximum(),
-        box.yMaximum(),
-    )
-    # An empty geometry has no coordinates at all
-    if all(math.isnan(value) for value in corners):
-        return False
-    if not box.isFinite():
+def parts(geometry: QgsGeometry) -> c.Iterable[QgsAbstractGeometry]:
+    return t.cast('c.Iterable[QgsAbstractGeometry]', geometry.constParts())
+
+
+def finite(part: QgsAbstractGeometry) -> bool:
+    """Whether the coordinates of a part are finite. A point whose
+    coordinates are both not a number is an empty one, which has none."""
+    if isinstance(part, QgsPoint):
+        x, y = part.x(), part.y()
+        if math.isnan(x) and math.isnan(y):
+            return True
+        return math.isfinite(x) and math.isfinite(y)
+    # QGIS crashes going over the vertices of an empty polygon
+    if part.isEmpty():
         return True
-    kind = wkb_kind(geometry.wkbType())
-    if kind == 'line':
-        return not math.isfinite(geometry.length())
-    if kind == 'point' and not geometry.isMultipart():
-        return False
-    return any(
-        not math.isfinite(vertex.x() + vertex.y())
-        for vertex in t.cast('c.Iterable[QgsPoint]', geometry.vertices())
+    return all(
+        math.isfinite(vertex.x()) and math.isfinite(vertex.y())
+        for vertex in t.cast('c.Iterable[QgsPoint]', part.vertices())
     )
+
+
+def not_finite(geometry: QgsGeometry) -> bool:
+    """Whether a coordinate is not a number or is infinite.
+
+    The box holds every infinite coordinate, but it can miss one that is not
+    a number. A point has its box for coordinates, and a straight line with
+    such a one has a length that is not a number, as finite coordinates give
+    a length that is finite or infinite. The vertices tell about the others.
+    """
+    if geometry.isNull():
+        return False
+    if geometry.boundingBox().isFinite():
+        kind = wkb_kind(geometry.wkbType())
+        if kind == 'point' and not geometry.isMultipart():
+            return False
+        if (
+            kind == 'line'
+            and not QgsWkbTypes.isCurvedType(geometry.wkbType())
+            and all(part.nCoordinates() > 1 for part in parts(geometry))
+        ):
+            return math.isnan(geometry.length())
+    return not all(finite(part) for part in parts(geometry))
+
+
+def straight(geometry: QgsGeometry) -> QgsGeometry:
+    """The geometry in straight segments, which is what the tool reads: a
+    curve becomes a line of short segments, which QGIS does also for a
+    curve type whose segments are all straight."""
+    if not QgsWkbTypes.isCurvedType(geometry.wkbType()):
+        return geometry
+    return QgsGeometry(not_none(geometry.constGet()).segmentize())
 
 
 def invalid_reason(geometry: QgsGeometry) -> str | None:
@@ -132,6 +159,66 @@ def moves(
 ) -> bool:
     """Whether data has to be reprojected to be in the target CRS."""
     return source.isValid() and target.isValid() and source != target
+
+
+def stem(name: str) -> str:
+    """The name of a layer as a file and a table name have it."""
+    return re.sub(r'[^\w.-]+', '_', name) or 'layer'
+
+
+def require_readable(item: Input) -> None:
+    """Raises if the data of the input cannot be read."""
+    if not item.valid:
+        raise RunError(
+            f'The layer {item.name} is not valid, its data cannot be read.'
+        )
+    if item.gone:
+        raise RunError(item.gone)
+
+
+def own_file(
+    item: Input, target: QgsCoordinateReferenceSystem | None
+) -> Dataset | None:
+    """The file of the layer, where the tool can read the input from it as it
+    is: all of it, in the target CRS."""
+    if item.direct is None or (target is not None and moves(item.crs, target)):
+        return None
+    return item.direct
+
+
+def reprojection(
+    item: Input,
+    target: QgsCoordinateReferenceSystem | None,
+    context: QgsProcessingContext,
+    feedback: QgsProcessingFeedback,
+) -> QgsCoordinateTransform | None:
+    """What brings the input to the target CRS, or none where it is in it."""
+    crs = item.source.sourceCrs()
+    if target is None or not moves(crs, target):
+        return None
+    feedback.pushInfo(
+        f'Reprojecting {item.name} from {crs.authid()} to {target.authid()}'
+    )
+    return QgsCoordinateTransform(crs, target, context.transformContext())
+
+
+def geometries(
+    item: Input,
+    transform: QgsCoordinateTransform | None,
+    feedback: QgsProcessingFeedback,
+) -> c.Iterator[tuple[int, QgsGeometry]]:
+    """The id and the geometry of each feature that was asked for, in the CRS
+    of the transform."""
+    for feature in chosen(item, feedback):
+        geometry = feature.geometry()
+        if transform is not None and not geometry.isNull():
+            try:
+                geometry.transform(transform)
+            except QgsCsException as error:
+                raise RunError(
+                    f'Could not reproject {item.name}: {error}'
+                ) from error
+        yield feature.id(), geometry
 
 
 def chosen(
@@ -188,6 +275,29 @@ def wanted(item: Input) -> list[int] | None:
     )
 
 
+def left_out(
+    item: Input,
+    fid: int,
+    geometry: QgsGeometry,
+    reason: str,
+    context: QgsProcessingContext,
+) -> Skipped:
+    """A feature that the tool would reject, which is left out of the run,
+    or stops it where the user asked for that."""
+    if aborts_on_invalid(context):
+        raise RunError(f'{item.name}, feature {fid}: {reason}')
+    return Skipped(fid, geometry, reason)
+
+
+def write(
+    writer: QgsVectorFileWriter, batch: list[QgsFeature], name: str
+) -> None:
+    """Writes the features of the batch to the export, and empties it."""
+    if batch and not writer.addFeatures(batch):
+        raise RunError(f'Could not export {name}: {writer.errorMessage()}')
+    batch.clear()
+
+
 def export_dataset(
     item: Input,
     directory: Path,
@@ -202,35 +312,32 @@ def export_dataset(
     Features that the tool would reject are left out: the polygons that are
     not valid, and the features of the skip, which has the reasons.
     """
-    stem = re.sub(r'[^\w.-]+', '_', item.name) or 'layer'
-    path = directory / f'{stem}.gpkg'
+    name = stem(item.name)
+    path = directory / f'{name}.gpkg'
     index = 1
     while path.exists():
         index += 1
-        path = directory / f'{stem}_{index}.gpkg'
-    crs = item.source.sourceCrs()
-    transform = None
-    if target is not None and moves(crs, target):
-        feedback.pushInfo(
-            f'Reprojecting {item.name} from {crs.authid()} to {target.authid()}'
-        )
-        transform = QgsCoordinateTransform(
-            crs, target, context.transformContext()
-        )
-        crs = target
+        path = directory / f'{name}_{index}.gpkg'
+    transform = reprojection(item, target, context, feedback)
+    crs = (
+        item.source.sourceCrs()
+        if transform is None
+        else transform.destinationCrs()
+    )
     options = QgsVectorFileWriter.SaveVectorOptions()
     options.driverName = 'GPKG'
     options.fileEncoding = 'UTF-8'
-    options.layerName = stem
+    options.layerName = name
     if not crs.isValid():
         # A layer without a CRS is one in no CRS, which the tool reads as
         # such, and not one in an "undefined" CRS, which it cannot parse
         options.layerOptions = ['SRID=-1']
-    # The tool reads geometries, and an attribute such as `fid` can clash
+    # The tool reads geometries, and an attribute such as `fid` can clash;
+    # it reads straight segments, which curves become
     writer = QgsVectorFileWriter.create(
         str(path),
         QgsFields(),
-        item.source.wkbType(),
+        QgsWkbTypes.linearType(item.source.wkbType()),
         crs,
         context.transformContext(),
         options,
@@ -244,47 +351,23 @@ def export_dataset(
     skipped: list[Skipped] = []
     batch: list[QgsFeature] = []
     try:
-        for feature in chosen(item, feedback):
-            geometry = feature.geometry()
-            if transform is not None and not geometry.isNull():
-                try:
-                    geometry.transform(transform)
-                except QgsCsException as error:
-                    raise RunError(
-                        f'Could not reproject {item.name}: {error}'
-                    ) from error
-            reason = (skip or {}).get(feature.id()) or invalid_reason(geometry)
+        for fid, found in geometries(item, transform, feedback):
+            geometry = straight(found)
+            reason = (skip or {}).get(fid) or invalid_reason(geometry)
             if reason is not None:
-                if aborts_on_invalid(context):
-                    raise RunError(
-                        f'{item.name}, feature {feature.id()}: {reason}'
-                    )
-                skipped.append(Skipped(feature.id(), geometry, reason))
+                skipped.append(left_out(item, fid, geometry, reason, context))
                 continue
             exported = QgsFeature()
             exported.setGeometry(geometry)
             batch.append(exported)
-            ids.append(feature.id())
-            if len(batch) >= 2000:
-                res = writer.addFeatures(batch)
-                ok = res[0] if isinstance(res, tuple) else bool(res)
-                if not ok:
-                    raise RunError(
-                        f'Could not export {item.name}: {writer.errorMessage()}'
-                    )
-                batch.clear()
-        if batch:
-            res = writer.addFeatures(batch)
-            ok = res[0] if isinstance(res, tuple) else bool(res)
-            if not ok:
-                raise RunError(
-                    f'Could not export {item.name}: {writer.errorMessage()}'
-                )
-            batch.clear()
+            ids.append(fid)
+            if len(batch) == BATCH:
+                write(writer, batch, item.name)
+        write(writer, batch, item.name)
     finally:
         # Closes the file also when the export fails
         del writer
-    return Prepared(Dataset(str(path), stem), tuple(ids), tuple(skipped))
+    return Prepared(Dataset(str(path), name), tuple(ids), tuple(skipped))
 
 
 def prepare(
@@ -298,17 +381,8 @@ def prepare(
 ) -> Prepared:
     """The file for the tool: the layer's own file where that serves, else an
     export of the features, which leaves out those the tool would reject."""
-    if not item.valid:
-        raise RunError(
-            f'The layer {item.name} is not valid, its data cannot be read.'
-        )
-    if item.gone:
-        raise RunError(item.gone)
-    if (
-        direct
-        and not skip
-        and item.direct is not None
-        and not (target is not None and moves(item.crs, target))
-    ):
-        return Prepared(item.direct)
+    require_readable(item)
+    found = own_file(item, target)
+    if direct and not skip and found is not None:
+        return Prepared(found)
     return export_dataset(item, directory, target, context, feedback, skip)
