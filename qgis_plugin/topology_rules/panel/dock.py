@@ -376,6 +376,8 @@ class Dock(QgsDockWidget):
         self.state.pending = None
         self.results.ignored.clear()
         self.results.clear()
+        # Error layers that the project has are drawn by what they store
+        self.legends = {}
         self.set_error_count(0)
         with self.state.quiet():
             self.rule_list.clear()

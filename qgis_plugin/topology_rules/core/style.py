@@ -3,6 +3,7 @@ from __future__ import annotations
 import collections.abc as c
 import dataclasses
 import functools
+import math
 import typing as t
 from enum import Enum
 
@@ -30,7 +31,7 @@ from qgis.PyQt.QtXml import QDomDocument
 
 from ..enums import Setting
 from ..utils import not_none, tr
-from .binary import display_name
+from .binary import display_name, named_with, plain_name, short_name
 
 RED = '#e31a1c'
 # Distinct from each other and from the red of the invalid geometries
@@ -47,6 +48,11 @@ PALETTE = (
     '#4d4dff',
 )
 INVALID = 'Invalid geometry'
+# How far the colour of a group is at least from the red of the invalid
+# geometries, in CIELAB units (Delta E 1976). The palette is 39 or more away
+APART = 35.0
+# Where a colour ramp is looked at for the parts of it away from the red
+SAMPLES = 256
 # Marks the error layers that Processing loaded, which are drawn again when
 # the user changes the style
 STYLED = 'topology_rules/styled'
@@ -114,10 +120,27 @@ def default_ramp() -> QgsColorRamp:
 
 
 def ramp_text(ramp: QgsColorRamp) -> str:
-    """A colour ramp as XML, as a style of QGIS keeps it."""
+    """A colour ramp as XML, for the settings, and to tell two apart."""
     document = QDomDocument()
     document.appendChild(QgsSymbolLayerUtils.saveColorRamp('', ramp, document))
     return document.toString(-1)
+
+
+def same_ramp(first: QgsColorRamp, second: QgsColorRamp) -> bool:
+    """Whether two ramps have the same colours. Their texts can differ in
+    the last digits of the stops, as when a ramp was turned round twice."""
+    if ramp_text(first) == ramp_text(second):
+        return True
+    if first.type() != second.type() or first.count() != second.count():
+        return False
+    for index in range(SAMPLES + 1):
+        one, other = first.color(index / SAMPLES), second.color(index / SAMPLES)
+        if any(
+            abs(a - b) > 1
+            for a, b in zip(one.getRgb(), other.getRgb(), strict=True)
+        ):
+            return False
+    return True
 
 
 @functools.lru_cache(maxsize=8)
@@ -291,9 +314,22 @@ def key_label(key: str) -> str:
     return display_name(key.split('|')[0])
 
 
+def rule_and_layer_label(key: str) -> str:
+    """What the errors of a rule on a layer are called, as KEY gives them:
+    'roads: Must not have dangles', and the second layer of a rule that
+    takes two. Errors on no layer, such as gaps, have the whole name."""
+    rule, _, layers = key.partition('|')
+    origin, _, other = layers.rpartition('|')
+    if other:
+        title = named_with(plain_name(rule), other)
+    else:
+        title = short_name(rule) if origin else display_name(rule)
+    return f'{origin}: {title}' if origin else title
+
+
 def layer_label(key: str) -> str:
     """The name of a layer of the errors, as LAYER_KEY gives it."""
-    return key.partition('|')[2] or tr('Errors')
+    return key.partition('|')[2] or tr('No layer')
 
 
 @dataclasses.dataclass(frozen=True)
@@ -340,17 +376,69 @@ def field_legend(colour: ColourBy) -> Legend:
             return ONE if field_text(feature, 'rule') else ''
 
         return Legend(Grouping(ONE_KEY, one_of), {ONE: tr('Errors')})
-    return Legend(rule_grouping())
+    return Legend(rule_grouping(), name_of=rule_and_layer_label)
 
 
-def ramp_colour(ramp: QgsColorRamp, index: int, count: int) -> QColor:
-    """The colour of one of a number of groups. The colours of a list go
-    round, and a ramp is spread over the groups short of its ends, which
-    are near white in many ramps."""
+def lab(color: QColor) -> tuple[float, float, float]:
+    """A colour in CIELAB, where distances are much as the eye sees them."""
+
+    def linear(value: float) -> float:
+        if value <= 0.04045:
+            return value / 12.92
+        return ((value + 0.055) / 1.055) ** 2.4
+
+    def f(value: float) -> float:
+        if value > 216 / 24389:
+            return value ** (1 / 3)
+        return (24389 / 27 * value + 16) / 116
+
+    r, g, b = (linear(v) for v in (color.redF(), color.greenF(), color.blueF()))
+    x = f((0.4124 * r + 0.3576 * g + 0.1805 * b) / 0.95047)
+    y = f(0.2126 * r + 0.7152 * g + 0.0722 * b)
+    z = f((0.0193 * r + 0.1192 * g + 0.9505 * b) / 1.08883)
+    return 116 * y - 16, 500 * (x - y), 200 * (y - z)
+
+
+RED_LAB = lab(QColor(RED))
+
+
+def apart(color: QColor) -> bool:
+    """Whether a colour is told apart from the red of invalid geometries."""
+    return math.dist(lab(color), RED_LAB) >= APART
+
+
+def moved(color: QColor) -> QColor:
+    """A colour near the red, darker until it is told apart from it."""
+    for factor in range(110, 1000, 10):
+        darker = color.darker(factor)
+        if apart(darker):
+            return darker
+    return QColor('#000000')
+
+
+def group_colours(ramp: QgsColorRamp, count: int) -> list[QColor]:
+    """The colours of a number of groups, none of them near the red of the
+    invalid geometries. The colours of a list go round, past those near the
+    red. A ramp is spread over the groups short of its ends, which are near
+    white in many ramps, and only over its parts away from the red."""
     if isinstance(ramp, QgsPresetSchemeColorRamp) and ramp.colors():
         listed = ramp.colors()
-        return listed[index % len(listed)]
-    return ramp.color((index + 0.5) / count)
+        kept = [color for color in listed if apart(color)]
+        kept = kept or [moved(color) for color in listed]
+        return [kept[index % len(kept)] for index in range(count)]
+    seen = [ramp.color(index / SAMPLES) for index in range(SAMPLES + 1)]
+    away = [color for color in seen if apart(color)]
+    found: list[QColor] = []
+    for index in range(count):
+        share = (index + 0.5) / count
+        color = ramp.color(share)
+        if len(away) == len(seen) and apart(color):
+            found.append(color)
+        elif away:
+            found.append(away[min(int(share * len(away)), len(away) - 1)])
+        else:
+            found.append(moved(color))
+    return found
 
 
 def colors(
@@ -360,9 +448,7 @@ def colors(
     invalid geometries, which have no rule."""
     ramp = colour_ramp() if ramp is None else ramp
     named = [key for key in dict.fromkeys(keys) if key]
-    found = {
-        key: ramp_colour(ramp, i, len(named)) for i, key in enumerate(named)
-    }
+    found = dict(zip(named, group_colours(ramp, len(named)), strict=True))
     found[''] = QColor(RED)
     return found
 

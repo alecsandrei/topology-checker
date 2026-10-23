@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import collections.abc as c
 import contextlib
+import math
 import typing as t
 
 import pytest
@@ -14,6 +15,8 @@ from qgis.core import (
     QgsExpression,
     QgsExpressionContext,
     QgsExpressionContextUtils,
+    QgsFeature,
+    QgsGradientColorRamp,
     QgsMarkerSymbol,
     QgsPresetSchemeColorRamp,
     QgsProcessingFeedback,
@@ -24,9 +27,13 @@ from qgis.core import (
     QgsStyle,
     QgsVectorLayer,
 )
-from qgis.PyQt.QtWidgets import QAction, QMenu
+from qgis.gui import QgsColorButton
+from qgis.PyQt.QtCore import QTimer
+from qgis.PyQt.QtGui import QColor
+from qgis.PyQt.QtWidgets import QAction, QApplication, QDialog, QMenu
 
 from topology_rules.core.style import (
+    APART,
     PALETTE,
     ColourBy,
     Size,
@@ -34,8 +41,11 @@ from topology_rules.core.style import (
     colors,
     colour_by,
     colour_ramp,
+    lab,
+    ramp_text,
     reset_style,
     size,
+    style_layer,
 )
 from topology_rules.enums import Setting
 from topology_rules.panel.dock import Dock
@@ -121,6 +131,37 @@ def pick(menu: StyleMenu, text: str) -> None:
 
 def checked(menu: QMenu) -> list[str]:
     return [action.text() for action in menu.actions() if action.isChecked()]
+
+
+def checked_ramps(menu: StyleMenu) -> tuple[list[str], list[str]]:
+    """The ramps that the ramp menu and its menu of all ramps check."""
+    menu.ramp_menu.aboutToShow.emit()
+    return checked(menu.ramp_menu), checked(menu.all_menu)
+
+
+def style_ramp(name: str) -> t.Any:
+    return not_none(not_none(QgsStyle.defaultStyle()).colorRamp(name))
+
+
+def distance_from_red(color: QColor) -> float:
+    return math.dist(lab(color), lab(QColor(RED)))
+
+
+def answer_dialog(answer: c.Callable[[QDialog], None]) -> list[str]:
+    """Answers the next dialog that opens, and gives its title. The
+    dialog itself is gone once it is closed."""
+    seen: list[str] = []
+
+    def look() -> None:
+        dialog = QApplication.activeModalWidget()
+        if not isinstance(dialog, QDialog):
+            QTimer.singleShot(10, look)
+            return
+        seen.append(dialog.windowTitle())
+        answer(dialog)
+
+    QTimer.singleShot(0, look)
+    return seen
 
 
 def categories(layer: QgsVectorLayer) -> list[t.Any]:
@@ -296,7 +337,7 @@ def test_the_menu_checks_what_the_user_chose_before(menu: StyleMenu):
     assert checked(menu.size_menu) == ['Large']
 
 
-@pytest.mark.parametrize('chosen', list(COLOURS))
+@pytest.mark.parametrize('chosen', list(COLOURS)[1:])
 def test_a_colour_choice_is_kept_for_every_project(
     menu: StyleMenu, chosen: ColourBy
 ):
@@ -309,7 +350,7 @@ def test_a_colour_choice_is_kept_for_every_project(
     assert spy.calls == 1
 
 
-@pytest.mark.parametrize('chosen', list(SIZES))
+@pytest.mark.parametrize('chosen', [Size.SMALL, Size.LARGE])
 def test_a_size_is_kept_for_every_project(menu: StyleMenu, chosen: Size):
     spy = Spy()
     menu.changed.connect(spy)
@@ -318,6 +359,29 @@ def test_a_size_is_kept_for_every_project(menu: StyleMenu, chosen: Size):
     assert QgsSettings().value(Setting.SIZE.value) == chosen.value
     assert checked(menu.size_menu) == [SIZES[chosen]]
     assert spy.calls == 1
+
+
+@pytest.mark.parametrize('text', ['Rule and layer', 'Normal', 'Default'])
+def test_choosing_what_is_chosen_changes_nothing(menu: StyleMenu, text: str):
+    spy = Spy()
+    menu.changed.connect(spy)
+    pick(menu, text)
+    assert spy.calls == 0
+    settings = QgsSettings()
+    for setting in (Setting.COLOUR_BY, Setting.SIZE, Setting.RAMP):
+        assert settings.value(setting.value) is None
+
+
+def test_choosing_what_is_chosen_keeps_a_style_of_the_user(
+    dock: Dock, three_groups: QgsVectorLayer
+):
+    pick(dock.style_menu, 'Layer')
+    pick(dock.style_menu, 'Viridis')
+    # As the user styles the layer in its properties
+    three_groups.setRenderer(QgsSingleSymbolRenderer(QgsMarkerSymbol()))
+    for text in ('Layer', 'Normal', 'Viridis'):
+        pick(dock.style_menu, text)
+    assert isinstance(three_groups.renderer(), QgsSingleSymbolRenderer)
 
 
 def test_one_item_of_a_submenu_is_checked(menu: StyleMenu):
@@ -345,12 +409,105 @@ def test_the_default_ramp_has_the_colours_of_the_plugin():
     assert [color.name() for color in ramp.colors()] == list(PALETTE)
 
 
-def test_the_ramp_menu_is_that_of_the_style(menu: StyleMenu):
+def test_the_ramp_menu_has_the_default_and_the_favourite_ramps(
+    menu: StyleMenu,
+):
+    style = not_none(QgsStyle.defaultStyle())
+    favourites = style.symbolsOfFavorite(QgsStyle.StyleEntity.ColorrampEntity)
+    assert 'Viridis' in favourites
     menu.ramp_menu.aboutToShow.emit()
     texts = [action.text() for action in menu.ramp_menu.actions()]
-    assert 'Viridis' in texts
-    assert 'Default Color Ramp' in texts
+    assert texts == [
+        'Default',
+        *favourites,
+        'All ramps',
+        '',
+        'Invert',
+        'Edit…',
+    ]
     assert not menu.ramp_menu.icon().isNull()
+    for action in menu.ramp_menu.actions()[: len(favourites) + 1]:
+        assert action.isCheckable()
+        assert not action.icon().isNull()
+
+
+def test_all_ramps_has_every_ramp_of_the_style(menu: StyleMenu):
+    menu.ramp_menu.aboutToShow.emit()
+    names = not_none(QgsStyle.defaultStyle()).colorRampNames()
+    actions = menu.all_menu.actions()
+    assert [action.text() for action in actions] == names
+    assert all(not action.icon().isNull() for action in actions)
+
+
+def test_the_ramp_in_use_is_checked(menu: StyleMenu):
+    assert checked_ramps(menu) == (['Default'], [])
+    pick(menu, 'Viridis')
+    assert checked_ramps(menu) == (['Viridis'], ['Viridis'])
+    # Not a favourite
+    pick(menu, 'Plasma')
+    assert checked_ramps(menu) == ([], ['Plasma'])
+    pick(menu, 'Default')
+    assert checked_ramps(menu) == (['Default'], [])
+
+
+def test_invert_turns_the_ramp_round(menu: StyleMenu):
+    pick(menu, 'Viridis')
+    spy = Spy()
+    menu.changed.connect(spy)
+    pick(menu, 'Invert')
+    viridis = style_ramp('Viridis')
+    ramp = colour_ramp()
+    assert ramp.color(0).name() == viridis.color(1).name()
+    assert ramp.color(1).name() == viridis.color(0).name()
+    assert checked_ramps(menu) == ([], [])
+    pick(menu, 'Invert')
+    assert checked_ramps(menu) == (['Viridis'], ['Viridis'])
+    assert spy.calls == 2
+
+
+def test_edit_opens_the_ramp_editor_and_keeps_the_ramp(menu: StyleMenu):
+    pick(menu, 'Viridis')
+    spy = Spy()
+    menu.changed.connect(spy)
+
+    def edit(dialog: QDialog) -> None:
+        # The two colours of the gradient, as the user sets them
+        for name, color in (('btnColor1', '#000000'), ('btnColor2', '#ffffff')):
+            button = dialog.findChild(QgsColorButton, name)
+            assert isinstance(button, QgsColorButton)
+            button.setColor(QColor(color))
+        dialog.accept()
+
+    seen = answer_dialog(edit)
+    pick(menu, 'Edit…')
+    assert seen == ['Colour ramp']
+    assert spy.calls == 1
+    assert colour_ramp().color(0).name() == '#000000'
+    assert colour_ramp().color(1).name() == '#ffffff'
+
+
+@pytest.mark.parametrize('answer', [QDialog.accept, QDialog.reject])
+def test_an_editor_left_alone_changes_nothing(
+    menu: StyleMenu, answer: c.Callable[[QDialog], None]
+):
+    pick(menu, 'Viridis')
+    before = ramp_text(colour_ramp())
+    spy = Spy()
+    menu.changed.connect(spy)
+    seen = answer_dialog(answer)
+    pick(menu, 'Edit…')
+    assert len(seen) == 1
+    assert spy.calls == 0
+    assert ramp_text(colour_ramp()) == before
+
+
+def test_the_ramp_menu_only_chooses_ramps(menu: StyleMenu):
+    """It does not make or save ramps of the style."""
+    menu.ramp_menu.aboutToShow.emit()
+    names = set(not_none(QgsStyle.defaultStyle()).colorRampNames())
+    texts = {action.text() for action in menu.ramp_menu.actions()}
+    texts |= {action.text() for action in menu.all_menu.actions()}
+    assert texts - names == {'Default', 'All ramps', '', 'Invert', 'Edit…'}
 
 
 def test_a_ramp_of_the_style_is_kept_for_every_project(menu: StyleMenu):
@@ -369,7 +526,7 @@ def test_a_ramp_of_the_style_is_kept_for_every_project(menu: StyleMenu):
 
 def test_the_default_ramp_item_brings_the_palette_back(menu: StyleMenu):
     pick(menu, 'Viridis')
-    pick(menu, 'Default Color Ramp')
+    pick(menu, 'Default')
     assert QgsSettings().value(Setting.RAMP.value) is None
     assert isinstance(colour_ramp(), QgsPresetSchemeColorRamp)
 
@@ -387,9 +544,7 @@ def test_reset_goes_back_to_the_style_of_the_plugin(menu: StyleMenu):
         assert settings.value(setting.value) is None
     assert checked(menu.colour_menu) == ['Rule and layer']
     assert checked(menu.size_menu) == ['Normal']
-    ramp = menu.ramp_button.colorRamp()
-    assert isinstance(ramp, QgsPresetSchemeColorRamp)
-    assert [color.name() for color in ramp.colors()] == list(PALETTE)
+    assert checked_ramps(menu) == (['Default'], [])
 
 
 @pytest.mark.parametrize(
@@ -451,6 +606,61 @@ def test_invalid_geometries_stay_red(
     assert found.pop('Invalid geometry') == RED
     assert found
     assert RED not in found.values()
+
+
+def test_the_colours_are_those_of_cielab():
+    for color, expected in (
+        ('#ff0000', (53.24, 80.09, 67.2)),
+        ('#ffffff', (100, 0, 0)),
+        ('#000000', (0, 0, 0)),
+        ('#0000ff', (32.3, 79.19, -107.86)),
+    ):
+        assert lab(QColor(color)) == pytest.approx(expected, abs=0.05)
+
+
+def test_no_ramp_of_the_style_gives_a_group_the_red_of_invalid_geometries():
+    style = not_none(QgsStyle.defaultStyle())
+    names = style.colorRampNames()
+    assert 'Reds' in names
+    for name in names:
+        ramp = style_ramp(name)
+        for count in range(1, 13):
+            keys = [f'group {index}' for index in range(count)]
+            found = colors(keys, ramp)
+            assert found.pop('').name() == RED
+            for color in found.values():
+                assert distance_from_red(color) >= APART, (name, count)
+
+
+def test_two_groups_of_the_reds_are_not_red():
+    found = colors(['roads', 'tracks'], style_ramp('Reds'))
+    assert found['tracks'].name() != '#d32020'
+    assert len({color.name() for color in found.values()}) == 3
+
+
+@pytest.mark.parametrize(
+    'ramp',
+    [
+        QgsGradientColorRamp(QColor(RED), QColor('#d01010')),
+        QgsPresetSchemeColorRamp([QColor(RED), QColor('#ef3b2c')]),
+    ],
+)
+def test_a_ramp_of_reds_only_is_made_darker(ramp: t.Any):
+    found = colors(['roads', 'tracks', 'rails'], ramp)
+    found.pop('')
+    for color in found.values():
+        assert distance_from_red(color) >= APART
+
+
+def test_a_run_in_the_reds_tells_invalid_geometries_apart(
+    dock: Dock, with_invalid: QgsVectorLayer
+):
+    pick(dock.style_menu, 'Reds')
+    found = colours(with_invalid)
+    assert found.pop('Invalid geometry') == RED
+    assert found
+    for name in found.values():
+        assert distance_from_red(QColor(name)) >= APART
 
 
 def test_the_sizes_go_from_small_to_large(
@@ -541,7 +751,7 @@ def test_the_style_leaves_other_layers_alone(
 @pytest.mark.parametrize(
     ('chosen', 'expected'),
     [
-        (ColourBy.RULE_AND_LAYER, {'Lines must not have dangles'}),
+        (ColourBy.RULE_AND_LAYER, {'roads: Must not have dangles'}),
         (ColourBy.RULE, {'Lines must not have dangles'}),
         (ColourBy.LAYER, {'roads'}),
         (ColourBy.ONE, {'Errors'}),
@@ -575,5 +785,70 @@ def test_layers_that_processing_loaded_follow_the_style(
     pick(dock.style_menu, 'Large')
     assert measures(errors) == [4.5, 0.6]
     pick(dock.style_menu, 'Reset style')
-    assert labels(errors) == {'Lines must not have dangles'}
+    assert labels(errors) == {'roads: Must not have dangles'}
     assert measures(errors) == [3, 0.4]
+
+
+def test_without_a_run_the_layers_tell_the_groups(
+    dock: Dock, three_groups: QgsVectorLayer
+):
+    """As after the project was opened again, with its error layers."""
+    dock.legends = {}
+    pick(dock.style_menu, 'Rule')
+    pick(dock.style_menu, 'Rule and layer')
+    # A stop that no line covers has no feature of the roads to name them
+    assert labels(three_groups) == {
+        'roads: Must not have dangles',
+        'tracks: Must not have dangles',
+        'stops: Must be covered by lines',
+    }
+    assert len(set(colours(three_groups).values())) == 3
+    pick(dock.style_menu, 'Layer')
+    assert labels(three_groups) == {'roads', 'tracks', 'stops'}
+
+
+def test_a_new_project_forgets_the_groups_of_the_run(
+    dock: Dock, three_groups: QgsVectorLayer
+):
+    assert dock.legends
+    not_none(QgsProject.instance()).clear()
+    assert dock.legends == {}
+
+
+def errors_without_a_layer() -> QgsVectorLayer:
+    """Errors of gaps, which are on no feature, and one on a feature."""
+    layer = QgsVectorLayer(
+        'Polygon?crs=EPSG:32633&field=rule:string&field=origin_layer:string'
+        '&field=destination_layer:string&field=violation_id:integer',
+        'errors',
+        'memory',
+    )
+    features = []
+    for number, origin in enumerate((None, 'parcels')):
+        feature = QgsFeature(layer.fields())
+        feature.setAttributes(
+            ['polygon/must-not-have-gaps', origin, None, number]
+        )
+        features.append(feature)
+    not_none(layer.dataProvider()).addFeatures(features)
+    return layer
+
+
+@pytest.mark.parametrize(
+    ('chosen', 'expected'),
+    [
+        (
+            ColourBy.RULE_AND_LAYER,
+            {'parcels: Must not have gaps', 'Polygons must not have gaps'},
+        ),
+        (ColourBy.LAYER, {'parcels', 'No layer'}),
+        (ColourBy.ONE, {'Errors'}),
+    ],
+)
+def test_errors_on_no_layer_have_a_group_of_their_own(
+    chosen: ColourBy, expected: set[str]
+):
+    layer = errors_without_a_layer()
+    choose(Setting.COLOUR_BY, chosen)
+    style_layer(layer)
+    assert labels(layer) == expected
