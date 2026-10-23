@@ -39,8 +39,9 @@ from qgis.PyQt.QtCore import QItemSelectionModel, QModelIndex, Qt
 from qgis.PyQt.QtWidgets import QApplication, QLabel, QTreeWidgetItem
 
 from topology_rules.core import engine
-from topology_rules.core.engine import Engine
+from topology_rules.core.engine import Engine, Package
 from topology_rules.enums import PROVIDER_ID
+from topology_rules.exceptions import PackageError
 
 if t.TYPE_CHECKING:
     from topology_rules.panel.dock import Dock
@@ -299,6 +300,23 @@ NAMED_PATH = str(Path(NAMED).absolute()) if NAMED else None
 def real_executable() -> str | None:
     """The tool named by TOPOLOGY_CHECKER, or the one on the PATH."""
     return NAMED_PATH or shutil.which('topology-checker')
+
+
+# Set to 1 where the tests must run with the Python package, as in CI where
+# it is installed: a test of the package fails without it rather than skip
+NEEDS_PACKAGE = 'TOPOLOGY_CHECKER_PACKAGE'
+
+
+def usable_package() -> Package:
+    """The Python package, skipping, with the reason, where QGIS cannot use
+    it, and failing so where the run needs the package."""
+    try:
+        return engine.find_package()
+    except PackageError as error:
+        reason = str(error)
+    if os.environ.get(NEEDS_PACKAGE) == '1':
+        pytest.fail(f'{NEEDS_PACKAGE} is 1: {reason}', pytrace=False)
+    pytest.skip(reason)
 
 
 def choose_engine(chosen: Engine) -> None:
