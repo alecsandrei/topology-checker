@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import collections.abc as c
 import dataclasses
-import math
 import typing as t
 
 from qgis.core import (
@@ -21,7 +20,6 @@ from qgis.core import (
     QgsGeometry,
     QgsProcessingContext,
     QgsProcessingFeedback,
-    QgsUnitTypes,
     QgsVectorFileWriter,
     QgsVectorLayer,
     QgsWkbTypes,
@@ -48,7 +46,7 @@ from .inputs import (
     write,
 )
 from .invalid import FIELDS, Invalid, Rejected, parse_failure
-from .layers import Dataset, Input, wkb_kind
+from .layers import Dataset, Input, default_tolerance, geographic, wkb_kind
 
 if t.TYPE_CHECKING:
     import topology_checker as tc
@@ -94,22 +92,6 @@ def rules() -> tuple[Rule, ...]:
                     )
                 )
     return tuple(found)
-
-
-def default_tolerance(crs: QgsCoordinateReferenceSystem) -> float:
-    """The tolerance of a run that names none, as the executable has it:
-    1e-8 in degrees, a millimetre in a projected CRS, and none in another.
-    A compound CRS takes that of its horizontal part."""
-    if not crs.isValid():
-        return 0.0
-    if crs.isGeographic():
-        return 1e-8
-    if crs.type() not in (Qgis.CrsType.Projected, Qgis.CrsType.Compound):
-        return 0.0
-    metres = QgsUnitTypes.fromUnitToUnitFactor(
-        crs.mapUnits(), Qgis.DistanceUnit.Meters
-    )
-    return 0.001 / metres if math.isfinite(metres) and metres > 0 else 0.0
 
 
 @dataclasses.dataclass(frozen=True)
@@ -355,7 +337,7 @@ def run_once(
         for note in entry.snapshot.notes(entry.name)
     ]:
         feedback.pushInfo(f'warning: {warning}')
-    if crs.isGeographic() and tolerance > 0:
+    if geographic(crs) and tolerance > 0:
         feedback.pushInfo(f'warning: {ANGULAR}')
     feedback.setProgress(100)
     return Outcome(
@@ -587,7 +569,7 @@ def run_utility(
         raise RunError(str(error)) from error
     for warning in [*topology.warnings(), *snapshot.notes(name)]:
         feedback.pushInfo(f'warning: {warning}')
-    if snapshot.crs.isGeographic() and tolerance > 0:
+    if geographic(snapshot.crs) and tolerance > 0:
         feedback.pushInfo(f'warning: {ANGULAR}')
     layer = UTILITY_LAYERS[command]
     fields = QgsVectorLayer('None', 'fields', 'memory').fields()

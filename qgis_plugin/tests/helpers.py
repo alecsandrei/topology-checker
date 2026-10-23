@@ -340,6 +340,35 @@ executable_only = pytest.mark.parametrize(
 # Layers
 
 
+# CRSs that QGIS takes for neither geographic nor projected: bound to
+# WGS 84 by a datum shift, made of a horizontal and a vertical part, or
+# local to a site
+ED50 = (
+    'GEOGCS["ED50",DATUM["European_Datum_1950",'
+    'SPHEROID["International 1924",6378388,297],'
+    'TOWGS84[-87,-98,-121,0,0,0,0]],PRIMEM["Greenwich",0],'
+    'UNIT["degree",0.0174532925199433]]'
+)
+ED50_FEET = (
+    f'PROJCS["ED50 / TM 15 ftUS",{ED50},'
+    'PROJECTION["Transverse_Mercator"],PARAMETER["latitude_of_origin",0],'
+    'PARAMETER["central_meridian",15],PARAMETER["scale_factor",1],'
+    'PARAMETER["false_easting",0],PARAMETER["false_northing",0],'
+    'UNIT["US survey foot",0.304800609601219]]'
+)
+NAVD88 = (
+    'VERT_CS["NAVD88 height",'
+    'VERT_DATUM["North American Vertical Datum 1988",2005,'
+    'AUTHORITY["EPSG","5103"]],UNIT["metre",1],'
+    'AXIS["Gravity-related height",UP],AUTHORITY["EPSG","5703"]]'
+)
+ED50_FEET_NAVD88 = f'COMPD_CS["ED50 ftUS + NAVD88",{ED50_FEET},{NAVD88}]'
+SITE = (
+    'LOCAL_CS["site",LOCAL_DATUM["site",0],UNIT["metre",1],'
+    'AXIS["X",EAST],AXIS["Y",NORTH]]'
+)
+
+
 def line_layer(*lines: str, name: str = 'lines') -> QgsVectorLayer:
     """A memory layer of WKT lines in a UTM CRS."""
     layer = QgsVectorLayer('LineString?crs=EPSG:32633', name, 'memory')

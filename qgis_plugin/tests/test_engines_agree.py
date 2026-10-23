@@ -29,7 +29,15 @@ from topology_rules.core.engine import Package
 from topology_rules.core.layers import Input
 from topology_rules.exceptions import RunError
 
-from .helpers import line_layer, point_layer, polygon_layer, save
+from .helpers import (
+    ED50,
+    ED50_FEET,
+    ED50_FEET_NAVD88,
+    line_layer,
+    point_layer,
+    polygon_layer,
+    save,
+)
 
 # Two lines meeting at a node, and a line far from them: four dangles
 CHAIN = (
@@ -144,9 +152,12 @@ def run(
 
 
 def same_tables(
-    first: dict[str, Table] | None, second: dict[str, Table] | None
+    first: dict[str, Table] | None,
+    second: dict[str, Table] | None,
+    same_srs: bool = True,
 ) -> None:
-    """Compares the layers one part at a time, which shows what differs."""
+    """Compares the layers one part at a time, which shows what differs.
+    Without the same SRS, they need only have one of the same organization."""
     if first is None or second is None:
         assert first == second
         return
@@ -154,7 +165,13 @@ def same_tables(
     for name, table in first.items():
         other = second[name]
         assert table.columns == other.columns, name
-        assert table.geometry == other.geometry, name
+        if same_srs:
+            assert table.geometry == other.geometry, name
+        else:
+            *kind, srs = table.geometry
+            *other_kind, other_srs = other.geometry
+            assert kind == other_kind, name
+            assert srs.split(':')[0] == other_srs.split(':')[0], name
         assert table.rows == other.rows, name
 
 
@@ -171,6 +188,7 @@ def agree(executable: str, package: Package, tmp_path: Path) -> Agree:
     def check(
         *jobs: tuple[str, Input] | tuple[str, Input, Input],
         tolerance: float | None = None,
+        same_srs: bool = True,
     ) -> Written:
         made = [Job(rules[name], *inputs) for name, *inputs in jobs]
         number = next(runs)
@@ -180,7 +198,7 @@ def agree(executable: str, package: Package, tmp_path: Path) -> Agree:
         by_package = run(
             package, made, tmp_path / f'package{number}', tolerance
         )
-        same_tables(by_package.tables, by_executable.tables)
+        same_tables(by_package.tables, by_executable.tables, same_srs)
         assert by_package.warnings == by_executable.warnings
         first, second = by_package.outcome, by_executable.outcome
         assert first.counts == second.counts
@@ -336,6 +354,56 @@ def test_a_compound_crs(agree: Agree, crs: str, gap: float):
     )
     written = agree(('line/must-not-have-dangles', project(lines)))
     assert written.outcome.counts == [2]
+
+
+@pytest.mark.parametrize(
+    ('crs', 'gap'),
+    [
+        (f'WKT:{ED50}', 5e-9),
+        (
+            'PROJ:+proj=longlat +ellps=intl '
+            '+towgs84=-87,-98,-121,0,0,0,0 +no_defs',
+            5e-9,
+        ),
+        ('PROJ:+proj=longlat +ellps=bessel +no_defs', 5e-9),
+        (f'WKT:{ED50_FEET}', 0.003),
+        (f'WKT:{ED50_FEET_NAVD88}', 0.003),
+    ],
+    ids=[
+        'degrees with a datum shift',
+        'proj string with a datum shift',
+        'degrees of no authority',
+        'us feet with a datum shift',
+        'compound with a datum shift',
+    ],
+)
+def test_a_crs_outside_the_database(agree: Agree, crs: str, gap: float):
+    """A CRS bound to WGS 84 by a datum shift, or one that QGIS does not find
+    in its database, has the default tolerance of its horizontal unit."""
+    lines = memory(
+        'LineString',
+        crs,
+        'LINESTRING(100 10, 100.5 10)',
+        f'LINESTRING({100.5 + gap} 10, 101 10)',
+        name='lines',
+    )
+    assert lines.crs().isValid()
+    # The executable writes a CRS of no authority without its name or datum
+    # shift, as NONE:100001 where QGIS writes NONE:100000
+    written = agree(
+        ('line/must-not-have-dangles', project(lines)), same_srs=False
+    )
+    assert written.outcome.counts == [2]
+
+
+def test_degrees_with_a_datum_shift(agree: Agree):
+    lines = memory(
+        'LineString', f'WKT:{ED50}', 'LINESTRING(15 0, 15.1 0)', name='lines'
+    )
+    written = agree(
+        ('line/must-not-have-dangles', project(lines)), same_srs=False
+    )
+    assert any('angular' in warning for warning in written.warnings)
 
 
 def test_a_layer_without_a_crs(agree: Agree):
