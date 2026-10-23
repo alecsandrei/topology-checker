@@ -6,13 +6,29 @@
 
 1. In QGIS 3.34 or newer, open **Plugins > Manage and Install Plugins** and install **Topology Rules**.
 2. Install the Python package or the CLI:
-    - **Install Python package…** in the panel's menu shows the wheel for this QGIS, its size, URL and SHA-256, then downloads it from PyPI, checks the SHA-256 and unpacks only the package into `python/dependencies/topology_rules/<version>` in the QGIS profile. Installs nothing else; uses the shapely and pyproj that come with QGIS. Each step goes to the **Topology Rules** log tab and to `install.log`. It needs Python 3.10, shapely 2 and pyproj 3.4 or newer in QGIS, on Windows x64, macOS, or Linux x86_64 with glibc 2.17. A new plugin version offers its package version, loaded after a restart.
+    - **Install Python package…** in the panel's menu. It first shows the file, its size, URL and SHA-256. Then it downloads the file from PyPI, checks the SHA-256 and unpacks the package into `python/dependencies/topology_rules/<version>` in the QGIS profile. Installs nothing else; uses the shapely and pyproj that come with QGIS. Each step goes to the **Topology Rules** log tab and to `install.log`. Needs Python 3.10, shapely 2 and pyproj 3.4 or newer, on Windows x64, macOS, or Linux x86_64. A new plugin version offers its package version; QGIS loads it after a restart.
     - The [CLI](install.md#cli), 0.2.0 or newer. If `topology-checker` is not on the `PATH`, choose it in the panel, or set its path under **Settings > Options > Processing > Providers > Topology Rules**.
 
-The package by hand, with the Python of QGIS (in the OSGeo4W Shell on Windows; the panel shows the exact command):
+### Python package by hand
+
+Use the Python of QGIS. `<profile>` is the folder that **Settings > User Profiles > Open Active Profile Folder** opens, and `<version>` is the plugin version. The panel shows the exact command.
+
+Windows, in the OSGeo4W Shell:
+
+```bat
+python -m pip install --no-deps --target "<profile>\python\dependencies\topology_rules\<version>" topology-checker==<version>
+```
+
+macOS, in Terminal:
 
 ```sh
-python -m pip install --no-deps --target "<profile>/python/dependencies/topology_rules/<version>" topology-checker==<version>
+/Applications/QGIS.app/Contents/MacOS/python -m pip install --no-deps --target "<profile>/python/dependencies/topology_rules/<version>" topology-checker==<version>
+```
+
+Linux, with pip (for example the `python3-pip` package):
+
+```sh
+python3 -m pip install --no-deps --target "<profile>/python/dependencies/topology_rules/<version>" topology-checker==<version>
 ```
 
 ## Panel

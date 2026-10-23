@@ -590,10 +590,13 @@ def size_text(size: int) -> str:
 
 
 def mac_python() -> str:
-    """The Python of QGIS on macOS, which outside of the app needs its home
-    to be set."""
+    """The Python of QGIS on macOS: the script of the app that sets its
+    home, or else the Python itself with its home."""
+    app = Path(QCoreApplication.applicationDirPath())
+    if (app / 'python').is_file():
+        return shlex.quote(str(app / 'python'))
     name = 'python{}.{}'.format(*numbers(platform.python_version())[:2])
-    path = Path(QCoreApplication.applicationDirPath()) / name
+    path = app / name
     if not path.is_file():
         return 'python3'
     if '.app/Contents/' in path.as_posix():

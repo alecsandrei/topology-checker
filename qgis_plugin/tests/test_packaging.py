@@ -214,7 +214,8 @@ def test_the_about_text_says_how_to_get_the_tool(
     metadata: configparser.ConfigParser,
 ):
     about = general(metadata, 'about')
-    assert 'cargo install topology-checker' in about
+    assert 'topology-checker executable' in about
+    assert '/qgis-plugin/#install' in about
     assert 'Processing' in about
 
 

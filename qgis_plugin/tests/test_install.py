@@ -1090,6 +1090,13 @@ def test_the_command_on_macos_names_the_python_of_the_app(
         f'--no-deps --target {home / VERSION} topology-checker=={VERSION}'
     )
     assert install.terminal() == 'Terminal'
+    # The script of the app that sets the home, where there is one
+    script = python.parent / 'python'
+    script.write_text('')
+    assert install.command() == (
+        f"'{script}' -m pip install --no-deps --target {home / VERSION} "
+        f'topology-checker=={VERSION}'
+    )
 
 
 def test_the_command_quotes_a_folder_with_spaces(
@@ -1103,11 +1110,25 @@ def test_the_command_quotes_a_folder_with_spaces(
 # What the plugin repository shows
 
 
-def test_the_about_text_says_how_to_get_the_package():
+GUIDE = 'https://alecsandrei.github.io/topology-checker/stable/qgis-plugin/'
+
+
+def test_the_about_text_names_the_package_and_links_the_guide():
     parser = configparser.ConfigParser(interpolation=None)
     parser.read(install.METADATA, encoding='utf-8')
     about = parser['general']['about']
-    assert 'pip install --no-deps --target' in about
-    assert 'OSGeo4W Shell' in about
-    assert 'Installs nothing else' in about
-    assert 'cargo install topology-checker' in about
+    assert 'topology-checker Python package' in about
+    assert 'uses the shapely and pyproj that come with QGIS' in about
+    assert f'{GUIDE}#install' in about
+
+
+def test_the_guide_has_the_command_for_each_system():
+    page = install.METADATA.parents[2] / 'docs' / 'qgis-plugin.md'
+    if not page.is_file():
+        pytest.skip('The docs are not next to the plugin')
+    text = page.read_text(encoding='utf-8')
+    assert '\n## Install\n' in text
+    assert 'Installs nothing else' in text
+    for system in ('Windows, in the OSGeo4W Shell', 'macOS', 'Linux'):
+        assert f'\n{system}' in text
+    assert text.count('-m pip install --no-deps --target') == 3
