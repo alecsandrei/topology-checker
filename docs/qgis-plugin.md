@@ -1,12 +1,19 @@
 # QGIS plugin
 
-**Topology Rules** adds the rules of topology-checker to QGIS. It runs the [CLI](cli.md) and does not include it. Each [rule](rules.md) is a Processing tool, and a panel runs several rules at once and lists their errors.
+**Topology Rules** adds the rules of topology-checker to QGIS. It runs the checks in the Python package or the [CLI](cli.md), and includes neither. Each [rule](rules.md) is a Processing tool, and a panel runs several rules at once and lists their errors.
 
 ## Install
 
-1. Install the [CLI](install.md#cli), 0.2.0 or newer.
-2. In QGIS 3.34 or newer, open **Plugins > Manage and Install Plugins** and install **Topology Rules**.
-3. If `topology-checker` is not on the `PATH`, choose it in the panel, or set its path under **Settings > Options > Processing > Providers > Topology Rules**.
+1. In QGIS 3.34 or newer, open **Plugins > Manage and Install Plugins** and install **Topology Rules**.
+2. Install the Python package or the CLI:
+    - **Install Python package…** in the panel's menu shows the wheel for this QGIS, its size, URL and SHA-256, then downloads it from PyPI, checks the SHA-256 and unpacks only the package into `python/dependencies/topology_rules/<version>` in the QGIS profile. Each step goes to the **Topology Rules** log tab and to `install.log`. It needs Python 3.10, shapely 2 and pyproj 3.4 or newer in QGIS, on Windows x64, macOS, or Linux x86_64 with glibc 2.17. A new plugin version offers its package version, loaded after a restart.
+    - The [CLI](install.md#cli), 0.2.0 or newer. If `topology-checker` is not on the `PATH`, choose it in the panel, or set its path under **Settings > Options > Processing > Providers > Topology Rules**.
+
+The package by hand, with the Python of QGIS (in the OSGeo4W Shell on Windows; the panel shows the exact command):
+
+```sh
+python -m pip install --no-deps --target "<profile>/python/dependencies/topology_rules/<version>" topology-checker==<version>
+```
 
 ## Panel
 

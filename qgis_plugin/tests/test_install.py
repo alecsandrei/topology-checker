@@ -1088,3 +1088,15 @@ def test_the_command_quotes_a_folder_with_spaces(
     folder = tmp_path / 'Application Support' / 'topology_rules'
     monkeypatch.setattr(install, 'folder', lambda: folder)
     assert f"--target '{folder / VERSION}' " in install.command()
+
+
+# What the plugin repository shows
+
+
+def test_the_about_text_says_how_to_get_the_package():
+    parser = configparser.ConfigParser(interpolation=None)
+    parser.read(install.METADATA, encoding='utf-8')
+    about = parser['general']['about']
+    assert 'pip install --no-deps --target' in about
+    assert 'OSGeo4W Shell' in about
+    assert 'cargo install topology-checker' in about
