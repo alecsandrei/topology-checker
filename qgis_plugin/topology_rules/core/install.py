@@ -29,7 +29,7 @@ from qgis.core import (
     QgsNetworkAccessManager,
     QgsTask,
 )
-from qgis.PyQt.QtCore import QCoreApplication, Qt, QUrl, pyqtSignal
+from qgis.PyQt.QtCore import QCoreApplication, QObject, QUrl, pyqtSignal
 from qgis.PyQt.QtNetwork import QNetworkRequest
 
 from ..utils import not_none, tr
@@ -114,6 +114,30 @@ def command(version: str | None = None) -> str:
     return f'python3 {pip}'
 
 
+def forget(url: str) -> None:
+    """Drops what QGIS keeps of the URL in its cache. A request that fails
+    gets the status and the body of the answer kept from before, and a
+    wheel would take room there for nothing."""
+    cache = not_none(QgsNetworkAccessManager.instance()).cache()
+    if cache is not None:
+        cache.remove(QUrl(url))
+
+
+def ignore(*args: object) -> None:
+    """A slot that does nothing, for prime()."""
+
+
+def prime(*objects: QObject) -> None:
+    """Has sip look up now whether Python overrides disconnectNotify on the
+    objects, which it then remembers. Else it looks it up as a download
+    ends, on the thread of the download while Qt holds a lock, and waits
+    there for the GIL: a main thread that holds the GIL and waits for the
+    lock hangs QGIS."""
+    for item in objects:
+        item.objectNameChanged.connect(ignore)
+        item.objectNameChanged.disconnect(ignore)
+
+
 def terminal() -> str:
     """Where command() is run."""
     if platform.system() == 'Windows':
@@ -122,17 +146,6 @@ def terminal() -> str:
 
 
 # The tasks
-
-
-def uncache(url: str) -> None:
-    """Removes the URL from the network cache, which all threads share."""
-    # The connection that QgsBlockingNetworkRequest asks for in a task
-    manager = not_none(
-        QgsNetworkAccessManager.instance(Qt.ConnectionType.DirectConnection)
-    )
-    cache = manager.cache()
-    if cache is not None:
-        cache.remove(QUrl(url))
 
 
 class Task(QgsTask):
@@ -161,25 +174,17 @@ class Task(QgsTask):
     def get(self, url: str, missing: str = '') -> bytes:
         """The body of the URL, fetched with the proxy, SSL and
         authentication settings of QGIS. Raises Failed with missing, when
-        given, for a URL that is not found.
-
-        The URL is kept out of the network cache of QGIS: Qt answers a
-        server error with what the cache holds for the URL, and a wheel has
-        no use there."""
-        uncache(url)
-        try:
-            return self.fetch(url, missing)
-        finally:
-            uncache(url)
-
-    def fetch(self, url: str, missing: str) -> bytes:
+        given, for a URL that is not found."""
         request = QgsBlockingNetworkRequest()
+        prime(request, self.feedback, not_none(QCoreApplication.instance()))
         request.downloadProgress.connect(
             lambda done, total: (
                 self.setProgress(100 * done / total) if total > 0 else None
             )
         )
+        forget(url)
         code = request.get(QNetworkRequest(QUrl(url)), True, self.feedback)
+        forget(url)
         if self.isCanceled():
             raise Failed(tr('Cancelled'))
         if code == QgsBlockingNetworkRequest.ErrorCode.NoError:
@@ -320,11 +325,14 @@ class InstallTask(Task):
         content = self.get(release.url)
         digest = hashlib.sha256(content).hexdigest()
         if digest != release.sha256:
-            raise Failed(
-                tr('SHA-256 {digest} does not match PyPI {expected}').format(
+            # The hashes go to the log; the error is short enough to show
+            self.say(
+                tr('SHA-256 {digest}, PyPI has {expected}').format(
                     digest=digest, expected=release.sha256
-                )
+                ),
+                Qgis.MessageLevel.Warning,
             )
+            raise Failed(tr('The download does not match its SHA-256 on PyPI'))
         self.say(tr('SHA-256 {digest} matches PyPI').format(digest=digest))
         if self.isCanceled():
             raise Failed(tr('Cancelled'))

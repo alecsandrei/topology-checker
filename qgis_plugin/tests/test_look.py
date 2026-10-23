@@ -6,7 +6,7 @@ from __future__ import annotations
 import pytest
 from qgis.PyQt.QtCore import QUrl
 from qgis.PyQt.QtGui import QDesktopServices
-from qgis.PyQt.QtWidgets import QPushButton, QToolButton
+from qgis.PyQt.QtWidgets import QApplication, QPushButton, QToolButton
 
 from topology_rules.panel.dock import Dock
 
@@ -53,6 +53,16 @@ def test_the_run_button_keeps_its_icon_while_it_cancels(dock: Dock):
 @pytest.mark.parametrize('name', BUTTONS)
 def test_a_button_keeps_its_text(dock: Dock, name: str):
     assert getattr(dock, name).text()
+
+
+@pytest.mark.usefixtures('real_font')
+@pytest.mark.parametrize('name', ['import_button', 'export_button'])
+def test_the_file_buttons_fit_the_narrowest_dock(dock: Dock, name: str):
+    dock.show()
+    dock.resize(dock.minimumSizeHint().width(), 900)
+    QApplication.processEvents()
+    button = getattr(dock, name)
+    assert button.width() >= button.sizeHint().width()
 
 
 # Help
