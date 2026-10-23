@@ -345,6 +345,32 @@ def test_empty_features_and_features_with_z(agree: Agree):
     assert written.warnings
 
 
+def test_degenerate_parts(agree: Agree):
+    """Lines whose points are the same, and rings of fewer than three
+    points, which both leave out and warn about."""
+    lines = memory(
+        'MultiLineString',
+        'EPSG:32633',
+        'MULTILINESTRING((0 0, 10 0))',
+        'MULTILINESTRING((50 50, 50 50))',
+        'MULTILINESTRING((20 20, 30 20),(40 40, 40 40))',
+        name='lines',
+    )
+    polygons = memory(
+        'Polygon',
+        'EPSG:32633',
+        SQUARE,
+        'POLYGON((0 0, 10 0, 10 10, 0 10, 0 0),(5 5, 6 5, 5 5))',
+        'POLYGON((50 50, 60 50, 50 50))',
+        name='polygons',
+    )
+    written = agree(
+        ('line/must-not-have-dangles', project(lines)),
+        ('polygon/must-not-overlap', project(polygons)),
+    )
+    assert any('degenerate' in warning for warning in written.warnings)
+
+
 def test_curves(agree: Agree):
     lines = memory(
         'CompoundCurve',
