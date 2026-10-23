@@ -42,7 +42,7 @@ See the [measurements](benchmarks/gis/results/README.md) and [benchmark methodol
 ## Python API
 
 ```sh
-uv add 'topology-checker[geopandas]'
+pip install "topology-checker[io]"
 ```
 
 ```python
