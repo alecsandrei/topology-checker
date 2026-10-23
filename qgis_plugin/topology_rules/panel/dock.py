@@ -39,6 +39,7 @@ from .installer import InstallDialog
 from .menu import PanelMenu, choose, installable
 from .messages import RunFeedback, push_summary
 from .narrow import shrink_buttons, shrink_tabs
+from .offer import stop_offering
 from .results import ResultsPanel
 from .rules_page import RulesPage
 from .setup import SetupPage
@@ -78,6 +79,7 @@ class Dock(QgsDockWidget):
         self.browse_button = self.setup_page.browse_button
         self.install_button = self.setup_page.install_button
         self.rules_page = RulesPage()
+        self.offer = self.rules_page.offer
         self.form = self.rules_page.form
         self.input_box = self.form.input_box
         self.rule_box = self.form.rule_box
@@ -141,6 +143,7 @@ class Dock(QgsDockWidget):
         self.state = ProjectState(self)
         self.browse_button.clicked.connect(self.choose_executable)
         self.install_button.clicked.connect(self.install_package)
+        self.offer.install_clicked.connect(self.install_package)
         self.menu.engine_chosen.connect(self.choose_engine)
         self.menu.install_action.triggered.connect(self.install_package)
         self.menu.update_action.triggered.connect(self.update_package)
@@ -179,6 +182,7 @@ class Dock(QgsDockWidget):
         self.load_algorithms()
         self.form.set_rules(rules)
         self.state.fill()
+        self.offer.update_offer()
         self.update_buttons()
 
     def load_algorithms(self) -> None:
@@ -235,9 +239,14 @@ class Dock(QgsDockWidget):
             return
         dialog = InstallDialog(self, update)
         dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
-        dialog.installed.connect(self.reload)
+        dialog.installed.connect(self.package_installed)
         self.installer = dialog
         dialog.show()
+
+    def package_installed(self) -> None:
+        stop_offering()
+        self.offer.hide()
+        self.reload()
 
     def remove_package(self) -> None:
         """Deletes the package that the plugin installed. One that is loaded

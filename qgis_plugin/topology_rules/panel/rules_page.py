@@ -16,6 +16,7 @@ from ..utils import tr
 from .form import RuleForm
 from .icons import decorate
 from .narrow import narrowest, shrink_buttons
+from .offer import OfferBar
 from .rule_list import RuleList
 from .tolerance import tolerance_box
 
@@ -53,6 +54,7 @@ class RulesPage(QWidget):
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
+        self.offer = OfferBar()
         self.form = RuleForm()
         self.rule_list = RuleList()
         self.import_button = QPushButton(tr('Import…'))
@@ -80,6 +82,7 @@ class RulesPage(QWidget):
         page = QVBoxLayout(self)
         # Little room is lost on the sides, as the dock is narrow
         page.setContentsMargins(0, 2, 0, 2)
+        page.addWidget(self.offer)
         page.addWidget(self.form)
         page.addWidget(self.rule_list, 1)
         shrink_buttons(self.import_button, self.export_button)

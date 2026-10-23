@@ -1,5 +1,6 @@
 """The engine in the panel: the gear menu, the install of the Python package
-from PyPI and the setup page, against a PyPI of the tests on 127.0.0.1.
+from PyPI, the bar that offers it and the setup page, against a PyPI of the
+tests on 127.0.0.1.
 
 QGIS is told whether it can use the package, whatever is installed here, so
 that the tests run the same with the package and without it."""
@@ -34,7 +35,7 @@ from topology_rules.core.binary import Rule
 from topology_rules.core.engine import Engine, Package
 from topology_rules.enums import Setting
 from topology_rules.exceptions import PackageError
-from topology_rules.panel import installer, startup
+from topology_rules.panel import installer, offer, startup
 from topology_rules.panel.dock import Dock
 from topology_rules.panel.installer import GUIDE, InstallDialog
 from topology_rules.panel.menu import PanelMenu
@@ -43,6 +44,7 @@ from topology_rules.utils import not_none
 
 from .helpers import choose_engine, message_text, real_executable, wait_for
 from .test_install import Index, load_from, trickle, version_folder
+from .test_wrapping import NARROW
 from .wheel_helpers import (
     LINUX,
     VERSION,
@@ -137,6 +139,13 @@ def old_python(monkeypatch: pytest.MonkeyPatch) -> str:
     reason = wheels.unsupported()
     assert reason is not None
     return reason
+
+
+@pytest.fixture(autouse=True)
+def not_offered() -> c.Iterator[None]:
+    QgsSettings().remove(offer.OFFERED)
+    yield
+    QgsSettings().remove(offer.OFFERED)
 
 
 @pytest.fixture(autouse=True)
@@ -755,6 +764,102 @@ def test_closing_the_panel_stops_the_install(
     assert dock.installer is None
     wait_for(lambda: not installer.running, 30)
     dock.deleteLater()
+
+
+# The bar that offers the package
+
+
+def offered_dock(dock: Dock) -> Dock:
+    choose_engine(Engine.AUTOMATIC)
+    dock.refresh()
+    return dock
+
+
+def test_the_bar_offers_the_package_where_only_the_executable_runs(
+    dock: Dock,
+):
+    offered_dock(dock)
+    assert shown(dock.offer)
+    assert dock.offer.label.text() == 'A faster engine is available'
+    assert dock.offer.install_button.text() == 'Install…'
+    assert dock.offer.close_button.toolTip() == 'Do not show again'
+
+
+def test_the_bar_is_at_the_top_of_the_rules(dock: Dock):
+    layout = not_none(dock.rules_page.layout())
+    assert not_none(layout.itemAt(0)).widget() is dock.offer
+
+
+def test_a_chosen_executable_is_not_offered_the_package(dock: Dock):
+    dock.refresh()
+    assert dock.offer.isHidden()
+
+
+def test_the_package_is_offered_only_where_it_can_be_installed(home: Path):
+    choose_engine(Engine.AUTOMATIC)
+    assert offer.wanted()
+    version_folder(home, VERSION)
+    assert not offer.wanted()
+
+
+def test_a_package_that_qgis_has_is_not_offered(usable: Package):
+    choose_engine(Engine.AUTOMATIC)
+    assert not offer.wanted()
+
+
+def test_a_qgis_that_cannot_use_the_package_is_not_offered_it(
+    old_python: str,
+):
+    choose_engine(Engine.AUTOMATIC)
+    assert not offer.wanted()
+
+
+def test_a_closed_bar_is_gone_for_good(dock: Dock, qgis_iface: QgisInterface):
+    offered_dock(dock)
+    dock.offer.close_button.click()
+    assert dock.offer.isHidden()
+    dock.refresh()
+    assert dock.offer.isHidden()
+    again = Dock(qgis_iface)
+    again.refresh()
+    assert again.offer.isHidden()
+    again.deleteLater()
+
+
+def test_install_on_the_bar_opens_the_dialog(dock: Dock, pypi: Index):
+    offered_dock(dock)
+    dock.offer.install_button.click()
+    assert dock.installer is not None
+    assert dock.installer.isVisible()
+
+
+def test_an_install_ends_the_offer(
+    dock: Dock, published: tuple[Index, bytes], bar: t.Any
+):
+    offered_dock(dock)
+    dock.offer.install_button.click()
+    install_in(not_none_dialog(dock))
+    assert dock.offer.isHidden()
+    # Not even once the package is removed
+    dock.menu.fill()
+    dock.menu.remove_action.trigger()
+    assert install.installed() is None
+    assert dock.offer.isHidden()
+
+
+def test_a_cancelled_install_keeps_the_offer(dock: Dock, pypi: Index):
+    offered_dock(dock)
+    dock.offer.install_button.click()
+    not_none_dialog(dock).cancel_button.click()
+    dock.refresh()
+    assert shown(dock.offer)
+
+
+@pytest.mark.usefixtures('real_font')
+def test_the_bar_fits_a_narrow_dock(dock: Dock):
+    offered_dock(dock)
+    assert dock.offer.minimumSizeHint().width() <= NARROW
+    assert dock.minimumSizeHint().width() <= 300
 
 
 # The setup page
