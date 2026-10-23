@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import typing as t
 
-from qgis.PyQt.QtCore import QModelIndex, QSize, Qt, QTimer
+from qgis.PyQt.QtCore import (
+    QModelIndex,
+    QPersistentModelIndex,
+    QSize,
+    Qt,
+    QTimer,
+)
 from qgis.PyQt.QtGui import QFont, QTextLayout, QTextOption
 from qgis.PyQt.QtWidgets import (
     QApplication,
@@ -13,6 +19,10 @@ from qgis.PyQt.QtWidgets import (
 )
 
 from ..utils import not_none
+
+# Up to how many rows that wrap are measured again one by one when the column
+# changes, and not with all the others
+FEW = 100
 
 
 def line_count(text: str, font: QFont, width: int) -> int:
@@ -49,6 +59,11 @@ class WrapDelegate(QStyledItemDelegate):
     def __init__(self, view: QTreeView):
         super().__init__(view)
         self.view = view
+        # Since the last layout: the narrowest column that keeps the rows
+        # measured on one line, and the rows measured at the width of the
+        # column, whose height another width can change
+        self.narrowest = 0
+        self.wrapping: set[QPersistentModelIndex] = set()
 
     def sizeHint(  # pyright: ignore[reportIncompatibleMethodOverride]
         self, *args: t.Any
@@ -71,14 +86,25 @@ class WrapDelegate(QStyledItemDelegate):
         depth, parent = 1, index.parent()
         while parent.isValid():
             depth, parent = depth + 1, parent.parent()
-        width = self.view.columnWidth(0) - depth * self.view.indentation()
+        indent = depth * self.view.indentation()
+        width = self.view.columnWidth(0) - indent
+        checked = index.data(Qt.ItemDataRole.CheckStateRole) is not None
+        decorated = index.data(Qt.ItemDataRole.DecorationRole) is not None
+        # The size holds the text on one line with its margins, so a text
+        # that is narrower than the room needs no layout. A view asks for
+        # every row, and thousands of layouts would hold it up
+        if size.width() < width and not checked and not decorated:
+            self.narrowest = max(self.narrowest, size.width() + indent + 1)
+            return size
+        if len(self.wrapping) <= FEW:
+            self.wrapping.add(QPersistentModelIndex(index))
         style = not_none(QApplication.style())
-        if index.data(Qt.ItemDataRole.CheckStateRole) is not None:
+        if checked:
             width -= style.pixelMetric(QStyle.PixelMetric.PM_IndicatorWidth)
             width -= style.pixelMetric(
                 QStyle.PixelMetric.PM_CheckBoxLabelSpacing
             )
-        if index.data(Qt.ItemDataRole.DecorationRole) is not None:
+        if decorated:
             width -= icon.width() + 4
         margin = style.pixelMetric(QStyle.PixelMetric.PM_FocusFrameHMargin) + 1
         lines = line_count(text, option.font, max(width - 2 * margin, 20))
@@ -93,21 +119,22 @@ class WrapDelegate(QStyledItemDelegate):
 
 def relayout(view: QTreeView, delegate: WrapDelegate) -> None:
     """Measures the rows that show again, which the view does not do by
-    itself for the children of an item when the column changes. Taller rows
-    can bring a scroll bar, which narrows the column, so it goes on until the
-    width holds."""
-    model = not_none(view.model())
+    itself when the column changes. Taller rows can bring a scroll bar, which
+    narrows the column, so it goes on until the width holds. A layout
+    measures every row, so while the others stay on one line only the rows
+    that wrap are measured: a group can have thousands of rows."""
     for _ in range(3):
         width = view.columnWidth(0)
-        pending = [QModelIndex()]
-        while pending:
-            parent = pending.pop()
-            for row in range(model.rowCount(parent)):
-                index = model.index(row, 0, parent)
-                delegate.sizeHintChanged.emit(index)
-                if view.isExpanded(index):
-                    pending.append(index)
-        t.cast(t.Any, view).doItemsLayout()
+        rows, delegate.wrapping = delegate.wrapping, set()
+        if width < delegate.narrowest or len(rows) > FEW:
+            delegate.narrowest = 0
+            t.cast(t.Any, view).doItemsLayout()
+        else:
+            for row in rows:
+                # A change of the data measures the row again
+                index = QModelIndex(row)
+                if index.isValid():
+                    view.dataChanged(index, index)
         if view.columnWidth(0) == width:
             break
 
