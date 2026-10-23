@@ -22,11 +22,17 @@ import sys
 import typing as t
 from pathlib import Path
 
-from qgis.core import Qgis, QgsBlockingNetworkRequest, QgsFeedback, QgsTask
+from qgis.core import (
+    Qgis,
+    QgsBlockingNetworkRequest,
+    QgsFeedback,
+    QgsNetworkAccessManager,
+    QgsTask,
+)
 from qgis.PyQt.QtCore import QCoreApplication, QUrl, pyqtSignal
 from qgis.PyQt.QtNetwork import QNetworkRequest
 
-from ..utils import tr
+from ..utils import not_none, tr
 from . import folders, wheels
 from .folders import (
     activate,
@@ -108,6 +114,15 @@ def command(version: str | None = None) -> str:
     return f'python3 {pip}'
 
 
+def forget(url: str) -> None:
+    """Drops what QGIS keeps of the URL in its cache. A request that fails
+    gets the status and the body of the answer kept from before, and a
+    wheel would take room there for nothing."""
+    cache = not_none(QgsNetworkAccessManager.instance()).cache()
+    if cache is not None:
+        cache.remove(QUrl(url))
+
+
 def terminal() -> str:
     """Where command() is run."""
     if platform.system() == 'Windows':
@@ -151,7 +166,9 @@ class Task(QgsTask):
                 self.setProgress(100 * done / total) if total > 0 else None
             )
         )
+        forget(url)
         code = request.get(QNetworkRequest(QUrl(url)), True, self.feedback)
+        forget(url)
         if self.isCanceled():
             raise Failed(tr('Cancelled'))
         if code == QgsBlockingNetworkRequest.ErrorCode.NoError:

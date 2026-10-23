@@ -409,6 +409,18 @@ def test_a_server_error_fails_with_its_status(pypi: Index):
     ]
 
 
+def test_a_server_error_after_an_answer_fails_with_its_status(pypi: Index):
+    # QGIS keeps answers, and gives the one of before to a request that fails
+    pypi.release(answer([]))
+    run(install.ReleaseTask())
+    pypi.serve(f'/pypi/topology-checker/{VERSION}/json', b'', status=503)
+    outcome = run(install.ReleaseTask())
+    assert outcome.failed == [
+        f'Cannot fetch {pypi.url}/pypi/topology-checker/{VERSION}/json: '
+        'HTTP 503 Service Unavailable'
+    ]
+
+
 def test_no_network_fails_with_the_error(
     monkeypatch: pytest.MonkeyPatch,
 ):
