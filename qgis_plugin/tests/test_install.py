@@ -26,7 +26,8 @@ from qgis.gui import QgisInterface
 from qgis.PyQt.QtCore import QCoreApplication
 
 import topology_rules
-from topology_rules.core import folders, install, wheels
+from topology_rules.core import engine, folders, install, wheels
+from topology_rules.exceptions import PackageError
 from topology_rules.utils import not_none
 
 from .helpers import wait_for
@@ -839,6 +840,25 @@ def test_a_package_from_elsewhere_needs_no_restart(
     assert not install.restart_needed()
     version_folder(home, VERSION)
     assert install.restart_needed()
+
+
+def test_a_package_too_old_that_is_loaded_says_to_restart(
+    home: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """The package that QGIS loaded stays loaded when another is installed,
+    until QGIS restarts."""
+    loaded = fake_module('topology_checker', '0.2.1')
+    loaded.__file__ = str(tmp_path / 'site-packages' / 'topology_checker.py')
+    monkeypatch.setitem(sys.modules, 'topology_checker', loaded)
+    with pytest.raises(PackageError) as before:
+        engine.find_package()
+    assert str(before.value).endswith('it has no Topology.add_layer.')
+    version_folder(home, VERSION)
+    with pytest.raises(PackageError) as after:
+        engine.find_package()
+    assert str(after.value) == (
+        f'{before.value} Restart QGIS to load {VERSION}.'
+    )
 
 
 # Remove
