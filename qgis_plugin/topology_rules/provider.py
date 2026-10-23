@@ -19,10 +19,11 @@ from .algorithms import (
     MergeLines,
     RuleAlgorithm,
 )
-from .core import binary
+from .core import binary, engine
 from .core.binary import Rule
+from .core.engine import Engine
 from .enums import PROVIDER_ID, SETTING_NAME, Asset
-from .exceptions import ExecutableError
+from .exceptions import ExecutableError, PackageError
 
 
 class Provider(QgsProcessingProvider):
@@ -59,8 +60,15 @@ class Provider(QgsProcessingProvider):
         ProcessingConfig.removeSetting(SETTING_NAME)
 
     def loadAlgorithms(self) -> None:
-        # Without the executable there are no rules to list, so the toolbox
-        # stays empty until its path is set
+        # The rules are those of the engine. The package lists them at once;
+        # without it and without the executable there are none to list, so
+        # the toolbox stays empty until one can be used
+        if engine.resolved() is Engine.PACKAGE:
+            try:
+                self.add_algorithms(engine.package_rules())
+            except PackageError as error:
+                self.log(str(error))
+            return
         try:
             path, modified = binary.locate()
         except ExecutableError as error:
@@ -70,6 +78,9 @@ class Provider(QgsProcessingProvider):
         if rules is None:
             self.ask(path, modified)
             return
+        self.add_algorithms(rules)
+
+    def add_algorithms(self, rules: tuple[Rule, ...]) -> None:
         for rule in rules:
             self.addAlgorithm(RuleAlgorithm(rule))
         self.addAlgorithm(CheckRulesAlgorithm())

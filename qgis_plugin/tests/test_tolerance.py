@@ -11,11 +11,14 @@ from topology_rules.panel.dock import Dock
 from .helpers import (
     add,
     add_features,
+    both_engines,
     click_run,
     select_rules,
     set_checked,
     shown,
 )
+
+pytestmark = both_engines
 
 DANGLES = 'line/must-not-have-dangles'
 

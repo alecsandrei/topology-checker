@@ -10,12 +10,15 @@ from topology_rules.panel.dock import Dock
 
 from .helpers import (
     add,
+    both_engines,
     click_run,
     saved_layer,
     select_error,
     shown,
     wait_for,
 )
+
+pytestmark = both_engines
 
 DANGLES = 'line/must-not-have-dangles'
 # Two lines meeting at a node: the free end of each is a dangle

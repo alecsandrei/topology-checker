@@ -25,8 +25,9 @@ default-groups = ["dev", "lint"]
 
 [tool.pyright]
 include = ["topology_rules"]
-# Where the QGIS images keep the Processing plugin
-extraPaths = ["/usr/share/qgis/python/plugins"]
+# Where the QGIS images keep the Processing plugin, and the sources of the
+# topology-checker Python package, which give its types
+extraPaths = ["/usr/share/qgis/python/plugins", "../python"]
 pythonVersion = "3.10"
 
 [tool.pytest.ini_options]
@@ -41,7 +42,6 @@ markers = ['slow: runs for a while, left out unless -m "" is given']
 line-length = 80
 indent-width = 4
 target-version = "py310"
-extend-exclude = ["benchmarks"]
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "I", "B", "UP", "SIM", "RUF", "PT", "C4"]

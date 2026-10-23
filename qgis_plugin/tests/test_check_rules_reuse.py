@@ -11,6 +11,7 @@ from qgis.core import QgsProject, QgsVectorLayer
 
 from topology_rules.algorithms.check import COUNTS
 from topology_rules.algorithms.rule import COUNT
+from topology_rules.core.engine import Engine
 from topology_rules.provider import Provider
 
 from .helpers import line_layer, run_algorithm
@@ -23,8 +24,9 @@ LAYERS = ('errors_point', 'errors_line', 'errors_polygon')
 
 
 @pytest.fixture(autouse=True)
-def ready(executable: str, provider: Provider) -> None:
-    """The real executable and the provider, as in a QGIS session."""
+def ready(run_engine: Engine, executable: str, provider: Provider) -> None:
+    """The real executable and the provider, as in a QGIS session, and
+    each of the two engines in turn."""
 
 
 def in_project(*wkts: str, name: str = 'lines') -> QgsVectorLayer:

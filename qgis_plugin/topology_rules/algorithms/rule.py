@@ -13,6 +13,7 @@ from qgis.core import (
 )
 
 from .._typing import Parameters
+from ..core import engine
 from ..core.binary import Rule
 from ..core.checks import Job, run_jobs
 from ..core.layers import Input, require_kind
@@ -24,7 +25,6 @@ from .base import (
     OTHER,
     OUTPUT,
     TOLERANCE,
-    executable_path,
     failures,
     memory_copy,
     refuse_overwrite,
@@ -62,14 +62,14 @@ def layer_types(kind: str) -> list[int]:
 class Plan:
     """What the main thread found out for the run."""
 
-    executable: str
+    tool: engine.Tool
     first: Input
     other: Input | None
     tolerance: float | None
 
 
 class RuleAlgorithm(SinkAlgorithm):
-    """Runs one topology rule of the executable on one or two layers."""
+    """Runs one topology rule on one or two layers."""
 
     def __init__(self, rule: Rule):
         super().__init__()
@@ -163,7 +163,7 @@ class RuleAlgorithm(SinkAlgorithm):
             refuse_overwrite(sinks, (first, other))
             release_files(sinks)
             self.plan = Plan(
-                executable_path(),
+                engine.tool(),
                 first,
                 other,
                 tolerance_of(self, parameters, context),
@@ -187,7 +187,7 @@ class RuleAlgorithm(SinkAlgorithm):
             path = str(Path(tmp) / 'errors.gpkg')
             outcome = run_jobs(
                 [Job(self.rule, plan.first, plan.other)],
-                plan.executable,
+                plan.tool,
                 plan.tolerance,
                 path,
                 Path(tmp),

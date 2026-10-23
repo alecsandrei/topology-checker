@@ -1,10 +1,13 @@
 """Topology Rules: the rules of topology-checker in QGIS.
 
-The plugin runs the executable and shows what it finds.
+The plugin runs the checks with the topology-checker Python package or the
+executable, and shows what they find.
 
 * plugin, provider: start and stop the plugin; the Processing provider
 * enums, exceptions, utils: what the other modules share
 * core/: the work, with no widgets and no QGIS window
+  * engine: which of the two runs the checks
+  * package: a run of the Python package
   * binary, runner: find the executable, list its rules, run it
   * commands, definition: its command lines, and the topology.toml it reads
   * layers, inputs: what a layer is to the tool, and the files made for it

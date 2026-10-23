@@ -1,5 +1,5 @@
-"""Fixtures of the tests: the executable, the provider, the dock, the
-message bar, and a clean project and settings for each test."""
+"""Fixtures of the tests: the executable, the Python package, the provider,
+the dock, the message bar, and a clean project and settings for each test."""
 
 from __future__ import annotations
 
@@ -22,14 +22,15 @@ from qgis.PyQt.QtCore import QSettings
 from qgis.PyQt.QtGui import QFontDatabase, QFontInfo
 from qgis.PyQt.QtWidgets import QApplication, QMainWindow
 
-from topology_rules.core import binary
+from topology_rules.core import binary, engine
+from topology_rules.core.engine import Engine, Package
 from topology_rules.enums import Setting
-from topology_rules.exceptions import ExecutableError
+from topology_rules.exceptions import ExecutableError, PackageError
 from topology_rules.panel.dock import Dock
 from topology_rules.panel.rules_page import COLLAPSED
 from topology_rules.provider import Provider
 
-from .helpers import real_executable, wait_for
+from .helpers import choose_engine, real_executable, wait_for
 
 
 @pytest.hookimpl(trylast=True)
@@ -122,10 +123,12 @@ def forget_tools() -> None:
     with probe.lock:
         rules = {k: v for k, v in probe.done.items() if k[0] == real}
         formats = {k: v for k, v in probe.readable.items() if k[0] == real}
+        versions = {k: v for k, v in probe.versions.items() if k[0] == real}
     probe.cache_clear()
     with probe.lock:
         probe.done.update(rules)
         probe.readable.update(formats)
+        probe.versions.update(versions)
 
 
 @pytest.fixture(autouse=True)
@@ -143,6 +146,47 @@ def no_executable(monkeypatch: pytest.MonkeyPatch) -> c.Iterator[None]:
     settings.remove(Setting.EXECUTABLE.value)
     forget_options_box(settings)
     forget_tools()
+
+
+@pytest.fixture(autouse=True)
+def executable_engine() -> c.Iterator[None]:
+    """Runs the checks with the executable, which most tests are about. The
+    tests of the package, and those of both engines, choose theirs."""
+    choose_engine(Engine.EXECUTABLE)
+    yield
+    QgsSettings().remove(Setting.ENGINE.value)
+
+
+@pytest.fixture
+def package() -> Package:
+    """The Python package, skipping, with the reason, where QGIS cannot use
+    it."""
+    try:
+        return engine.find_package()
+    except PackageError as error:
+        pytest.skip(str(error))
+
+
+def executable_unused() -> Path:
+    raise ExecutableError('The package runs the checks, not the executable')
+
+
+@pytest.fixture(
+    params=[Engine.EXECUTABLE, Engine.PACKAGE],
+    ids=[Engine.EXECUTABLE.value, Engine.PACKAGE.value],
+)
+def run_engine(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> Engine:
+    """Runs the checks of a test once with the executable and once with the
+    package. With the package no executable is found, as for a user who has
+    only the package."""
+    chosen = t.cast(Engine, request.param)
+    if chosen is Engine.PACKAGE:
+        request.getfixturevalue('package')
+        monkeypatch.setattr(binary, 'find_executable', executable_unused)
+    choose_engine(chosen)
+    return chosen
 
 
 @pytest.fixture(autouse=True)

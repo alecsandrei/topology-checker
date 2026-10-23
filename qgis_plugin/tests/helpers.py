@@ -7,6 +7,7 @@ last groups read the widgets of the dock the way a user sees them.
 
 from __future__ import annotations
 
+import collections.abc as c
 import dataclasses
 import faulthandler
 import json
@@ -30,12 +31,15 @@ from qgis.core import (
     QgsProcessingContext,
     QgsProcessingFeedback,
     QgsProject,
+    QgsSettings,
     QgsVectorFileWriter,
     QgsVectorLayer,
 )
 from qgis.PyQt.QtCore import QItemSelectionModel, QModelIndex, Qt
 from qgis.PyQt.QtWidgets import QApplication, QLabel, QTreeWidgetItem
 
+from topology_rules.core import engine
+from topology_rules.core.engine import Engine
 from topology_rules.enums import PROVIDER_ID
 
 if t.TYPE_CHECKING:
@@ -297,6 +301,24 @@ def real_executable() -> str | None:
     return NAMED_PATH or shutil.which('topology-checker')
 
 
+def choose_engine(chosen: Engine) -> None:
+    """Has the engine run the checks, as the user chooses it."""
+    engine.choose(chosen)
+    # A task reads the setting on a thread of its own, which sees only what
+    # is in the file
+    QgsSettings().sync()
+
+
+# Runs a test, or each test of a module, once with the executable and once
+# with the Python package
+both_engines = pytest.mark.usefixtures('run_engine')
+# Runs a test of such a module with the executable alone, as it is about the
+# executable
+executable_only = pytest.mark.parametrize(
+    'run_engine', [Engine.EXECUTABLE], ids=['executable'], indirect=True
+)
+
+
 # Layers
 
 
@@ -414,10 +436,14 @@ class Started:
 
 
 def start_algorithm(
-    name: str, parameters: dict[str, t.Any], invalid_check: t.Any = None
+    name: str,
+    parameters: dict[str, t.Any],
+    invalid_check: t.Any = None,
+    prepared: c.Callable[[], None] | None = None,
 ) -> Started:
     """Starts a provider algorithm in a task thread, as the dock and the
-    Processing dialog do, and returns at once."""
+    Processing dialog do, and returns at once. `prepared` is called once the
+    task has prepared the algorithm on the main thread, before it starts."""
     algorithm = QgsApplication.processingRegistry().createAlgorithmById(
         f'{PROVIDER_ID}:{name}'
     )
@@ -430,6 +456,8 @@ def start_algorithm(
     task = QgsProcessingAlgRunnerTask(algorithm, parameters, context, feedback)
     outcome: list[tuple[bool, dict[str, t.Any]]] = []
     task.executed.connect(lambda ok, results: outcome.append((ok, results)))
+    if prepared is not None:
+        prepared()
     QgsApplication.taskManager().addTask(task)
     return Started(outcome, context, feedback, task)
 

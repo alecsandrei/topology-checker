@@ -15,6 +15,7 @@ from qgis.core import (
     QgsVectorLayer,
 )
 
+from topology_rules.core.engine import Engine
 from topology_rules.panel.dock import Dock
 
 from .helpers import (
@@ -54,8 +55,9 @@ KINDS = {
 
 
 @pytest.fixture(autouse=True)
-def ready(executable: str, provider: object) -> None:
-    """The real executable and the provider, as in a QGIS session."""
+def ready(run_engine: Engine, executable: str, provider: object) -> None:
+    """The real executable and the provider, as in a QGIS session, and
+    each of the two engines in turn."""
 
 
 def circle() -> t.Any:

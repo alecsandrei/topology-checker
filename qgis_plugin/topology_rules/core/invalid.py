@@ -34,9 +34,10 @@ MULTI = {
     'line': 'MultiLineString',
     'polygon': 'MultiPolygon',
 }
-# How the tool names the feature that it rejects
+# How the tool names the feature that it rejects; the Python package names
+# no layer where it refuses the data that it is given
 FAILURE = re.compile(
-    r'^layer (?P<layer>.+?), FID (?P<fid>-?\d+)'
+    r'^(?:layer (?P<layer>.+?), )?FID (?P<fid>-?\d+)'
     r'(?:, part \d+, ring [^:]+)?: (?P<reason>.*)$',
     re.DOTALL,
 )
@@ -59,12 +60,12 @@ class Rejected(RunError):
         self.key = key
         # What the tool said, for the features it can be told to skip
         self.skippable = reason.startswith(REJECTED)
-        # Whether the tool read the layer from its own file, where the
-        # number of the feature is not told apart from the export's
-        self.direct = False
+        # Whether the tool read the input as it is, without leaving out what
+        # it would reject: the executable from the layer's own file
+        self.as_is = False
 
 
-def parse_failure(message: str) -> tuple[str, int, str] | None:
+def parse_failure(message: str) -> tuple[str | None, int, str] | None:
     """The layer, feature and reason in a message of the tool about a
     feature."""
     found = FAILURE.match(message.strip())
@@ -144,10 +145,6 @@ def append_invalid(
             context.transformContext(),
             options,
         )
-        if writer is None:
-            raise RunError(f'Could not write the {kind} errors')
-        res = writer.addFeatures(features)
-        ok = res[0] if isinstance(res, tuple) else bool(res)
-        if not ok:
+        if writer is None or not writer.addFeatures(features):
             raise RunError(f'Could not write the {kind} errors')
         del writer

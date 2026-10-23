@@ -10,19 +10,24 @@ from qgis.core import QgsFeature, QgsVectorLayer
 from ..core.binary import named_with, plain_name, short_name
 from ..core.style import INVALID, Grouping, rule_grouping
 
+# The fields of an error that a row is made from
+COLUMNS = (
+    'rule',
+    'error_type',
+    'origin_layer',
+    'origin_fid',
+    'destination_layer',
+    'destination_fid',
+)
 
-def field_text(layer: QgsVectorLayer, feature: QgsFeature, name: str) -> str:
-    if layer.fields().indexOf(name) < 0:
+
+def field_text(feature: QgsFeature, index: int) -> str:
+    """The text of the field at the index, empty for a null value or for a
+    field that the layer does not have, whose index is -1."""
+    if index < 0:
         return ''
-    value = feature[name]
+    value = feature.attribute(index)
     return '' if value is None or str(value) == 'NULL' else str(value)
-
-
-def fast_field_text(feature: QgsFeature, idx: int) -> str:
-    if idx < 0:
-        return ''
-    val = feature.attribute(idx)
-    return '' if val is None or str(val) == 'NULL' else str(val)
 
 
 def shape_of(feature: QgsFeature) -> str:
@@ -120,25 +125,21 @@ def read_rows(
     grouping = grouping or rule_grouping()
     rows: list[Row] = []
     for layer in layers:
+        # The fields are looked up once for the layer, not for each feature
         fields = layer.fields()
-        idx_origin = fields.indexOf('origin_layer')
-        idx_other = fields.indexOf('destination_layer')
-        idx_rule = fields.indexOf('rule')
-        idx_error = fields.indexOf('error_type')
-        idx_ofid = fields.indexOf('origin_fid')
-        idx_dfid = fields.indexOf('destination_fid')
-
+        indexes = [fields.indexOf(name) for name in COLUMNS]
         for feature in t.cast('c.Iterable[QgsFeature]', layer.getFeatures()):
-            origin = fast_field_text(feature, idx_origin)
-            other = fast_field_text(feature, idx_other)
+            rule, error, origin, fid, other, other_fid = (
+                field_text(feature, index) for index in indexes
+            )
             rows.append(
                 Row(
-                    fast_field_text(feature, idx_rule),
-                    fast_field_text(feature, idx_error),
+                    rule,
+                    error,
                     names.get(origin, origin),
-                    number(fast_field_text(feature, idx_ofid)),
+                    number(fid),
                     names.get(other, other),
-                    number(fast_field_text(feature, idx_dfid)),
+                    number(other_fid),
                     origin,
                     other,
                     layer.id(),

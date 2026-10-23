@@ -19,6 +19,7 @@ from topology_rules.panel.dock import Dock
 
 from .helpers import (
     add,
+    both_engines,
     click_run,
     line_layer,
     message_text,
@@ -32,6 +33,8 @@ from .helpers import (
     select_result,
     shown,
 )
+
+pytestmark = both_engines
 
 DANGLES = 'line/must-not-have-dangles'
 COVERED = 'point/must-be-covered-by-lines'

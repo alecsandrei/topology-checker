@@ -6,12 +6,14 @@ import typing as t
 from pathlib import Path
 
 from qgis.core import (
+    QgsAbstractFeatureSource,
     QgsCoordinateReferenceSystem,
     QgsFeatureSource,
     QgsProject,
     QgsProviderRegistry,
     QgsRectangle,
     QgsVectorLayer,
+    QgsVectorLayerFeatureSource,
     QgsWkbTypes,
 )
 
@@ -29,6 +31,11 @@ class Dataset:
     path: str
     layer: str | None = None
 
+    @property
+    def name(self) -> str:
+        """What the dataset is called: its layer, else its file."""
+        return self.layer or Path(self.path).stem
+
     def arguments(self, layer_flag: str) -> list[str]:
         args = [self.path]
         if self.layer is not None:
@@ -45,8 +52,8 @@ class Input:
     the selection or the limit that was asked for.
 
     An input is made on the main thread, where it asks the layer what a run
-    needs to know. A run in another thread only reads the source, which is
-    made for that, and never the layer.
+    needs to know. A run in another thread never reads the layer, which the
+    main thread can change meanwhile, but the reader.
     """
 
     name: str
@@ -70,6 +77,15 @@ class Input:
     # The layer in its own file, if the tool can read it from there
     direct: Dataset | None = dataclasses.field(init=False)
     crs: QgsCoordinateReferenceSystem = dataclasses.field(init=False)
+    # The source gives its features in the order of their ids, which a part
+    # of a layer and the new features of an edit session do not
+    ordered: bool = dataclasses.field(init=False)
+    # What the features are read from. The source of the whole layer, or of
+    # the part of it in the ids or the area, reads the layer itself, so the
+    # reader is a copy of the layer as it is now, with its unsaved edits
+    reader: QgsFeatureSource | QgsAbstractFeatureSource = dataclasses.field(
+        init=False
+    )
 
     def __post_init__(self) -> None:
         layer = self.layer
@@ -90,9 +106,17 @@ class Input:
             gone='',
             direct=None,
             crs=(layer.crs() if layer is not None else self.source.sourceCrs()),
+            ordered=(
+                self.whole
+                and not self.restricted
+                and (layer is None or not added_features(layer))
+            ),
+            reader=self.source,
         )
         if layer is None or not layer.isValid():
             return
+        if self.whole or self.restricted:
+            keep(reader=QgsVectorLayerFeatureSource(layer))
         try:
             keep(path=layer_file(layer))
             if self.whole and not self.restricted:
@@ -108,6 +132,12 @@ class Input:
     @property
     def kind(self) -> str:
         return wkb_kind(self.source.wkbType())
+
+
+def added_features(layer: QgsVectorLayer) -> bool:
+    """Whether the layer has features that were added and not saved."""
+    buffer = layer.editBuffer()
+    return buffer is not None and bool(buffer.addedFeatures())
 
 
 def wkb_kind(wkb_type: t.Any) -> str:
@@ -185,7 +215,10 @@ def plain_dataset(layer: QgsVectorLayer) -> Dataset | None:
 
 def file_dataset(layer: QgsVectorLayer) -> Dataset | None:
     """The file behind a layer, if the tool also gives the features the ids
-    of the layer, which it does for the layers of a container."""
+    of the layer, which it does for the layers of a container. Curves are
+    exported as straight segments, which is what the tool reads."""
+    if QgsWkbTypes.isCurvedType(layer.wkbType()):
+        return None
     found = plain_dataset(layer)
     return found if found is not None and found.layer is not None else None
 

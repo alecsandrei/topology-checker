@@ -20,6 +20,8 @@ class Setting(Enum):
     # Processing stores its provider settings under this prefix
     EXECUTABLE = f'Processing/Configuration/{SETTING_NAME}'
     GEOMETRY = 'TopologyRules/geometry'
+    # What runs the checks: 'automatic', 'package' or 'executable'
+    ENGINE = 'TopologyRules/engine'
 
 
 class Group(Enum):

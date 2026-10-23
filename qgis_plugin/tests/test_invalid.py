@@ -10,12 +10,14 @@ from pathlib import Path
 import pytest
 from qgis.core import Qgis, QgsFeatureRequest, QgsProject, QgsVectorLayer
 
+from topology_rules.core.engine import Engine
 from topology_rules.panel.dock import Dock
 
 from .helpers import (
     add,
     click_run,
     errors_layer,
+    executable_only,
     layer_nodes,
     message_text,
     node_text,
@@ -49,8 +51,9 @@ ABORT = (
 
 
 @pytest.fixture(autouse=True)
-def ready(executable: str, provider: object) -> None:
-    """The real executable and the provider, as in a QGIS session."""
+def ready(run_engine: Engine, executable: str, provider: object) -> None:
+    """The real executable and the provider, as in a QGIS session, and
+    each of the two engines in turn."""
 
 
 def project_layer(layer: QgsVectorLayer) -> QgsVectorLayer:
@@ -282,6 +285,7 @@ FAKE_RULES = [
 ]
 
 
+@executable_only
 def test_a_feature_the_tool_rejects_is_named_by_layer_and_source_id(
     dock: Dock,
     tmp_path: Path,
