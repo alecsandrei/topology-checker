@@ -7,6 +7,7 @@ last groups read the widgets of the dock the way a user sees them.
 
 from __future__ import annotations
 
+import collections.abc as c
 import dataclasses
 import faulthandler
 import json
@@ -435,10 +436,14 @@ class Started:
 
 
 def start_algorithm(
-    name: str, parameters: dict[str, t.Any], invalid_check: t.Any = None
+    name: str,
+    parameters: dict[str, t.Any],
+    invalid_check: t.Any = None,
+    prepared: c.Callable[[], None] | None = None,
 ) -> Started:
     """Starts a provider algorithm in a task thread, as the dock and the
-    Processing dialog do, and returns at once."""
+    Processing dialog do, and returns at once. `prepared` is called once the
+    task has prepared the algorithm on the main thread, before it starts."""
     algorithm = QgsApplication.processingRegistry().createAlgorithmById(
         f'{PROVIDER_ID}:{name}'
     )
@@ -451,6 +456,8 @@ def start_algorithm(
     task = QgsProcessingAlgRunnerTask(algorithm, parameters, context, feedback)
     outcome: list[tuple[bool, dict[str, t.Any]]] = []
     task.executed.connect(lambda ok, results: outcome.append((ok, results)))
+    if prepared is not None:
+        prepared()
     QgsApplication.taskManager().addTask(task)
     return Started(outcome, context, feedback, task)
 

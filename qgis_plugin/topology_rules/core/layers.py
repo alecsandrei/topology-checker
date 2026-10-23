@@ -6,12 +6,14 @@ import typing as t
 from pathlib import Path
 
 from qgis.core import (
+    QgsAbstractFeatureSource,
     QgsCoordinateReferenceSystem,
     QgsFeatureSource,
     QgsProject,
     QgsProviderRegistry,
     QgsRectangle,
     QgsVectorLayer,
+    QgsVectorLayerFeatureSource,
     QgsWkbTypes,
 )
 
@@ -50,8 +52,8 @@ class Input:
     the selection or the limit that was asked for.
 
     An input is made on the main thread, where it asks the layer what a run
-    needs to know. A run in another thread only reads the source, which is
-    made for that, and never the layer.
+    needs to know. A run in another thread never reads the layer, which the
+    main thread can change meanwhile, but the reader.
     """
 
     name: str
@@ -78,6 +80,12 @@ class Input:
     # The source gives its features in the order of their ids, which a part
     # of a layer and the new features of an edit session do not
     ordered: bool = dataclasses.field(init=False)
+    # What the features are read from. The source of the whole layer, or of
+    # the part of it in the ids or the area, reads the layer itself, so the
+    # reader is a copy of the layer as it is now, with its unsaved edits
+    reader: QgsFeatureSource | QgsAbstractFeatureSource = dataclasses.field(
+        init=False
+    )
 
     def __post_init__(self) -> None:
         layer = self.layer
@@ -103,9 +111,12 @@ class Input:
                 and not self.restricted
                 and (layer is None or not added_features(layer))
             ),
+            reader=self.source,
         )
         if layer is None or not layer.isValid():
             return
+        if self.whole or self.restricted:
+            keep(reader=QgsVectorLayerFeatureSource(layer))
         try:
             keep(path=layer_file(layer))
             if self.whole and not self.restricted:

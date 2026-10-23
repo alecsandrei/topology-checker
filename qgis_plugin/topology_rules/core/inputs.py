@@ -9,6 +9,7 @@ from pathlib import Path
 
 from qgis.core import (
     Qgis,
+    QgsAbstractFeatureSource,
     QgsAbstractGeometry,
     QgsCoordinateReferenceSystem,
     QgsCoordinateTransform,
@@ -124,7 +125,8 @@ def invalid_reason(geometry: QgsGeometry) -> str | None:
 
 
 def features(
-    source: QgsFeatureSource, request: QgsFeatureRequest
+    source: QgsFeatureSource | QgsAbstractFeatureSource,
+    request: QgsFeatureRequest,
 ) -> c.Iterable[QgsFeature]:
     """The features of a source, with the invalid ones, which this plugin
     reports itself."""
@@ -240,10 +242,10 @@ def chosen(
         request = QgsFeatureRequest()
         request.setSubsetOfAttributes([])
         if batch is None:
-            found = features(item.source, request)
+            found = features(item.reader, request)
         else:
             request.setFilterFids(batch)
-            found = sorted(features(item.source, request), key=QgsFeature.id)
+            found = sorted(features(item.reader, request), key=QgsFeature.id)
         for feature in found:
             if feedback.isCanceled():
                 raise RunError('Canceled')
@@ -270,7 +272,7 @@ def wanted(item: Input) -> list[int] | None:
     )
     return sorted(
         feature.id()
-        for feature in features(item.source, request)
+        for feature in features(item.reader, request)
         if item.ids is None or feature.id() in item.ids
     )
 

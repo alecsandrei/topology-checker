@@ -29,6 +29,7 @@ from .helpers import (
     run_algorithm,
     save,
     saved_layer,
+    start_algorithm,
 )
 
 DANGLES = 'line_must_not_have_dangles'
@@ -179,6 +180,22 @@ def test_edits_of_a_memory_layer_during_a_run(tmp_path: Path):
         {'INPUT': layer.id()},
     )
     layer.rollBack()
+    assert ran.ok, ran.log
+    assert ran.results[COUNT] == 4
+
+
+def test_edits_after_a_run_was_asked_for_are_not_checked(tmp_path: Path):
+    """The run reads the layer as it was when it was prepared, on the main
+    thread, which goes on changing it while the run reads it."""
+    layer = saved_layer(tmp_path, CHAIN)
+    QgsProject.instance().addMapLayer(layer)
+    assert layer.startEditing()
+    feature = QgsFeature(layer.fields())
+    feature.setGeometry(QgsGeometry.fromWkt(FAR))
+    assert layer.addFeature(feature)
+    ran = start_algorithm(
+        DANGLES, {'INPUT': layer.id()}, prepared=layer.rollBack
+    ).ran()
     assert ran.ok, ran.log
     assert ran.results[COUNT] == 4
 
