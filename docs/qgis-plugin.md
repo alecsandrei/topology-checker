@@ -38,6 +38,8 @@ Open **Topology Rules** from the Vector menu or the toolbar.
 1. Pick a layer and a rule, then **Add rule**. Rules that compare two layers also ask for the other layer. Repeat for more rules.
 2. **Run** checks all the ticked rules in one pass.
 
+The gear button next to **?** sets the engine for the panel and the Processing tools: **Automatic** (the Python package where QGIS can use it, else the CLI), **Python package** or **Executable**. Its menu also installs, updates or removes the Python package, and has **Choose executable…**. With only the CLI, the panel offers the package once.
+
 The errors are a tree by rule and kind. Selecting one zooms to it, highlights it and filters the map to its group. **Select features** selects the features an error is about, and **Ignore error** hides an error until you stop ignoring it, also in later runs.
 
 Under **Options**, **Selected features only** and **Only the visible extent** limit the layer each rule checks, not the layer it is checked against. **Export…** writes the ticked rules as a `topology.toml` for the [CLI](cli.md#check-a-topology-definition), saving layers that are not files of their own in a GeoPackage next to it. **Import…** reads one. The list, the options and the ignored errors are saved with the project.
