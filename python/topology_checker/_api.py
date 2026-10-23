@@ -8,13 +8,9 @@ import threading
 from collections.abc import Generator, Iterable
 from contextlib import contextmanager
 from types import MappingProxyType
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast, overload
 
-import shapely
-from pyproj import CRS
-from shapely.geometry import LineString
-
-from . import _native
+from . import _native, _optional
 from ._enums import ErrorType, GeometryKind, Rule, resolve
 from ._input import Prepared, prepare
 from ._models import (
@@ -27,6 +23,12 @@ from ._models import (
     new_layer_id,
 )
 from ._stream import ValidationStream, decode, warning_messages
+
+if TYPE_CHECKING:
+    from pyproj import CRS
+    from shapely.geometry import LineString
+
+WKBItem = bytes | bytearray | memoryview
 
 
 def _tolerance(value: object) -> float:
@@ -124,9 +126,13 @@ class Topology:
     ) -> LayerId:
         """Snapshot and register GIS data as a planar layer.
 
+        WKB items (bytes, bytearray or memoryview, ISO or extended WKB) need no
+        optional dependency. None items are missing features. WKB carries no CRS.
+
         Args:
-            data: Geometry iterable, GeoSeries, GeoDataFrame, GeoJSON mapping,
-                or object implementing __geo_interface__.
+            data: Sequence of WKB items or shapely geometries, GeoSeries,
+                GeoDataFrame, GeoJSON mapping, or object implementing
+                __geo_interface__.
             name: Optional display label. Defaults to layer_N using registration order.
             fids: Unique signed 64-bit IDs for all original input positions.
             crs: Optional CRS, which must agree with input and known layer metadata.
@@ -137,7 +143,9 @@ class Topology:
 
         Raises:
             TypeError: Input data, the name, or the declaration has an unsupported type.
-            ValueError: Coordinates, FIDs, geometry, or CRS metadata are invalid.
+            ValueError: Coordinates, FIDs, geometry, or CRS metadata are invalid,
+                or a WKB item is unreadable; the message names the layer and FID.
+            ImportError: Shapely, GeoJSON or CRS input needs topology-checker[io].
             RuntimeError: An input callback tries to register on this topology.
         """
         if name is not None and not isinstance(cast(object, name), str):
@@ -171,7 +179,7 @@ class Topology:
             new_layer_id(self._owner, index),
             name,
             tuple(fid for fid, _ in prepared.features),
-            prepared.geometries,
+            prepared.wkb,
             prepared.crs,
             MappingProxyType(prepared.parts),
             prepared.warnings,
@@ -185,16 +193,19 @@ class Topology:
 
         Args:
             rule: Rule member. Deserialize strings explicitly with Rule(value).
-            data: Primary GIS input or a LayerId from this topology.
-            other: Optional secondary GIS input or distinct registered LayerId.
+            data: Primary input accepted by add_layer, or a LayerId from this
+                topology.
+            other: Optional secondary input or distinct registered LayerId.
 
         Returns:
             The immutable specification, including reusable IDs and native semantics.
 
         Raises:
             TypeError: The rule or input has an unsupported type.
-            ValueError: IDs, families, arity, coordinates, FIDs, or CRS are invalid.
-                Failed calls leave registrations and visible warnings unchanged.
+            ValueError: IDs, families, arity, coordinates, FIDs, WKB, or CRS are
+                invalid. Failed calls leave registrations and visible warnings
+                unchanged.
+            ImportError: Shapely, GeoJSON or CRS input needs topology-checker[io].
             RuntimeError: An input callback tries to register on this topology.
         """
         if not isinstance(cast(object, rule), Rule):
@@ -317,7 +328,25 @@ class Topology:
             )
 
 
-def merge_lines(data: Any, tolerance: float = 0.0) -> tuple[LineString, ...]:
+def _lines(prepared: Prepared, output: list[bytes]) -> tuple[Any, ...]:
+    """Return WKB for WKB input, otherwise shapely LineStrings."""
+    if prepared.wkb_only:
+        return tuple(output)
+    shapely = _optional.shapely()
+    decoded = shapely.from_wkb(output)  # pyright: ignore[reportUnknownMemberType]
+    return tuple(cast("list[LineString]", decoded.tolist()))
+
+
+# WKB-only input returns WKB; the broader overload covers every other input.
+@overload
+def merge_lines(  # pyright: ignore[reportOverlappingOverload]
+    data: Iterable[WKBItem | None], tolerance: float = 0.0
+) -> tuple[bytes, ...]: ...
+@overload
+def merge_lines(data: Any, tolerance: float = 0.0) -> tuple[LineString, ...]: ...
+def merge_lines(
+    data: Any, tolerance: float = 0.0
+) -> tuple[bytes, ...] | tuple[LineString, ...]:
     """Merge line parts through degree-two endpoint joins in native Rust.
 
     Args:
@@ -325,27 +354,29 @@ def merge_lines(data: Any, tolerance: float = 0.0) -> tuple[LineString, ...]:
         tolerance: Nonnegative finite distance in planar coordinate units.
 
     Returns:
-        Shapely LineStrings in deterministic contributing-part order.
+        Lines in deterministic contributing-part order: 2D ISO WKB for WKB
+        input, otherwise shapely LineStrings.
     """
     value = _tolerance(tolerance)
     prepared = prepare(data, "merge-lines")
-    return tuple(
-        cast(LineString, shapely.from_wkb(bytes(wkb)))
-        for wkb in _native.lines([wkb for _, wkb in prepared.features], value)
-    )
+    return _lines(prepared, _native.lines([wkb for _, wkb in prepared.features], value))
 
 
-def explode_lines(data: Any) -> tuple[LineString, ...]:
+@overload
+def explode_lines(  # pyright: ignore[reportOverlappingOverload]
+    data: Iterable[WKBItem | None],
+) -> tuple[bytes, ...]: ...
+@overload
+def explode_lines(data: Any) -> tuple[LineString, ...]: ...
+def explode_lines(data: Any) -> tuple[bytes, ...] | tuple[LineString, ...]:
     """Return native line segments preserving input part order and direction.
 
     Args:
         data: Any supported layer input containing only line geometries.
 
     Returns:
-        Shapely LineStrings, with degenerate parts skipped.
+        Segments, with degenerate parts skipped: 2D ISO WKB for WKB input,
+        otherwise shapely LineStrings.
     """
     prepared = prepare(data, "explode-lines")
-    return tuple(
-        cast(LineString, shapely.from_wkb(bytes(wkb)))
-        for wkb in _native.lines([wkb for _, wkb in prepared.features])
-    )
+    return _lines(prepared, _native.lines([wkb for _, wkb in prepared.features]))

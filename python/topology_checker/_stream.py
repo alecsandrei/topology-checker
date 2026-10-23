@@ -5,13 +5,14 @@ from __future__ import annotations
 from collections.abc import Iterator
 from dataclasses import dataclass
 from types import MappingProxyType, TracebackType
-
-import shapely
-from pyproj import CRS
+from typing import TYPE_CHECKING
 
 from . import _native
 from ._enums import ErrorType
 from ._models import FeatureRef, Layer, RuleSpec, Violation
+
+if TYPE_CHECKING:
+    from pyproj import CRS
 
 
 @dataclass(frozen=True)
@@ -53,7 +54,7 @@ def decode(
     layers: tuple[Layer, ...],
     specs: tuple[RuleSpec, ...],
 ) -> Violation:
-    """Decode binary WKB with provenance scoped to the captured topology."""
+    """Wrap native WKB with provenance scoped to the captured topology."""
 
     def reference(value: tuple[int, int, int | None] | None) -> FeatureRef | None:
         return None if value is None else layers[value[0]].reference(value[1], value[2])
@@ -62,7 +63,7 @@ def decode(
     return Violation(
         spec.rule,
         ErrorType(error.error_type),
-        shapely.from_wkb(error.wkb),
+        error.wkb,
         reference(error.origin),
         reference(error.destination),
         spec.resolved_rule,

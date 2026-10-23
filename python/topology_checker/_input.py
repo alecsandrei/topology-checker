@@ -7,55 +7,58 @@ import operator
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from numbers import Real
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, cast
 
-import shapely
-from pyproj import CRS
-from pyproj.exceptions import CRSError
-from shapely.geometry import (
-    GeometryCollection,
-    MultiLineString,
-    MultiPoint,
-    MultiPolygon,
-    shape,
-)
-from shapely.geometry.base import BaseGeometry
-
+from . import _native, _optional
 from ._enums import GeometryKind
 
-_FAMILIES = {
-    "Point": GeometryKind.POINT,
-    "MultiPoint": GeometryKind.POINT,
-    "LineString": GeometryKind.LINE,
-    "LinearRing": GeometryKind.LINE,
-    "MultiLineString": GeometryKind.LINE,
-    "Polygon": GeometryKind.POLYGON,
-    "MultiPolygon": GeometryKind.POLYGON,
-}
+if TYPE_CHECKING:
+    from pyproj import CRS
+    from shapely.geometry.base import BaseGeometry
+
+_GEOJSON_TYPES = frozenset(
+    {
+        "Point",
+        "LineString",
+        "LinearRing",
+        "Polygon",
+        "MultiPoint",
+        "MultiLineString",
+        "MultiPolygon",
+        "GeometryCollection",
+    }
+)
 
 
 @dataclass(frozen=True)
 class Prepared:
-    """Owned input snapshot and original part positions."""
+    """Owned input snapshot and original part positions.
+
+    Parts only list features that lost empty parts; others keep native numbering.
+    """
 
     features: tuple[tuple[int, bytes], ...]
-    geometries: tuple[BaseGeometry, ...]
+    wkb: tuple[bytes, ...]
     parts: dict[int, tuple[int, ...]]
     crs: CRS | None
     warnings: tuple[str, ...]
     kind: GeometryKind | None
+    wkb_only: bool
 
 
 def resolve_crs(value: Any) -> CRS | None:
     """Parse known metadata or raise ValueError for an invalid CRS."""
     if value is None:
         return None
+    crs_class = _optional.crs_class()
+    from pyproj.exceptions import CRSError
+
     try:
         if isinstance(value, Mapping):
             metadata = cast(Mapping[str, Any], value)
             if metadata.get("type") == "name":
                 value = metadata["properties"]["name"]
-        return CRS.from_user_input(value)  # pyright: ignore[reportUnknownMemberType]
+        return crs_class.from_user_input(value)  # pyright: ignore[reportUnknownMemberType]
     except (CRSError, KeyError, TypeError, ValueError) as exc:
         raise ValueError(f"invalid CRS: {value!r}") from exc
 
@@ -64,8 +67,12 @@ def _items(data: Any) -> tuple[list[Any], Any]:
     """Read geometry values and inferred CRS from an input adapter."""
     if hasattr(data, "geometry") and hasattr(data, "crs"):
         return list(data.geometry), data.crs
-    if isinstance(data, BaseGeometry) or data is None:
+    if data is None or _optional.is_geometry(data):
         return [data], None
+    if isinstance(data, (str, bytes, bytearray, memoryview)):
+        raise TypeError(
+            "data must be geometries, WKB items, a GIS object, or a GeoJSON mapping"
+        )
     if hasattr(data, "__geo_interface__"):
         metadata = getattr(data, "crs", None)
         items, embedded = _items(data.__geo_interface__)
@@ -87,21 +94,23 @@ def _items(data: Any) -> tuple[list[Any], Any]:
         if kind == "Feature":
             return [mapping_data.get("geometry")], mapping_data.get("crs")
         return [mapping_data], mapping_data.get("crs")
-    if isinstance(data, (str, bytes)) or not isinstance(data, Iterable):
-        raise TypeError("data must be geometries, a GIS object, or a GeoJSON mapping")
+    if not isinstance(data, Iterable):
+        raise TypeError(
+            "data must be geometries, WKB items, a GIS object, or a GeoJSON mapping"
+        )
     return list(cast(Iterable[Any], data)), None
 
 
 def _geometry(value: Any) -> BaseGeometry | None:
-    """Convert a single item while distinguishing missing and invalid input."""
+    """Convert a non-WKB item while distinguishing missing and invalid input."""
     if value is None:
         return None
     if isinstance(value, Real):
         if math.isnan(value):
             return None
         raise TypeError(f"unsupported geometry type: {type(value).__name__}")
-    if isinstance(value, BaseGeometry):
-        return value
+    if _optional.is_geometry(value):
+        return cast("BaseGeometry", value)
     if hasattr(value, "__geo_interface__"):
         value = value.__geo_interface__
     if not isinstance(value, Mapping):
@@ -109,73 +118,49 @@ def _geometry(value: Any) -> BaseGeometry | None:
     geometry_data = cast(Mapping[str, Any], value)
     if geometry_data.get("type") == "Feature":
         return _geometry(geometry_data.get("geometry"))
-    supported = {
-        "Point",
-        "LineString",
-        "LinearRing",
-        "Polygon",
-        "MultiPoint",
-        "MultiLineString",
-        "MultiPolygon",
-        "GeometryCollection",
-    }
-    if geometry_data.get("type") not in supported:
+    if geometry_data.get("type") not in _GEOJSON_TYPES:
         raise TypeError(
             f"unsupported GeoJSON geometry type: {geometry_data.get('type')!r}"
         )
+    shapely = _optional.shapely()
     try:
-        return shape(dict(geometry_data))
+        return shapely.geometry.shape(dict(geometry_data))
     except (KeyError, TypeError, ValueError, shapely.errors.GEOSException) as exc:
         raise ValueError("invalid GeoJSON geometry") from exc
 
 
-def _normalize(
-    geometry: BaseGeometry,
-    families: set[GeometryKind],
-    hints: set[GeometryKind],
-) -> tuple[BaseGeometry | None, tuple[int, ...], int]:
-    """Remove empty leaves and map normalized parts to depth-first input positions."""
-    positions: list[int] = []
-    skipped = 0
-    position = 0
+def _wkb_items(items: list[Any]) -> tuple[list[bytes | None], bool]:
+    """Read WKB items as bytes and encode other geometries as ISO WKB.
 
-    def visit(item: BaseGeometry) -> BaseGeometry | None:
-        nonlocal position, skipped
-        kind = _FAMILIES.get(item.geom_type)
-        if item.is_empty and kind is not None:
-            hints.add(kind)
-        if item.geom_type in {
-            "MultiPoint",
-            "MultiLineString",
-            "MultiPolygon",
-            "GeometryCollection",
-        }:
-            children = [
-                clean
-                for child in cast(Any, item).geoms
-                if (clean := visit(child)) is not None
-            ]
-            if not children:
-                return None
-            constructors: dict[str, Any] = {
-                "MultiPoint": MultiPoint,
-                "MultiLineString": MultiLineString,
-                "MultiPolygon": MultiPolygon,
-                "GeometryCollection": GeometryCollection,
-            }
-            return cast(BaseGeometry, constructors[item.geom_type](children))
-        original = position
-        position += 1
-        if item.is_empty:
-            skipped += 1
-            return None
-        if kind is not None:
-            families.add(kind)
-        positions.append(original)
-        return item
-
-    clean = visit(geometry)
-    return clean, tuple(positions), skipped
+    Returns:
+        One WKB value or None (missing) per input, and whether every present
+        input was already WKB.
+    """
+    values: list[bytes | None] = []
+    pending: list[tuple[int, BaseGeometry]] = []
+    for index, value in enumerate(items):
+        if isinstance(value, bytes):
+            values.append(value)
+        elif isinstance(value, (bytearray, memoryview)):
+            values.append(bytes(cast("bytearray | memoryview[int]", value)))
+        else:
+            values.append(None)
+            if (geometry := _geometry(value)) is not None:
+                pending.append((index, geometry))
+    if pending:
+        shapely = _optional.shapely()
+        # Three output dimensions keep a Z or M flag, which triggers the warning.
+        encoded = cast(
+            list[bytes],
+            shapely.to_wkb(  # pyright: ignore[reportUnknownMemberType]
+                [geometry for _, geometry in pending],
+                output_dimension=3,
+                flavor="iso",
+            ).tolist(),
+        )
+        for (index, _), wkb in zip(pending, encoded, strict=True):
+            values[index] = wkb
+    return values, not pending
 
 
 def _fids(values: Iterable[int] | None, length: int) -> list[int]:
@@ -210,7 +195,7 @@ def prepare(
     """Copy inputs, validate metadata, and normalize empty components.
 
     Args:
-        data: Geometry iterable, GIS object, or GeoJSON mapping.
+        data: WKB items, geometry iterable, GIS object, or GeoJSON mapping.
         name: Display name used in warnings.
         fids: Optional unique signed feature IDs for all original positions.
         crs: Optional CRS, which must agree with inferred metadata.
@@ -221,7 +206,8 @@ def prepare(
 
     Raises:
         TypeError: An input geometry, adapter, or declaration type is unsupported.
-        ValueError: FIDs, coordinates, geometry data, or CRS metadata are invalid.
+        ValueError: FIDs, WKB, geometry data, or CRS metadata are invalid.
+        ImportError: Shapely or CRS input needs topology-checker[io].
     """
     if kind is not None:
         if not isinstance(cast(object, kind), GeometryKind):
@@ -234,37 +220,12 @@ def prepare(
         if not explicit_crs.equals(inferred_crs, ignore_axis_order=True):
             raise ValueError("explicit CRS conflicts with input CRS metadata")
     ids = _fids(fids, len(items))
-    features: list[tuple[int, bytes]] = []
-    snapshots: list[BaseGeometry] = []
-    parts: dict[int, tuple[int, ...]] = {}
-    warnings: list[str] = []
-    families: set[GeometryKind] = set()
-    hints: set[GeometryKind] = set()
-    for position, (fid, value) in enumerate(zip(ids, items, strict=True)):
-        geometry = _geometry(value)
-        if geometry is None or geometry.is_empty:
-            if geometry is not None:
-                _normalize(geometry, families, hints)
-            warnings.append(
-                f"layer {name}, input {position}, FID {fid}: skipped "
-                f"{'missing' if geometry is None else 'empty'} feature"
-            )
-            continue
-        # Third-party stubs leave NumPy-style keyword arguments untyped.
-        dimension = shapely.get_coordinate_dimension(geometry)  # pyright: ignore[reportUnknownMemberType]
-        if int(dimension) > 2:
-            warnings.append(f"layer {name}, FID {fid}: discarded extra dimensions")
-        # WKB provides an immutable XY snapshot, even for custom GIS adapters.
-        snapshot = shapely.from_wkb(
-            shapely.to_wkb(geometry, output_dimension=2, flavor="iso")
-        )
-        clean, positions, skipped = _normalize(snapshot, families, hints)
-        assert clean is not None
-        if skipped:
-            warnings.append(f"layer {name}, FID {fid}: skipped {skipped} empty parts")
-        features.append((fid, shapely.to_wkb(clean, output_dimension=2)))
-        snapshots.append(snapshot)
-        parts[fid] = positions
+    values, wkb_only = _wkb_items(items)
+    features, snapshots, parts, warnings, family_names, hint_names = _native.prepare(
+        name, ids, values
+    )
+    families = {GeometryKind(value) for value in family_names}
+    hints = {GeometryKind(value) for value in hint_names}
     if kind is not None and families - {kind}:
         raise ValueError(
             "declared kind conflicts with retained nonempty geometry parts"
@@ -281,8 +242,9 @@ def prepare(
     return Prepared(
         tuple(features),
         tuple(snapshots),
-        parts,
+        {fid: tuple(positions) for fid, positions in parts},
         explicit_crs if explicit_crs is not None else inferred_crs,
         tuple(warnings),
         kind if kind is not None else inferred_kind,
+        wkb_only,
     )
