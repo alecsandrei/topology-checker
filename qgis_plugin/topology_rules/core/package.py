@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import collections.abc as c
 import dataclasses
-import math
 import typing as t
 
 from qgis.core import (
@@ -21,7 +20,6 @@ from qgis.core import (
     QgsGeometry,
     QgsProcessingContext,
     QgsProcessingFeedback,
-    QgsUnitTypes,
     QgsVectorFileWriter,
     QgsVectorLayer,
     QgsWkbTypes,
@@ -40,6 +38,7 @@ from .inputs import (
     left_out,
     not_finite,
     own_file,
+    reconnect,
     reprojection,
     require_readable,
     stem,
@@ -47,7 +46,7 @@ from .inputs import (
     write,
 )
 from .invalid import FIELDS, Invalid, Rejected, parse_failure
-from .layers import Dataset, Input, wkb_kind
+from .layers import Dataset, Input, default_tolerance, geographic, wkb_kind
 
 if t.TYPE_CHECKING:
     import topology_checker as tc
@@ -93,21 +92,6 @@ def rules() -> tuple[Rule, ...]:
                     )
                 )
     return tuple(found)
-
-
-def default_tolerance(crs: QgsCoordinateReferenceSystem) -> float:
-    """The tolerance of a run that names none, as the executable has it:
-    1e-8 in degrees, a millimetre in a projected CRS, and none in another."""
-    if not crs.isValid():
-        return 0.0
-    if crs.isGeographic():
-        return 1e-8
-    if crs.type() != Qgis.CrsType.Projected:
-        return 0.0
-    metres = QgsUnitTypes.fromUnitToUnitFactor(
-        crs.mapUnits(), Qgis.DistanceUnit.Meters
-    )
-    return 0.001 / metres if math.isfinite(metres) and metres > 0 else 0.0
 
 
 @dataclasses.dataclass(frozen=True)
@@ -168,9 +152,17 @@ def read(
     skip: t.Mapping[int, str],
     context: QgsProcessingContext,
     feedback: QgsProcessingFeedback,
+    exported: bool | None = None,
 ) -> Snapshot:
-    """The features of the input for the package, in the target CRS."""
+    """The features of the input for the package, in the target CRS.
+
+    Exported says whether the executable would read an export of the input
+    rather than its file, which by default is whether the input is checked.
+    """
     require_readable(item)
+    # A connection that QGIS broke earlier hides features from the run, and
+    # from the map
+    reconnect(item)
     transform = reprojection(item, target, context, feedback)
     crs = (
         item.source.sourceCrs()
@@ -183,7 +175,12 @@ def read(
     nulls = empties = flattened = 0
     for fid, geometry in geometries(item, transform, feedback):
         if geometry.isNull():
-            nulls += 1
+            # QGIS exports a missing geometry as an empty one, which is how
+            # the executable then counts it
+            if checked if exported is None else exported:
+                empties += 1
+            else:
+                nulls += 1
             continue
         # QGIS takes a point with one coordinate that is not a number for an
         # empty one, which the executable rejects
@@ -340,7 +337,7 @@ def run_once(
         for note in entry.snapshot.notes(entry.name)
     ]:
         feedback.pushInfo(f'warning: {warning}')
-    if crs.isGeographic() and tolerance > 0:
+    if geographic(crs) and tolerance > 0:
         feedback.pushInfo(f'warning: {ANGULAR}')
     feedback.setProgress(100)
     return Outcome(
@@ -555,7 +552,9 @@ def run_utility(
     left out, which it returns."""
     import topology_checker as tc
 
-    snapshot = read(item, None, True, {}, context, feedback)
+    # The executable reads the file of the layer where it can, as it is
+    exported = own_file(item, None) is None
+    snapshot = read(item, None, True, {}, context, feedback, exported)
     name = stem(item.name)
     tolerance = default_tolerance(snapshot.crs)
     topology = tc.Topology(tolerance)
@@ -570,7 +569,7 @@ def run_utility(
         raise RunError(str(error)) from error
     for warning in [*topology.warnings(), *snapshot.notes(name)]:
         feedback.pushInfo(f'warning: {warning}')
-    if snapshot.crs.isGeographic() and tolerance > 0:
+    if geographic(snapshot.crs) and tolerance > 0:
         feedback.pushInfo(f'warning: {ANGULAR}')
     layer = UTILITY_LAYERS[command]
     fields = QgsVectorLayer('None', 'fields', 'memory').fields()

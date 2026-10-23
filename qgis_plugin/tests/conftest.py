@@ -22,20 +22,27 @@ from qgis.PyQt.QtCore import QSettings
 from qgis.PyQt.QtGui import QFontDatabase, QFontInfo
 from qgis.PyQt.QtWidgets import QApplication, QMainWindow
 
-from topology_rules.core import binary, engine
+from topology_rules.core import binary
 from topology_rules.core.engine import Engine, Package
 from topology_rules.enums import Setting
-from topology_rules.exceptions import ExecutableError, PackageError
+from topology_rules.exceptions import ExecutableError
 from topology_rules.panel.dock import Dock
 from topology_rules.panel.rules_page import COLLAPSED
 from topology_rules.provider import Provider
 
-from .helpers import choose_engine, real_executable, wait_for
+from .helpers import (
+    choose_engine,
+    isolate_network_cache,
+    real_executable,
+    usable_package,
+    wait_for,
+)
 
 
 @pytest.hookimpl(trylast=True)
 def pytest_configure(config: pytest.Config) -> None:
-    """Gives the settings of QGIS a folder for this run alone.
+    """Gives the settings of QGIS a folder for this run alone, with the
+    network cache in it.
 
     pytest-qgis keeps them in `.qgis-settings` of the project, which every
     run from the project shares, and so shares the path of the executable
@@ -46,6 +53,7 @@ def pytest_configure(config: pytest.Config) -> None:
     QSettings.setPath(
         QSettings.Format.IniFormat, QSettings.Scope.UserScope, folder
     )
+    isolate_network_cache(Path(folder) / 'cache')
 
 
 # The size of the text of a user interface, in pixels: 9 points at 96 dpi,
@@ -160,11 +168,8 @@ def executable_engine() -> c.Iterator[None]:
 @pytest.fixture
 def package() -> Package:
     """The Python package, skipping, with the reason, where QGIS cannot use
-    it."""
-    try:
-        return engine.find_package()
-    except PackageError as error:
-        pytest.skip(str(error))
+    it, unless TOPOLOGY_CHECKER_PACKAGE is 1."""
+    return usable_package()
 
 
 def executable_unused() -> Path:

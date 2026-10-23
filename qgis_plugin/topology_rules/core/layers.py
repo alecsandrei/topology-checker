@@ -1,24 +1,27 @@
 from __future__ import annotations
 
 import dataclasses
+import math
 import os
 import typing as t
 from pathlib import Path
 
 from qgis.core import (
+    Qgis,
     QgsAbstractFeatureSource,
     QgsCoordinateReferenceSystem,
     QgsFeatureSource,
     QgsProject,
     QgsProviderRegistry,
     QgsRectangle,
+    QgsUnitTypes,
     QgsVectorLayer,
     QgsVectorLayerFeatureSource,
     QgsWkbTypes,
 )
 
 from ..exceptions import RunError
-from ..utils import not_none
+from ..utils import named, not_none
 from .binary import readable_extensions
 
 # Formats with several layers per file, which need the layer name. Their
@@ -76,6 +79,9 @@ class Input:
     gone: str = dataclasses.field(init=False)
     # The layer in its own file, if the tool can read it from there
     direct: Dataset | None = dataclasses.field(init=False)
+    # The source of a layer in a GeoPackage, which QGIS may have to open
+    # again to read it (see inputs.reconnect)
+    shared: str | None = dataclasses.field(init=False)
     crs: QgsCoordinateReferenceSystem = dataclasses.field(init=False)
     # The source gives its features in the order of their ids, which a part
     # of a layer and the new features of an edit session do not
@@ -105,6 +111,7 @@ class Input:
             path=None,
             gone='',
             direct=None,
+            shared=None,
             crs=(layer.crs() if layer is not None else self.source.sourceCrs()),
             ordered=(
                 self.whole
@@ -115,6 +122,7 @@ class Input:
         )
         if layer is None or not layer.isValid():
             return
+        keep(shared=geopackage_source(layer))
         if self.whole or self.restricted:
             keep(reader=QgsVectorLayerFeatureSource(layer))
         try:
@@ -138,6 +146,18 @@ def added_features(layer: QgsVectorLayer) -> bool:
     """Whether the layer has features that were added and not saved."""
     buffer = layer.editBuffer()
     return buffer is not None and bool(buffer.addedFeatures())
+
+
+def geopackage_source(layer: QgsVectorLayer) -> str | None:
+    """The source of the provider of a layer in a GeoPackage."""
+    provider = layer.dataProvider()
+    if (
+        layer.providerType() != 'ogr'
+        or provider is None
+        or provider.storageType() != 'GPKG'
+    ):
+        return None
+    return provider.dataSourceUri()
 
 
 def wkb_kind(wkb_type: t.Any) -> str:
@@ -228,3 +248,89 @@ def project_layer(layer_id: str | None) -> QgsVectorLayer | None:
         return None
     layer = not_none(QgsProject.instance()).mapLayer(layer_id)
     return layer if isinstance(layer, QgsVectorLayer) else None
+
+
+# The CRS in which distances are measured
+
+
+def wkt_parts(wkt: str) -> list[str]:
+    """The parts of the outer WKT element, such as the source and target of
+    BOUNDCRS[SOURCECRS[...],TARGETCRS[...],...]."""
+    parts: list[str] = []
+    start = wkt.find('[') + 1
+    depth = 0
+    quoted = False
+    for at in range(start if start else len(wkt), len(wkt)):
+        char = wkt[at]
+        if char == '"':
+            # A quote in a text is doubled, and turns this twice
+            quoted = not quoted
+        elif quoted:
+            continue
+        elif char in '[(':
+            depth += 1
+        elif char in '])' and depth:
+            depth -= 1
+        elif char in '])' or (char == ',' and not depth):
+            parts.append(wkt[start:at].strip())
+            if char != ',':
+                break
+            start = at + 1
+    return parts
+
+
+def horizontal(
+    crs: QgsCoordinateReferenceSystem,
+) -> QgsCoordinateReferenceSystem:
+    """The CRS in which the executable measures distances: the horizontal
+    part of a compound CRS, and the source of a bound CRS, which adds a datum
+    shift to WGS 84 to it. QGIS takes a bound CRS for neither geographic nor
+    projected, and gives no units for a compound CRS with a bound part."""
+    scoped = getattr(Qgis, 'CrsWktVariant', None)
+    variant = (
+        scoped.Wkt2_2019
+        if scoped is not None
+        else named(QgsCoordinateReferenceSystem, 'WKT2_2019')
+    )
+    # A bound CRS can be the horizontal part of a compound one
+    for _ in range(3):
+        if crs.type() == Qgis.CrsType.Bound:
+            # BOUNDCRS[SOURCECRS[...],TARGETCRS[...],...]
+            source = wkt_parts(crs.toWkt(variant))[:1]
+            found = wkt_parts(source[0])[:1] if source else []
+        elif crs.type() == Qgis.CrsType.Compound:
+            # COMPOUNDCRS["name",horizontal,vertical]
+            found = wkt_parts(crs.toWkt(variant))[1:2]
+        else:
+            break
+        part = QgsCoordinateReferenceSystem.fromWkt(found[0]) if found else None
+        if part is None or not part.isValid():
+            break
+        crs = part
+    return crs
+
+
+def geographic(crs: QgsCoordinateReferenceSystem) -> bool:
+    """Whether the executable measures distances in degrees in the CRS.
+    QGIS takes only a geographic CRS of its database for geographic."""
+    found = horizontal(crs)
+    return found.isGeographic() or found.type() in (
+        Qgis.CrsType.Geographic2d,
+        Qgis.CrsType.Geographic3d,
+    )
+
+
+def default_tolerance(crs: QgsCoordinateReferenceSystem) -> float:
+    """The tolerance of a run that names none, as the executable has it:
+    1e-8 in degrees, a millimetre in a projected CRS, and none in another."""
+    if geographic(crs):
+        return 1e-8
+    found = horizontal(crs)
+    units = found.mapUnits()
+    if (
+        found.type() not in (Qgis.CrsType.Projected, Qgis.CrsType.Compound)
+        or QgsUnitTypes.unitType(units) != Qgis.DistanceUnitType.Standard
+    ):
+        return 0.0
+    metres = QgsUnitTypes.fromUnitToUnitFactor(units, Qgis.DistanceUnit.Meters)
+    return 0.001 / metres if math.isfinite(metres) and metres > 0 else 0.0

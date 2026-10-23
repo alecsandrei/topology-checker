@@ -34,12 +34,14 @@ from topology_rules.panel.dock import Dock
 from topology_rules.provider import Provider
 
 from .helpers import (
+    NEEDS_PACKAGE,
     Ran,
     choose_engine,
     errors_layer,
     line_layer,
     run_algorithm,
     start_algorithm,
+    usable_package,
     wait_for,
 )
 
@@ -201,6 +203,30 @@ def test_a_package_that_gives_no_wkb_of_the_errors_is_too_old(
     monkeypatch.setitem(sys.modules, engine.MODULE, package_module(Violation))
     with pytest.raises(PackageError, match=r'too old .* no Violation\.wkb'):
         engine.find_package()
+
+
+@pytest.mark.parametrize('needed', [False, True], ids=['skips', 'fails'])
+@pytest.mark.parametrize('old', [False, True], ids=['missing', 'too old'])
+def test_the_tests_of_the_package_fail_without_it_where_they_need_it(
+    monkeypatch: pytest.MonkeyPatch, needed: bool, old: bool
+):
+    """A run that is to test the package cannot pass by skipping them."""
+    if old:
+        module = types.ModuleType(engine.MODULE)
+        module.__file__ = str(Path('somewhere', engine.MODULE, '__init__.py'))
+        monkeypatch.setitem(sys.modules, engine.MODULE, module)
+    else:
+        without_package(monkeypatch)
+    if needed:
+        monkeypatch.setenv(NEEDS_PACKAGE, '1')
+    else:
+        monkeypatch.delenv(NEEDS_PACKAGE, raising=False)
+    reason = 'too old' if old else 'cannot be imported'
+    with pytest.raises(
+        pytest.fail.Exception if needed else pytest.skip.Exception,
+        match=reason,
+    ):
+        usable_package()
 
 
 @pytest.mark.parametrize('field', [True, False], ids=['field', 'property'])

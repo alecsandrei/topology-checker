@@ -237,7 +237,7 @@ jobs:
           path: wheel
 
       # Into a folder on the path, as the plugin installs it, without
-      # dependencies. The plugin must find it, or its tests would be skipped
+      # dependencies. The plugin must find it, or its tests fail
       - name: Install the Python package
         if: matrix.package
         run: |
@@ -248,8 +248,11 @@ jobs:
       # All the tests, the slow ones too (`-m ""` replaces the default of
       # pyproject.toml). `-ra` lists why each test failed or was skipped, the
       # slowest tests are shown, and a test stuck for ten minutes dumps the
-      # stacks of all the threads
+      # stacks of all the threads. With the package installed, its tests fail
+      # rather than skip where the plugin cannot use it
       - name: Pytest
+        env:
+          TOPOLOGY_CHECKER_PACKAGE: ${{ matrix.package && '1' || '' }}
         run: |
           chmod +x "$GITHUB_WORKSPACE/bin/topology-checker"
           TOPOLOGY_CHECKER="$GITHUB_WORKSPACE/bin/topology-checker" uv run pytest -m "" -ra --durations=30 -o faulthandler_timeout=600

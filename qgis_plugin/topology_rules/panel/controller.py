@@ -8,6 +8,7 @@ from pathlib import Path
 from qgis.core import (
     Qgis,
     QgsApplication,
+    QgsCoordinateReferenceSystem,
     QgsProcessingAlgRunnerTask,
     QgsProcessingContext,
     QgsProcessingUtils,
@@ -35,13 +36,15 @@ ERRORS_TAB = 1
 
 @dataclasses.dataclass(eq=False)
 class Run:
-    """A run in progress: its task, what the task works with, and the rules
-    it was started with."""
+    """A run in progress: its task, what the task works with, the rules it
+    was started with, and the CRS of its errors, which is that of the first
+    layer."""
 
     task: QgsProcessingAlgRunnerTask
     context: QgsProcessingContext
     feedback: RunFeedback
     entries: list[Entry]
+    crs: QgsCoordinateReferenceSystem
 
 
 # A task works with its context and feedback in another thread, so they stay
@@ -84,7 +87,9 @@ def start(dock: Dock) -> None:
         context,
         feedback,
     )
-    run = Run(task, context, feedback, list(todo))
+    first = project_layer(todo[0].layer)
+    crs = QgsCoordinateReferenceSystem() if first is None else first.crs()
+    run = Run(task, context, feedback, list(todo), crs)
     LIVE.add(run)
     dock.run, dock.task = run, task
     dock.context, dock.feedback = context, feedback
@@ -140,7 +145,9 @@ def finish(dock: Dock, run: Run, ok: bool, results: dict[str, t.Any]) -> None:
     for entry, count in zip(todo, counts, strict=False):
         entry.errors = int(count)
     dock.rule_list.show_entries()
-    show_errors(dock, todo, Path(str(results[OUTPUT])), results, counts)
+    show_errors(
+        dock, todo, Path(str(results[OUTPUT])), results, counts, run.crs
+    )
     recount(dock)
     total = len(dock.results.active())
     ignored = len(dock.results.rows) - total
@@ -187,6 +194,7 @@ def show_errors(
     path: Path,
     results: dict[str, t.Any],
     counts: list[int],
+    crs: QgsCoordinateReferenceSystem,
 ) -> None:
     """Replaces the errors of the last run with those of this one."""
     dock.results.clear()
@@ -203,7 +211,7 @@ def show_errors(
     legend = dock.legends[ColourBy.RULE_AND_LAYER]
     grouping, labels = legend.grouping, dict(legend.labels)
     dock.run_keys = {entry.key: f'e{i}' for i, entry in enumerate(todo)}
-    rows = read_rows(add_errors(path, dock.legends), names, grouping)
+    rows = read_rows(add_errors(path, dock.legends, crs), names, grouping)
     dock.results.show_rows(rows, layers, grouping, labels)
     # A layer can be several inputs of the run, each with a name of its own
     invalid: dict[str, int] = {}

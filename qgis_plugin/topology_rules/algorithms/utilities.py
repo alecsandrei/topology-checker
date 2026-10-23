@@ -152,7 +152,9 @@ class UtilityAlgorithm(Planned):
             try:
                 if not result.isValid():
                     raise QgsProcessingException('The tool wrote no output')
-                crs = result.crs() if result.crs().isValid() else plan.item.crs
+                # The lines are in the CRS of the input, which the executable
+                # may write to the file as another one
+                crs = plan.item.crs if plan.item.crs.isValid() else result.crs()
                 sink, destination = self.parameterAsSink(
                     parameters,
                     OUTPUT,

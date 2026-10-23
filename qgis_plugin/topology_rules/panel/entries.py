@@ -6,7 +6,7 @@ from pathlib import Path
 from qgis.core import Qgis, QgsUnitTypes, QgsVectorLayer
 
 from ..core.binary import Rule, named_with
-from ..core.layers import CONTAINERS, project_layer, uri_parts
+from ..core.layers import CONTAINERS, horizontal, project_layer, uri_parts
 
 
 def where_is(layer: QgsVectorLayer) -> str:
@@ -23,7 +23,7 @@ def where_is(layer: QgsVectorLayer) -> str:
 
 def unit_of(layer: QgsVectorLayer) -> str:
     """The unit of distances in the layer, such as 'm' or '°'."""
-    crs = layer.crs()
+    crs = horizontal(layer.crs())
     if not crs.isValid():
         return ''
     unit = crs.mapUnits()
