@@ -245,7 +245,7 @@ def shown(widget: t.Any) -> bool:
 def row_of(layout: QLayout, widget: QWidget) -> list[QWidget | None]:
     """The widgets of the layout, or of a layout in it, with the widget."""
     items = [not_none(layout.itemAt(i)) for i in range(layout.count())]
-    widgets = [item.widget() for item in items]
+    widgets: list[QWidget | None] = [item.widget() for item in items]
     if widget in widgets:
         return widgets
     for item in items:
@@ -495,9 +495,11 @@ def test_removing_the_chosen_package_goes_back_to_automatic(
 ):
     version_folder(home, VERSION)
     choose_engine(Engine.PACKAGE)
+    refreshes.clear()
     dock.menu.fill()
     dock.menu.remove_action.trigger()
     assert engine.chosen() is Engine.AUTOMATIC
+    assert refreshes == ['toolbox', 'panel']
 
 
 def test_one_install_dialog_opens_at_a_time(dock: Dock, pypi: Index):
@@ -518,6 +520,18 @@ def test_an_install_refreshes_the_toolbox_and_the_panel(
     dock.menu.install_action.trigger()
     install_in(not_none_dialog(dock))
     assert install.installed() == VERSION
+    assert refreshes == ['toolbox', 'panel']
+
+
+def test_an_install_that_keeps_the_engine_refreshes_the_toolbox(
+    dock: Dock, published: tuple[Index, bytes], refreshes: list[str]
+):
+    choose_engine(Engine.AUTOMATIC)
+    refreshes.clear()
+    dock.menu.fill()
+    dock.menu.install_action.trigger()
+    install_in(not_none_dialog(dock))
+    assert engine.chosen() is Engine.AUTOMATIC
     assert refreshes == ['toolbox', 'panel']
 
 

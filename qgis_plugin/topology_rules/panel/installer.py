@@ -34,7 +34,7 @@ from ..core.engine import Engine
 from ..core.wheels import PACKAGE
 from ..exceptions import PackageError
 from ..utils import not_none, tr
-from .menu import choose
+from .menu import relist
 
 # The part of the documentation with the install by hand
 GUIDE = f'{DOCS}qgis-plugin/#install'
@@ -119,6 +119,7 @@ class InstallDialog(QDialog):
     asked, with the lines of the install as it goes. It ends with what to do
     next, and on a failure with the install by hand and a retry."""
 
+    # The version, once the toolbox lists the rules of the engine
     installed = pyqtSignal(str)
 
     def __init__(self, parent: QWidget | None = None, update: bool = False):
@@ -292,8 +293,9 @@ class InstallDialog(QDialog):
         self.task = None
         self.installing = False
         # Installing is asking for the package
-        if engine.chosen() is Engine.EXECUTABLE:
-            choose(Engine.AUTOMATIC)
+        relist(
+            Engine.AUTOMATIC if engine.chosen() is Engine.EXECUTABLE else None
+        )
         self.installed.emit(version)
         self.say(self.outcome(version))
         self.finish()

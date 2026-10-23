@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import typing as t
 
-from qgis.core import QgsSettings
+from qgis.core import QgsApplication, QgsSettings
 from qgis.PyQt.QtCore import pyqtSignal
 from qgis.PyQt.QtWidgets import (
     QAction,
@@ -18,6 +18,7 @@ from qgis.PyQt.QtWidgets import (
 from ..core import binary, engine, install
 from ..core.engine import Engine, Package
 from ..core.wheels import PACKAGE
+from ..enums import PROVIDER_ID
 from ..exceptions import ExecutableError, MissingError, PackageError
 from ..utils import not_none, tr
 
@@ -32,11 +33,25 @@ def engine_names() -> dict[Engine, str]:
 
 
 def choose(chosen: Engine) -> None:
-    """Has the engine run the checks from now on."""
+    """Has the engine run the checks from now on, and the toolbox list its
+    rules."""
     engine.choose(chosen)
     # A task reads the setting on a thread of its own, which sees only what
     # is in the file
     QgsSettings().sync()
+
+
+def relist(chosen: Engine | None = None) -> None:
+    """Has the toolbox list the rules of the engine, after it or what it runs
+    changed, and first chooses the engine if one is given."""
+    if chosen is not None and chosen is not engine.chosen():
+        # Which lists them
+        choose(chosen)
+        return
+    registry = not_none(QgsApplication.processingRegistry())
+    provider = registry.providerById(PROVIDER_ID)
+    if provider is not None:
+        provider.refreshAlgorithms()
 
 
 def installable() -> bool:

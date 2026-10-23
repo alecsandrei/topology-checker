@@ -36,7 +36,7 @@ from . import controller, exchange, startup
 from .entries import Entry
 from .icons import icon
 from .installer import InstallDialog
-from .menu import PanelMenu, choose, installable, reason
+from .menu import PanelMenu, installable, reason, relist
 from .messages import RunFeedback, push_summary
 from .narrow import shrink_buttons, shrink_tabs
 from .offer import stop_offering
@@ -205,13 +205,11 @@ class Dock(QgsDockWidget):
     def show_rule(self) -> None:
         self.form.show_rule()
 
-    def reload(self) -> None:
+    def reload(self, chosen: Engine | None = None) -> None:
         """Has the toolbox and the panel list the rules of the engine, after
-        it or what it runs changed."""
-        registry = not_none(QgsApplication.processingRegistry())
-        provider = registry.providerById(PROVIDER_ID)
-        if provider is not None:
-            provider.refreshAlgorithms()
+        it or what it runs changed, and first chooses the engine if one is
+        given."""
+        relist(chosen)
         self.refresh()
 
     def choose_executable(self) -> None:
@@ -221,8 +219,7 @@ class Dock(QgsDockWidget):
 
     def choose_engine(self, chosen: Engine) -> None:
         if chosen is not engine.chosen():
-            choose(chosen)
-            self.reload()
+            self.reload(chosen)
 
     def install_package(self) -> None:
         self.open_installer(update=False)
@@ -246,22 +243,23 @@ class Dock(QgsDockWidget):
     def package_installed(self) -> None:
         stop_offering()
         self.offer.hide()
-        self.reload()
+        # The dialog had the toolbox list the rules
+        self.refresh()
 
     def remove_package(self) -> None:
         """Deletes the package that the plugin installed. One that is loaded
         stays until QGIS restarts."""
         install.remove()
-        # Else the panel would say that the package is missing
-        if engine.chosen() is Engine.PACKAGE:
-            choose(Engine.AUTOMATIC)
         text = tr('Removed the Python package.')
         if install.restart_needed():
             text = tr('Removed the Python package. Restart QGIS to unload it.')
         push_summary(
             not_none(self.iface.messageBar()), text, Qgis.MessageLevel.Success
         )
-        self.reload()
+        # Else the panel would say that the package is missing
+        self.reload(
+            Engine.AUTOMATIC if engine.chosen() is Engine.PACKAGE else None
+        )
 
     def warn(self, text: str) -> None:
         not_none(self.iface.messageBar()).pushWarning(
