@@ -22,6 +22,11 @@ class Setting(Enum):
     GEOMETRY = 'TopologyRules/geometry'
     # What runs the checks: 'automatic', 'package' or 'executable'
     ENGINE = 'TopologyRules/engine'
+    # How the errors are drawn, for every project: what gives them their
+    # colours, how big they are, and the colour ramp as XML
+    COLOUR_BY = 'TopologyRules/colour_by'
+    SIZE = 'TopologyRules/size'
+    RAMP = 'TopologyRules/colour_ramp'
 
 
 class Group(Enum):

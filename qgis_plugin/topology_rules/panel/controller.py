@@ -18,7 +18,7 @@ from qgis.PyQt import sip
 from .._typing import Parameters
 from ..algorithms.base import OUTPUT, TOLERANCE
 from ..algorithms.check import COUNTS, INVALID, LAYERS, RULES, SCOPE
-from ..core.style import entry_grouping
+from ..core.style import ONE, ColourBy, Legend, entry_legend
 from ..enums import PROVIDER_ID
 from ..utils import not_none, tr
 from .entries import Entry, project_layer
@@ -199,15 +199,11 @@ def show_errors(
     }
     # The errors of each rule of the list are a group, in the order of the
     # list: the tool numbers them rule after rule
-    grouping = entry_grouping(counts)
-    labels: dict[str, str] = {}
-    dock.run_keys = {}
-    for index, entry in enumerate(todo):
-        labels[f'e{index}'] = f'{entry.layer_name}: {entry.title}'
-        dock.run_keys[entry.key] = f'e{index}'
-    rows = read_rows(
-        add_errors(path, grouping, labels, list(labels)), names, grouping
-    )
+    dock.legends = legends_of(todo, counts)
+    legend = dock.legends[ColourBy.RULE_AND_LAYER]
+    grouping, labels = legend.grouping, dict(legend.labels)
+    dock.run_keys = {entry.key: f'e{i}' for i, entry in enumerate(todo)}
+    rows = read_rows(add_errors(path, dock.legends), names, grouping)
     dock.results.show_rows(rows, layers, grouping, labels)
     # A layer can be several inputs of the run, each with a name of its own
     invalid: dict[str, int] = {}
@@ -220,6 +216,25 @@ def show_errors(
     dock.set_error_count(len(active))
     if active:
         dock.tabs.setCurrentIndex(ERRORS_TAB)
+
+
+def legends_of(todo: list[Entry], counts: list[int]) -> dict[ColourBy, Legend]:
+    """The groups of the errors of a run for each way of colouring them: a
+    rule of the list, a rule on any layer, a layer, or all."""
+    groups = {
+        ColourBy.RULE_AND_LAYER: [
+            (f'e{i}', f'{entry.layer_name}: {entry.title}')
+            for i, entry in enumerate(todo)
+        ],
+        ColourBy.RULE: [
+            (entry.rule.name, entry.rule.display_name) for entry in todo
+        ],
+        ColourBy.LAYER: [(entry.layer, entry.layer_name) for entry in todo],
+        ColourBy.ONE: [(ONE, tr('Errors')) for _ in todo],
+    }
+    return {
+        colour: entry_legend(counts, pairs) for colour, pairs in groups.items()
+    }
 
 
 def scope_of(

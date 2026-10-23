@@ -27,6 +27,7 @@ executable, and shows what they find.
   * exchange, state: topology.toml and the project
   * groups, focus, messages, icons, tolerance: map layers, zoom, messages,
     button icons, tolerance
+  * style_menu: how the errors are drawn, chosen by the user
 """
 
 from __future__ import annotations
