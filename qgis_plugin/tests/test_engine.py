@@ -239,9 +239,13 @@ def test_the_package_chosen_without_it_says_why(
 def test_a_run_of_the_package_chosen_without_it_fails(
     executable: str, provider: Provider, monkeypatch: pytest.MonkeyPatch
 ):
-    """The executable does not stand in for it."""
+    """The executable does not stand in for it. Choosing the package lists
+    its rules instead, so the setting changes here as another window of the
+    same profile would change it."""
     without_package(monkeypatch)
-    choose_engine(Engine.PACKAGE)
+    settings = QgsSettings()
+    settings.setValue(Setting.ENGINE.value, Engine.PACKAGE.value)
+    settings.sync()
     ran = dangles()
     assert not ran.ok
     assert 'Engine: executable' not in ran.log

@@ -15,9 +15,9 @@ import typing as t
 from enum import Enum
 from pathlib import Path
 
-from qgis.core import QgsSettings
+from qgis.core import QgsApplication, QgsSettings
 
-from ..enums import Setting
+from ..enums import PROVIDER_ID, Setting
 from ..exceptions import PackageError
 from . import binary
 
@@ -72,7 +72,13 @@ def chosen() -> Engine:
 
 
 def choose(engine: Engine) -> None:
+    """Has the engine run the checks from now on, and the toolbox list its
+    rules."""
     QgsSettings().setValue(Setting.ENGINE.value, engine.value)
+    registry = QgsApplication.processingRegistry()
+    provider = None if registry is None else registry.providerById(PROVIDER_ID)
+    if provider is not None:
+        provider.refreshAlgorithms()
 
 
 def missing(module: object) -> str | None:

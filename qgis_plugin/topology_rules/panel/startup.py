@@ -2,16 +2,13 @@ from __future__ import annotations
 
 import typing as t
 
-from qgis.core import QgsApplication
 from qgis.PyQt import sip
 
 from .. import probing
 from ..core import binary, engine
 from ..core.binary import Rule
 from ..core.engine import Engine
-from ..enums import PROVIDER_ID
 from ..exceptions import ExecutableError, PackageError
-from ..utils import not_none
 
 if t.TYPE_CHECKING:
     from .dock import Dock
@@ -21,10 +18,6 @@ def switch(dock: Dock, chosen: Engine) -> None:
     """Has the engine run the checks from now on, and the toolbox and the
     dock list its rules."""
     engine.choose(chosen)
-    registry = not_none(QgsApplication.processingRegistry())
-    provider = registry.providerById(PROVIDER_ID)
-    if provider is not None:
-        provider.refreshAlgorithms()
     refresh(dock)
 
 
