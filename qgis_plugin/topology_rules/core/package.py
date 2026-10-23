@@ -199,7 +199,8 @@ def read(
         geometry = straight(geometry)
         flattened += flatten(geometry)
         fids.append(fid)
-        wkbs.append(geometry.asWkb().data())
+        # data() is bytes at run time; some stubs type it as str
+        wkbs.append(t.cast('bytes', geometry.asWkb().data()))
     return Snapshot(
         item,
         crs,

@@ -19,6 +19,7 @@ import json
 import platform
 import shlex
 import sys
+import typing as t
 from pathlib import Path
 
 from qgis.core import Qgis, QgsBlockingNetworkRequest, QgsFeedback, QgsTask
@@ -154,7 +155,8 @@ class Task(QgsTask):
         if self.isCanceled():
             raise Failed(tr('Cancelled'))
         if code == QgsBlockingNetworkRequest.ErrorCode.NoError:
-            return bytes(request.reply().content())
+            # data() is bytes at run time; some stubs type it as str
+            return t.cast('bytes', request.reply().content().data())
         reply = request.reply()
         status = reply.attribute(
             QNetworkRequest.Attribute.HttpStatusCodeAttribute
