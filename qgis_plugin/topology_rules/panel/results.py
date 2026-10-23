@@ -11,10 +11,7 @@ from qgis.PyQt.QtCore import (
     Qt,
     pyqtSignal,
 )
-from qgis.PyQt.QtGui import (
-    QKeyEvent,
-    QStandardItemModel,
-)
+from qgis.PyQt.QtGui import QKeyEvent
 from qgis.PyQt.QtWidgets import (
     QAbstractItemView,
     QAction,
@@ -32,7 +29,7 @@ from .focus import Focus
 from .hint import Hint
 from .ignored import Ignored, stamp
 from .rows import Row
-from .tree import ROLE, errors_under, fill
+from .tree import ROLE, ErrorModel, fill
 from .wrapping import wrap_long_text
 
 
@@ -58,7 +55,7 @@ class ResultsPanel(QWidget):
         self.ignored = Ignored()
         self.grouping = rule_grouping()
         self.labels: dict[str, str] = {}
-        self.model = QStandardItemModel()
+        self.model = ErrorModel()
         self.model.setHorizontalHeaderLabels([tr('Errors')])
         self.view = QTreeView()
         self.placeholder = Hint(
@@ -159,7 +156,7 @@ class ResultsPanel(QWidget):
 
     def leaves(self) -> list[Row]:
         """The errors of the selected node."""
-        return errors_under(self.model.itemFromIndex(self.current()))
+        return self.model.errors_of(self.current())
 
     def ignore(self) -> None:
         self.ignored.add(self.leaves())
