@@ -381,3 +381,35 @@ def test_utilities_on_a_saved_layer(tmp_path: Path):
     output = ran.context.getMapLayer(str(ran.results['OUTPUT']))
     assert output is not None
     assert output.featureCount() == 1
+
+
+@pytest.mark.parametrize('stored', [False, True], ids=['memory', 'file'])
+def test_utilities_count_features_without_a_geometry(
+    stored: bool, tmp_path: Path
+):
+    """As the executable counts them: QGIS exports a missing geometry as an
+    empty one, and a file of its own can hold both."""
+    layer = line_layer(*CHAIN, 'LINESTRING EMPTY')
+    layer.dataProvider().addFeatures([QgsFeature(), QgsFeature()])
+    if stored:
+        path = tmp_path / 'lines.gpkg'
+        save(layer, path, 'GPKG', 'lines')
+        layer = QgsVectorLayer(f'{path}|layername=lines', 'lines', 'ogr')
+        missing = {fid: QgsGeometry() for fid in (4, 5)}
+        assert layer.dataProvider().changeGeometryValues(missing)
+    QgsProject.instance().addMapLayer(layer)
+    ran = run_algorithm(
+        'merge_lines', {'INPUT': layer.id(), 'OUTPUT': 'memory:output'}
+    )
+    assert ran.ok, ran.log
+    # The executable names the layer by the path that it reads
+    warnings = [
+        line.rsplit(': ', 1)[1]
+        for line in ran.log.splitlines()
+        if line.startswith('warning: layer ')
+    ]
+    assert warnings == (
+        ['skipped 2 null geometries', 'skipped 1 empty geometries']
+        if stored
+        else ['skipped 3 empty geometries']
+    )

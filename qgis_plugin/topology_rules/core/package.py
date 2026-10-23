@@ -169,8 +169,13 @@ def read(
     skip: t.Mapping[int, str],
     context: QgsProcessingContext,
     feedback: QgsProcessingFeedback,
+    exported: bool | None = None,
 ) -> Snapshot:
-    """The features of the input for the package, in the target CRS."""
+    """The features of the input for the package, in the target CRS.
+
+    Exported says whether the executable would read an export of the input
+    rather than its file, which by default is whether the input is checked.
+    """
     require_readable(item)
     transform = reprojection(item, target, context, feedback)
     crs = (
@@ -184,7 +189,12 @@ def read(
     nulls = empties = flattened = 0
     for fid, geometry in geometries(item, transform, feedback):
         if geometry.isNull():
-            nulls += 1
+            # QGIS exports a missing geometry as an empty one, which is how
+            # the executable then counts it
+            if checked if exported is None else exported:
+                empties += 1
+            else:
+                nulls += 1
             continue
         # QGIS takes a point with one coordinate that is not a number for an
         # empty one, which the executable rejects
@@ -556,7 +566,9 @@ def run_utility(
     left out, which it returns."""
     import topology_checker as tc
 
-    snapshot = read(item, None, True, {}, context, feedback)
+    # The executable reads the file of the layer where it can, as it is
+    exported = own_file(item, None) is None
+    snapshot = read(item, None, True, {}, context, feedback, exported)
     name = stem(item.name)
     tolerance = default_tolerance(snapshot.crs)
     topology = tc.Topology(tolerance)

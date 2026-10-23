@@ -364,6 +364,37 @@ def test_empty_features_and_features_with_z(agree: Agree):
     assert written.warnings
 
 
+@pytest.mark.parametrize('stored', [False, True], ids=['memory', 'file'])
+def test_features_without_a_geometry(
+    agree: Agree, tmp_path: Path, stored: bool
+):
+    """The log counts them, and empty ones, as the executable does. QGIS
+    exports a missing geometry as an empty one, and a file can hold both."""
+    lines = memory(
+        'LineString',
+        'EPSG:32633',
+        'LINESTRING(0 0, 10 0)',
+        None,
+        'LINESTRING EMPTY',
+        None,
+        name='lines',
+    )
+    if stored:
+        lines = saved(tmp_path, lines)
+        missing = {fid: QgsGeometry() for fid in (2, 4)}
+        assert lines.dataProvider().changeGeometryValues(missing)
+    written = agree(('line/must-not-have-dangles', project(lines)))
+    assert written.outcome.counts == [2]
+    assert written.warnings == (
+        [
+            'warning: layer lines: skipped 1 empty geometries',
+            'warning: layer lines: skipped 2 null geometries',
+        ]
+        if stored
+        else ['warning: layer lines: skipped 3 empty geometries']
+    )
+
+
 def test_degenerate_parts(agree: Agree):
     """Lines whose points are the same, and rings of fewer than three
     points, which both leave out and warn about."""
