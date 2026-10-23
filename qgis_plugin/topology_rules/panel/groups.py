@@ -4,6 +4,7 @@ import collections.abc as c
 from pathlib import Path
 
 from qgis.core import (
+    QgsCoordinateReferenceSystem,
     QgsFeatureRequest,
     QgsLayerTreeGroup,
     QgsProject,
@@ -43,8 +44,11 @@ def add_errors(
     grouping: Grouping,
     labels: c.Mapping[str, str],
     order: c.Iterable[str],
+    crs: QgsCoordinateReferenceSystem,
 ) -> list[QgsVectorLayer]:
-    """Adds the error layers of a run that have errors, in a group on top."""
+    """Adds the error layers of a run that have errors, in a group on top.
+    They are in the CRS of the run, which the executable may write to the
+    file as another one."""
     project = not_none(QgsProject.instance())
     group = not_none(
         not_none(project.layerTreeRoot()).insertGroup(0, GROUP_NAME)
@@ -59,6 +63,8 @@ def add_errors(
         # A copy in memory, which the map can filter and count, and which
         # does not point into a folder that Processing empties
         layer = not_none(found.materialize(QgsFeatureRequest()))
+        if crs.isValid():
+            layer.setCrs(crs)
         layer.setName(f'{kind.capitalize()} errors')
         layer.setCustomProperty(PROPERTY, True)
         style_layer(layer, grouping, labels, order)

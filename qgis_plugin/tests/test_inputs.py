@@ -383,6 +383,17 @@ def test_utilities_on_a_saved_layer(tmp_path: Path):
     assert output.featureCount() == 1
 
 
+@pytest.mark.parametrize('name', ['merge_lines', 'explode_lines'])
+def test_utilities_keep_the_crs_of_the_layer(name: str):
+    """The executable writes some CRSs to its file as others."""
+    layer = QgsVectorLayer('LineString?crs=ESRI:102100', 'lines', 'memory')
+    add_features(layer, CHAIN)
+    QgsProject.instance().addMapLayer(layer)
+    ran = run_algorithm(name, {'INPUT': layer.id(), 'OUTPUT': 'memory:output'})
+    assert ran.ok, ran.log
+    assert errors_layer(ran, 'OUTPUT').crs() == layer.crs()
+
+
 @pytest.mark.parametrize('stored', [False, True], ids=['memory', 'file'])
 def test_utilities_count_features_without_a_geometry(
     stored: bool, tmp_path: Path
