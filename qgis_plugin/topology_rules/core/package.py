@@ -97,12 +97,13 @@ def rules() -> tuple[Rule, ...]:
 
 def default_tolerance(crs: QgsCoordinateReferenceSystem) -> float:
     """The tolerance of a run that names none, as the executable has it:
-    1e-8 in degrees, a millimetre in a projected CRS, and none in another."""
+    1e-8 in degrees, a millimetre in a projected CRS, and none in another.
+    A compound CRS takes that of its horizontal part."""
     if not crs.isValid():
         return 0.0
     if crs.isGeographic():
         return 1e-8
-    if crs.type() != Qgis.CrsType.Projected:
+    if crs.type() not in (Qgis.CrsType.Projected, Qgis.CrsType.Compound):
         return 0.0
     metres = QgsUnitTypes.fromUnitToUnitFactor(
         crs.mapUnits(), Qgis.DistanceUnit.Meters

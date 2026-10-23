@@ -319,6 +319,25 @@ def test_degrees(agree: Agree):
     assert any('angular' in warning for warning in written.warnings)
 
 
+@pytest.mark.parametrize(
+    ('crs', 'gap'),
+    [('EPSG:7415', 0.0004), ('EPSG:8759', 0.003), ('EPSG:9518', 5e-9)],
+    ids=['metres', 'us feet', 'degrees'],
+)
+def test_a_compound_crs(agree: Agree, crs: str, gap: float):
+    """The default tolerance is that of the horizontal part, which closes a
+    gap below a millimetre, or below 1e-8 in degrees."""
+    lines = memory(
+        'LineString',
+        crs,
+        'LINESTRING(100 10, 100.5 10)',
+        f'LINESTRING({100.5 + gap} 10, 101 10)',
+        name='lines',
+    )
+    written = agree(('line/must-not-have-dangles', project(lines)))
+    assert written.outcome.counts == [2]
+
+
 def test_a_layer_without_a_crs(agree: Agree):
     lines = memory('LineString', '', 'LINESTRING(0 0, 10 0)', name='lines')
     QgsProject.instance().addMapLayer(lines)
