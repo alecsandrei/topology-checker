@@ -110,13 +110,23 @@ jobs:
           uv pip install --python .minimum-test dist/*.whl pytest 'numpy<2' 'pandas<3' 'shapely==2.0.0' 'pyproj==3.4.0' 'geopandas==0.14.0'
           uv run --no-project --python .minimum-test python scripts/check_install.py
           uv run --no-project --python .minimum-test python -m pytest tests
-      - name: Test base install without GeoPandas
+      - name: Test install without GeoPandas
         shell: bash
         run: |
           uv venv --python 3.10 .base-test
-          uv pip install --python .base-test dist/*.whl pytest
+          uv pip install --python .base-test dist/*.whl pytest shapely pyproj
           uv run --no-project --python .base-test python scripts/check_install.py --without-geopandas
           uv run --no-project --python .base-test python -m pytest tests
+          rm -rf .base-test
+      - name: Test base install without extras
+        shell: bash
+        env:
+          TOPOLOGY_WITHOUT_SHAPELY: '1'
+        run: |
+          uv venv --python 3.10 .base-test
+          uv pip install --python .base-test dist/*.whl pytest
+          uv run --no-project --python .base-test python scripts/check_install.py --without-shapely
+          uv run --no-project --python .base-test python -m pytest tests/test_without_shapely.py
       - uses: actions/upload-artifact@v4
         with:
           name: python-wheel-${{ matrix.os }}-${{ matrix.target }}

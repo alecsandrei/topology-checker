@@ -1,4 +1,4 @@
-"""Smoke-test a regular wheel installation, optionally without GeoPandas."""
+"""Smoke-test a regular wheel installation, optionally without its extras."""
 
 from __future__ import annotations
 
@@ -6,24 +6,47 @@ import argparse
 import importlib.util
 import json
 import math
+import struct
 import sys
 from importlib.metadata import distribution
 from pathlib import Path
 
 import topology_checker
-from shapely.geometry import LineString, Point, Polygon, box
 from topology_checker import (
     PrecisionError,
     Rule,
     Topology,
+    Violation,
     _native,
     explode_lines,
     merge_lines,
 )
 
 
-def check_install(without_geopandas: bool = False) -> None:
-    """Reject editable/source imports and exercise the base Shapely API."""
+def _check_wkb() -> None:
+    """Exercise WKB input and output, which need no optional dependency."""
+    point = struct.pack("<BIdd", 1, 1, 0.0, 0.0)
+    topology = Topology()
+    topology.add_rule(Rule.MUST_NOT_OVERLAP, [point, bytearray(point)])
+    report = topology.validate()
+    assert report.error_count == 1 and report.violations[0].wkb == point
+    with topology.iter_validate(batch_size=1) as stream:
+        assert [violation.wkb for violation in stream] == [point]
+    assert stream.summary is not None and stream.summary.error_count == 1
+    lines = [
+        struct.pack("<BII4d", 1, 2, 2, 0, 0, 1, 0),
+        struct.pack("<BII4d", 1, 2, 2, 1, 0, 2, 0),
+    ]
+    merged = merge_lines(lines)
+    assert merged == (struct.pack("<BII6d", 1, 2, 3, 0, 0, 1, 0, 2, 0),)
+    assert explode_lines(merged) == tuple(lines)
+    assert isinstance(Violation.wkb, property)
+
+
+def check_install(
+    without_geopandas: bool = False, without_shapely: bool = False
+) -> None:
+    """Reject editable/source imports and exercise the WKB and shapely APIs."""
     installed = distribution("topology-checker")
     package = Path(topology_checker.__file__).resolve()
     prefix = Path(sys.prefix).resolve()
@@ -44,6 +67,20 @@ def check_install(without_geopandas: bool = False) -> None:
         )
     if without_geopandas and importlib.util.find_spec("geopandas") is not None:
         raise SystemExit("Base installation unexpectedly includes GeoPandas")
+    if without_shapely:
+        for name in ("shapely", "pyproj", "geopandas"):
+            if importlib.util.find_spec(name) is not None:
+                raise SystemExit(f"Base installation unexpectedly includes {name}")
+    _check_wkb()
+    if not without_shapely:
+        _check_shapely()
+    print(f"Tested installed topology-checker {installed.version}: {package}")
+
+
+def _check_shapely() -> None:
+    """Exercise shapely input, GeoJSON output and exact polygon emission."""
+    from shapely.geometry import LineString, Point, Polygon, box
+
     topology = Topology()
     topology.add_rule(Rule.MUST_NOT_OVERLAP, [Point(0, 0), Point(0, 0)])
     report = topology.validate()
@@ -87,15 +124,15 @@ def check_install(without_geopandas: bool = False) -> None:
             assert failed.summary is None
         else:
             raise AssertionError("a failed stream cannot have a successful summary")
-    print(f"Tested installed topology-checker {installed.version}: {package}")
 
 
 def main() -> None:
-    """Check the installed wheel and optional base dependency constraint."""
+    """Check the installed wheel and optional dependency constraints."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--without-geopandas", action="store_true")
+    parser.add_argument("--without-shapely", action="store_true")
     args = parser.parse_args()
-    check_install(args.without_geopandas)
+    check_install(args.without_geopandas, args.without_shapely)
 
 
 if __name__ == "__main__":

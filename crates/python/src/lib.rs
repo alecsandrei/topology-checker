@@ -3,9 +3,11 @@ use geozero::{CoordDimensions, ToGeo, ToWkb, wkb::Wkb};
 use pyo3::{
     exceptions::{PyRuntimeError, PyValueError},
     prelude::*,
+    types::PyBytes,
 };
 use serde_json::json;
 mod stream;
+mod wkb;
 use std::{
     collections::HashSet,
     panic::{AssertUnwindSafe, catch_unwind},
@@ -17,6 +19,14 @@ use topology_checker_core::{
 };
 
 type RegistrationInput = (Option<usize>, String, Vec<(i64, Vec<u8>)>);
+type PreparedLayer = (
+    Vec<(i64, Py<PyBytes>)>,
+    Vec<Py<PyBytes>>,
+    Vec<(i64, Vec<usize>)>,
+    Vec<String>,
+    Vec<&'static str>,
+    Vec<&'static str>,
+);
 
 pyo3::create_exception!(topology_checker._native, PrecisionError, PyRuntimeError);
 fn core_error(error: topology_checker_core::Error) -> PyErr {
@@ -224,6 +234,46 @@ fn registry() -> PyResult<String> {
     serde_json::to_string(&rules).map_err(runtime_error)
 }
 
+/// Normalise WKB items into retained planar features and their XY snapshots.
+#[pyfunction]
+fn prepare(
+    py: Python<'_>,
+    name: &str,
+    fids: Vec<i64>,
+    items: Vec<Option<Py<PyBytes>>>,
+) -> PyResult<PreparedLayer> {
+    let slices = items
+        .iter()
+        .map(|item| item.as_ref().map(|bytes| bytes.as_bytes(py)))
+        .collect::<Vec<_>>();
+    let prepared = detached(py, || {
+        wkb::prepare(name, &fids, &slices).map_err(value_error)
+    })?;
+    let mut features = Vec::with_capacity(prepared.features.len());
+    let mut snapshots = Vec::with_capacity(prepared.features.len());
+    for feature in prepared.features {
+        let snapshot = match (feature.snapshot, &items[feature.index]) {
+            (Some(bytes), _) => PyBytes::new(py, &bytes).unbind(),
+            (None, Some(input)) => input.clone_ref(py),
+            (None, None) => return Err(runtime_error("missing input reused")),
+        };
+        let clean = match feature.clean {
+            Some(bytes) => PyBytes::new(py, &bytes).unbind(),
+            None => snapshot.clone_ref(py),
+        };
+        features.push((feature.fid, clean));
+        snapshots.push(snapshot);
+    }
+    Ok((
+        features,
+        snapshots,
+        prepared.parts,
+        prepared.warnings,
+        prepared.families,
+        prepared.hints,
+    ))
+}
+
 fn collect_lines(geometry: Geometry, lines: &mut Vec<LineString>) -> PyResult<()> {
     match geometry {
         Geometry::LineString(line) => lines.push(line),
@@ -273,5 +323,6 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<stream::NativeViolation>()?;
     module.add_function(wrap_pyfunction!(registry, module)?)?;
     module.add_function(wrap_pyfunction!(lines, module)?)?;
+    module.add_function(wrap_pyfunction!(prepare, module)?)?;
     Ok(())
 }

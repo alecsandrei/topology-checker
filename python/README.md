@@ -1,8 +1,10 @@
 Validate planar GIS data with 24 typed constraints powered by 38 native Rust rules.
 
 ```sh
-uv add 'topology-checker[geopandas]'
+pip install "topology-checker[io]"
 ```
+
+`pip install topology-checker` has no dependencies and works with WKB only.
 
 ```python
 import geopandas as gpd
