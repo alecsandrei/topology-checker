@@ -13,7 +13,7 @@ from pathlib import Path
 from qgis.core import QgsSettings
 
 from ..enums import EXECUTABLE_NAME, ExitCode, Group, Setting
-from ..exceptions import ExecutableError, RunError
+from ..exceptions import ExecutableError, MissingError, RunError
 from ..utils import title
 from .runner import error_message, run
 
@@ -170,8 +170,10 @@ def find_executable() -> Path:
         return path
     found = shutil.which(EXECUTABLE_NAME)
     if found is None:
-        raise ExecutableError(
-            'topology-checker was not found. Install it, then set its path '
+        # Said where nothing else offers a way: the panel has its own
+        raise MissingError(
+            'topology-checker was not found. Install the Python package from '
+            'the Topology Rules panel, or set the path of the executable '
             'under Settings > Options > Processing > Providers > '
             'Topology Rules.'
         )

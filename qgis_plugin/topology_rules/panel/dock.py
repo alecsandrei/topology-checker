@@ -4,6 +4,7 @@ import contextlib
 from pathlib import Path
 
 from qgis.core import (
+    Qgis,
     QgsApplication,
     QgsProcessingAlgRunnerTask,
     QgsProcessingContext,
@@ -11,27 +12,34 @@ from qgis.core import (
     QgsTask,
 )
 from qgis.gui import QgisInterface, QgsDockWidget
-from qgis.PyQt.QtCore import QUrl
+from qgis.PyQt import sip
+from qgis.PyQt.QtCore import Qt, QUrl
 from qgis.PyQt.QtGui import QDesktopServices
 from qgis.PyQt.QtWidgets import (
     QHBoxLayout,
     QProgressBar,
     QPushButton,
     QTabWidget,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 from ..algorithms.base import DOCS
+from ..core import engine, install
 from ..core.binary import Rule
+from ..core.engine import Engine
 from ..enums import PROVIDER_ID
 from ..exceptions import ExecutableError
 from ..utils import not_none, tr
 from . import controller, exchange, startup
 from .entries import Entry
 from .icons import icon
-from .messages import RunFeedback
+from .installer import InstallDialog
+from .menu import PanelMenu, installable, reason, relist
+from .messages import RunFeedback, push_summary
 from .narrow import shrink_buttons, shrink_tabs
+from .offer import stop_offering
 from .results import ResultsPanel
 from .rules_page import RulesPage
 from .setup import SetupPage
@@ -63,11 +71,15 @@ class Dock(QgsDockWidget):
         self.unselected: list[str] = []
         # The group of errors that each rule of the list had in the last run
         self.run_keys: dict[tuple[str, str, str | None], str] = {}
+        # The install of the package that is open
+        self.installer: InstallDialog | None = None
 
         self.setup_page = SetupPage()
         self.status = self.setup_page.status
         self.browse_button = self.setup_page.browse_button
+        self.install_button = self.setup_page.install_button
         self.rules_page = RulesPage()
+        self.offer = self.rules_page.offer
         self.form = self.rules_page.form
         self.input_box = self.form.input_box
         self.rule_box = self.form.rule_box
@@ -96,6 +108,15 @@ class Dock(QgsDockWidget):
         self.help_button.setIcon(icon('help'))
         self.help_button.setToolTip(tr('Open the documentation'))
         self.help_button.setFlat(True)
+        self.menu = PanelMenu(self)
+        self.menu_button = QToolButton()
+        self.menu_button.setIcon(icon('menu'))
+        self.menu_button.setToolTip(tr('Settings'))
+        self.menu_button.setAutoRaise(True)
+        self.menu_button.setPopupMode(
+            QToolButton.ToolButtonPopupMode.InstantPopup
+        )
+        self.menu_button.setMenu(self.menu)
         self.progress = QProgressBar()
         self.progress.setRange(0, 0)
         self.progress.hide()
@@ -112,6 +133,7 @@ class Dock(QgsDockWidget):
         layout.addWidget(self.progress)
         bottom = QHBoxLayout()
         bottom.addWidget(self.run_button, 1)
+        bottom.addWidget(self.menu_button)
         bottom.addWidget(self.help_button)
         layout.addLayout(bottom)
         body = QWidget()
@@ -120,6 +142,13 @@ class Dock(QgsDockWidget):
 
         self.state = ProjectState(self)
         self.browse_button.clicked.connect(self.choose_executable)
+        self.install_button.clicked.connect(self.install_package)
+        self.offer.install_clicked.connect(self.install_package)
+        self.menu.engine_chosen.connect(self.choose_engine)
+        self.menu.install_action.triggered.connect(self.install_package)
+        self.menu.update_action.triggered.connect(self.update_package)
+        self.menu.remove_action.triggered.connect(self.remove_package)
+        self.menu.choose_action.triggered.connect(self.choose_executable)
         self.import_button.clicked.connect(self.choose_import)
         self.export_button.clicked.connect(self.choose_export)
         self.add_button.clicked.connect(self.add_rule)
@@ -153,6 +182,7 @@ class Dock(QgsDockWidget):
         self.load_algorithms()
         self.form.set_rules(rules)
         self.state.fill()
+        self.offer.update_offer()
         self.update_buttons()
 
     def load_algorithms(self) -> None:
@@ -166,7 +196,7 @@ class Dock(QgsDockWidget):
     def rules_failed(self, error: ExecutableError) -> None:
         self.available = False
         self.form.set_rules(())
-        self.setup_page.explain(str(error))
+        self.setup_page.explain(reason(error), installable())
         self.update_buttons()
 
     def current_rule(self) -> Rule | None:
@@ -175,14 +205,61 @@ class Dock(QgsDockWidget):
     def show_rule(self) -> None:
         self.form.show_rule()
 
+    def reload(self, chosen: Engine | None = None) -> None:
+        """Has the toolbox and the panel list the rules of the engine, after
+        it or what it runs changed, and first chooses the engine if one is
+        given."""
+        relist(chosen)
+        self.refresh()
+
     def choose_executable(self) -> None:
         """Lets the user point to the executable, then looks for the rules."""
         if self.setup_page.choose():
-            registry = not_none(QgsApplication.processingRegistry())
-            provider = registry.providerById(PROVIDER_ID)
-            if provider is not None:
-                provider.refreshAlgorithms()
-            self.refresh()
+            self.reload()
+
+    def choose_engine(self, chosen: Engine) -> None:
+        if chosen is not engine.chosen():
+            self.reload(chosen)
+
+    def install_package(self) -> None:
+        self.open_installer(update=False)
+
+    def update_package(self) -> None:
+        self.open_installer(update=True)
+
+    def open_installer(self, update: bool) -> None:
+        """Shows the install of the package, or the one that is open."""
+        if self.installer is not None and not sip.isdeleted(self.installer):
+            self.installer.show()
+            self.installer.raise_()
+            self.installer.activateWindow()
+            return
+        dialog = InstallDialog(self, update)
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        dialog.installed.connect(self.package_installed)
+        self.installer = dialog
+        dialog.show()
+
+    def package_installed(self) -> None:
+        stop_offering()
+        self.offer.hide()
+        # The dialog had the toolbox list the rules
+        self.refresh()
+
+    def remove_package(self) -> None:
+        """Deletes the package that the plugin installed. One that is loaded
+        stays until QGIS restarts."""
+        install.remove()
+        text = tr('Removed the Python package.')
+        if install.restart_needed():
+            text = tr('Removed the Python package. Restart QGIS to unload it.')
+        push_summary(
+            not_none(self.iface.messageBar()), text, Qgis.MessageLevel.Success
+        )
+        # Else the panel would say that the package is missing
+        self.reload(
+            Engine.AUTOMATIC if engine.chosen() is Engine.PACKAGE else None
+        )
 
     def warn(self, text: str) -> None:
         not_none(self.iface.messageBar()).pushWarning(
@@ -312,3 +389,7 @@ class Dock(QgsDockWidget):
                 signal.disconnect(slot)
         self.form.dispose()
         self.results.focus.clear()
+        if self.installer is not None and not sip.isdeleted(self.installer):
+            self.installer.stop()
+            self.installer.deleteLater()
+        self.installer = None

@@ -13,6 +13,7 @@ import inspect
 import os
 import platform
 import shlex
+import subprocess
 import sys
 import threading
 import time
@@ -409,6 +410,18 @@ def test_a_server_error_fails_with_its_status(pypi: Index):
     ]
 
 
+def test_a_server_error_after_an_answer_fails_with_its_status(pypi: Index):
+    # QGIS keeps answers, and gives the one of before to a request that fails
+    pypi.release(answer([]))
+    run(install.ReleaseTask())
+    pypi.serve(f'/pypi/topology-checker/{VERSION}/json', b'', status=503)
+    outcome = run(install.ReleaseTask())
+    assert outcome.failed == [
+        f'Cannot fetch {pypi.url}/pypi/topology-checker/{VERSION}/json: '
+        'HTTP 503 Service Unavailable'
+    ]
+
+
 def test_no_network_fails_with_the_error(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -421,6 +434,31 @@ def test_no_network_fails_with_the_error(
     [error] = outcome.failed
     assert error.startswith(f'Cannot fetch http://127.0.0.1:{port}/pypi')
     assert 'refused' in error.lower()
+
+
+@pytest.mark.slow
+def test_downloads_end_while_the_main_thread_holds_the_gil(tmp_path: Path):
+    # A hang would stop the tests, so the fetches run in a QGIS of their own
+    script = Path(__file__).with_name('fetch_under_load.py')
+    plugin = Path(topology_rules.__file__).parents[1]
+    env = {
+        **os.environ,
+        # The tests drop both for the fake executables
+        'PYTHONHOME': sys.base_prefix,
+        'PYTHONPATH': os.pathsep.join(sys.path),
+        'QGIS_CUSTOM_CONFIG_PATH': str(tmp_path),
+        'QT_QPA_PLATFORM': 'offscreen',
+    }
+    done = subprocess.run(
+        [sys.executable, str(script), str(plugin), '30'],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=300,
+        check=False,
+    )
+    assert done.returncode == 0, done.stderr[-4000:]
+    assert done.stdout.splitlines()[-1] == '30'
 
 
 def test_an_answer_that_is_not_json_fails(pypi: Index):
@@ -492,9 +530,8 @@ def test_a_wheel_with_another_sha256_is_not_unpacked(pypi: Index, home: Path):
     outcome = run(install.InstallTask(find()))
     [error] = outcome.failed
     tampered = sha256(content + b'tampered')
-    assert error == (
-        f'SHA-256 {tampered} does not match PyPI {sha256(content)}'
-    )
+    assert error == 'The download does not match its SHA-256 on PyPI'
+    assert f'SHA-256 {tampered}, PyPI has {sha256(content)}' in outcome.lines
     assert outcome.done == []
     assert not (home / VERSION).exists()
     assert leftovers(home) == []

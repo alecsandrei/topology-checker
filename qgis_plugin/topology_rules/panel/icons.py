@@ -23,6 +23,8 @@ ICONS = {
     'run': ('mActionStart', QStyle.StandardPixmap.SP_MediaPlay),
     'stop': ('mActionStop', QStyle.StandardPixmap.SP_MediaStop),
     'help': ('mActionHelpContents', QStyle.StandardPixmap.SP_DialogHelpButton),
+    'menu': ('mActionOptions', QStyle.StandardPixmap.SP_TitleBarMenuButton),
+    'close': ('mIconClose', QStyle.StandardPixmap.SP_TitleBarCloseButton),
 }
 
 
