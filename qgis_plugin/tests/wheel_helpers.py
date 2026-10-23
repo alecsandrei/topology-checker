@@ -59,8 +59,19 @@ def make_wheel(
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, 'w') as archive:
         for name, text in members.items():
-            archive.writestr(name, text)
+            # The name as given, as ZipInfo turns a backslash into a slash
+            # on Windows
+            info = zipfile.ZipInfo(name)
+            info.filename = name
+            archive.writestr(info, text)
     return buffer.getvalue()
+
+
+def member_names(content: bytes) -> list[str]:
+    """The names of the files of a wheel, as zipfile reads them here: on
+    Windows with a slash for each backslash."""
+    with zipfile.ZipFile(io.BytesIO(content)) as archive:
+        return archive.namelist()
 
 
 def sha256(content: bytes) -> str:

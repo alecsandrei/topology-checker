@@ -211,3 +211,35 @@ def test_why_this_qgis_cannot_use_it_is_said(
     found = wheels.unsupported()
     assert found is not None
     assert found.startswith(reason)
+
+
+# The files of a wheel
+
+
+@pytest.mark.parametrize(
+    'name',
+    [
+        '../evil.py',
+        '/evil.py',
+        'C:/evil.py',
+        'C:evil.py',
+        # As a wheel holds them, which zipfile reads as is outside Windows
+        '\\evil.py',
+        'topology_checker\\..\\..\\evil.py',
+        'C:\\evil.py',
+    ],
+)
+def test_a_name_outside_of_the_folder_escapes(name: str):
+    assert wheels.escapes(name)
+
+
+@pytest.mark.parametrize(
+    'name',
+    [
+        'topology_checker/__init__.py',
+        'topology_checker\\_native.pyd',
+        'topology_checker/..data',
+    ],
+)
+def test_a_name_inside_of_the_folder_does_not_escape(name: str):
+    assert not wheels.escapes(name)

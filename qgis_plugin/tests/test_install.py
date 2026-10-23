@@ -12,6 +12,7 @@ import importlib
 import inspect
 import os
 import platform
+import shlex
 import sys
 import threading
 import time
@@ -38,6 +39,7 @@ from .wheel_helpers import (
     fake_module,
     mac,
     make_wheel,
+    member_names,
     pretend_linux,
     release_file,
     sha256,
@@ -513,10 +515,15 @@ def test_a_wheel_with_a_file_outside_its_folder_is_refused(
     pypi: Index, home: Path, tmp_path: Path, name: str
 ):
     content = make_wheel(extra={name: 'print("escaped")'})
+    # Stored as given on each system, and read with a slash for each
+    # backslash on Windows only
+    assert name.encode() in content
+    [read] = [found for found in member_names(content) if 'evil' in found]
+    assert read == (name.replace('\\', '/') if os.sep == '\\' else name)
     url = pypi.serve('/files/wheel.whl', content)
     pypi.release(answer([release_file(LINUX, content, url)]))
     outcome = run(install.InstallTask(find()))
-    assert outcome.failed == [f'Refused {name}: outside of the folder']
+    assert outcome.failed == [f'Refused {read}: outside of the folder']
     assert not (home / VERSION).exists()
     assert leftovers(home) == []
     assert list(tmp_path.rglob('evil.py')) == []
@@ -889,8 +896,10 @@ def test_what_a_locked_library_keeps_goes_at_the_next_start(
 
 
 def test_the_command_on_linux(home: Path):
+    # Quoted, as the folder of the tests may hold a backslash or a colon
+    target = shlex.quote(str(home / VERSION))
     assert install.command() == (
-        f'python3 -m pip install --no-deps --target {home / VERSION} '
+        f'python3 -m pip install --no-deps --target {target} '
         f'topology-checker=={VERSION}'
     )
     assert install.terminal() == 'Terminal'
@@ -917,16 +926,17 @@ def test_the_command_on_macos_names_the_python_of_the_app(
         QCoreApplication, 'applicationDirPath', lambda: str(python.parent)
     )
     monkeypatch.setattr(sys, 'base_prefix', str(contents / 'Frameworks'))
+    target = shlex.quote(str(home / VERSION))
     assert install.command() == (
         f"PYTHONHOME='{contents / 'Frameworks'}' '{python}' -m pip install "
-        f'--no-deps --target {home / VERSION} topology-checker=={VERSION}'
+        f'--no-deps --target {target} topology-checker=={VERSION}'
     )
     assert install.terminal() == 'Terminal'
     # The script of the app that sets the home, where there is one
     script = python.parent / 'python'
     script.write_text('')
     assert install.command() == (
-        f"'{script}' -m pip install --no-deps --target {home / VERSION} "
+        f"'{script}' -m pip install --no-deps --target {target} "
         f'topology-checker=={VERSION}'
     )
 
