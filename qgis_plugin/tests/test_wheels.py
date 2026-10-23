@@ -56,6 +56,28 @@ def test_the_wheel_of_the_platform_is_chosen(
     assert release.url == f'https://files.invalid/{expected}'
 
 
+@pytest.mark.parametrize(
+    ('machine', 'expected'), [('arm64', 'mac_arm'), ('x86_64', 'mac_intel')]
+)
+def test_a_python_that_says_macos_10_16_gets_a_wheel(
+    monkeypatch: pytest.MonkeyPatch, machine: str, expected: str
+):
+    # What a Python built with an older SDK says on macOS 11 and newer
+    mac(monkeypatch, machine, '10.16')
+    release = wheels.pick(listed(), VERSION)
+    assert release.filename == wheel_name(WHEELS[expected])
+
+
+def test_macos_10_16_is_macos_11():
+    assert wheels.mac_tags('arm64', (10, 16)) == [
+        'macosx_11_0_arm64',
+        'macosx_11_0_universal2',
+    ]
+    assert wheels.mac_tags('x86_64', (10, 16)) == wheels.mac_tags(
+        'x86_64', (11, 0)
+    )
+
+
 def test_an_older_macos_than_the_wheel_has_none(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -75,6 +97,13 @@ def test_the_tags_of_a_glibc():
         'manylinux_2_5_x86_64',
         'manylinux1_x86_64',
     ]
+
+
+@pytest.mark.parametrize('glibc', [(), (2,), (1, 9), (3, 1)])
+def test_a_glibc_without_a_minor_version_or_of_another_major_has_no_tags(
+    glibc: tuple[int, ...],
+):
+    assert wheels.linux_tags(glibc) == []
 
 
 def test_a_wheel_for_another_python_is_not_chosen():
@@ -164,6 +193,10 @@ def thirty_two_bits(monkeypatch: pytest.MonkeyPatch) -> None:
                 platform, 'libc_ver', lambda: ('glibc', '2.12')
             ),
             'Needs glibc 2.17 or newer, Linux has glibc 2.12',
+        ),
+        (
+            lambda m: m.setattr(platform, 'libc_ver', lambda: ('glibc', '2')),
+            'Needs glibc 2.17 or newer, Linux has glibc 2',
         ),
         (
             lambda m: m.setattr(platform, 'system', lambda: 'FreeBSD'),

@@ -197,8 +197,11 @@ def platform_tags() -> list[str]:
 
 def mac_tags(machine: str, version: tuple[int, ...]) -> list[str]:
     """Wheels for this macOS or an older one. From macOS 11 on only the
-    major version is in the tag."""
+    major version is in the tag. A Python built with an older SDK says 10.16
+    for 11 and newer."""
     major, minor = (*version, 0)[:2]
+    if (major, minor) == (10, 16):
+        major, minor = 11, 0
     tags: list[str] = []
     for number in range(major, 10, -1):
         tags += [
@@ -216,14 +219,17 @@ def mac_tags(machine: str, version: tuple[int, ...]) -> list[str]:
 
 
 def linux_tags(glibc: tuple[int, ...]) -> list[str]:
-    """manylinux wheels for this glibc or an older one, with their old
-    names."""
+    """manylinux wheels for this glibc 2 or an older one, with their old
+    names. A glibc without a minor version has none."""
+    major, minor = (*glibc, 0, 0)[:2]
+    if major != 2:
+        return []
     old = {17: 'manylinux2014', 12: 'manylinux2010', 5: 'manylinux1'}
     tags: list[str] = []
-    for minor in range(glibc[1], 4, -1):
-        tags.append(f'manylinux_2_{minor}_x86_64')
-        if minor in old:
-            tags.append(f'{old[minor]}_x86_64')
+    for number in range(minor, 4, -1):
+        tags.append(f'manylinux_2_{number}_x86_64')
+        if number in old:
+            tags.append(f'{old[number]}_x86_64')
     return tags
 
 
