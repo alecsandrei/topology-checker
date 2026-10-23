@@ -5,14 +5,14 @@ build-backend = "maturin"
 [project]
 name = "topology-checker"
 dynamic = ["version"]
-description = "Native planar topology validation with typed Python rules and Shapely geometries"
+description = "Native planar topology validation with typed Python rules for WKB and Shapely geometries"
 readme = "python/README.md"
 requires-python = ">=3.10"
 license = "Apache-2.0 AND Apache-2.0 WITH LLVM-exception AND MIT AND Unicode-DFS-2016"
 license-files = ["LICENSE", "THIRD-PARTY-NOTICES.txt"]
 authors = [{ name = "Alex-Andrei Cuvuliuc" }]
-keywords = ["GIS", "topology", "validation", "geospatial", "shapely", "geopandas"]
-dependencies = ["shapely>=2,<3", "pyproj>=3.4,<4"]
+keywords = ["GIS", "topology", "validation", "geospatial", "wkb", "shapely", "geopandas"]
+dependencies = []
 classifiers = [
   "Development Status :: 4 - Beta",
   "Topic :: Scientific/Engineering :: GIS",
@@ -33,7 +33,7 @@ Issues = "https://github.com/alecsandrei/topology-checker/issues"
 Documentation = "https://alecsandrei.github.io/topology-checker/"
 
 [project.optional-dependencies]
-geopandas = ["geopandas>=0.14,<2"]
+io = ["shapely>=2,<3", "pyproj>=3.4,<4", "geopandas>=0.14,<2"]
 
 [dependency-groups]
 release = ["packaging>=24", "tomli>=2", "twine>=6"]
@@ -43,6 +43,8 @@ dev = [
     "pytest>=8",
     "ruff>=0.11",
     "pyright>=1.1.400",
+    "shapely>=2,<3",
+    "pyproj>=3.4,<4",
     "geopandas>=0.14,<2",
     "pandas-stubs",
     "types-shapely>=2",

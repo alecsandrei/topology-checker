@@ -39,10 +39,15 @@ def metadata_text(version: str = VERSION) -> str:
         f"Version: {version}",
         f"Requires-Python: {project['requires-python']}",
         f"License-Expression: {project['license']}",
-        "Provides-Extra: geopandas",
     ]
+    extras: dict[str, list[str]] = project["optional-dependencies"]
+    headers.extend(f"Provides-Extra: {extra}" for extra in extras)
     headers.extend(f"Requires-Dist: {dep}" for dep in project["dependencies"])
-    headers.append('Requires-Dist: geopandas>=0.14,<2; extra == "geopandas"')
+    headers.extend(
+        f'Requires-Dist: {dep}; extra == "{extra}"'
+        for extra, dependencies in extras.items()
+        for dep in dependencies
+    )
     headers.extend(f"License-File: {path}" for path in project["license-files"])
     headers.extend(f"Classifier: {value}" for value in project["classifiers"])
     return "\n".join(headers) + "\n\nTest description\n"
