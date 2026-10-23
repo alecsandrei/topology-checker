@@ -4,12 +4,13 @@ where and into which folder, then the install as it goes."""
 from __future__ import annotations
 
 import html
+import math
 from pathlib import Path
 
 from qgis.core import QgsApplication
 from qgis.gui import QgsCollapsibleGroupBoxBasic
 from qgis.PyQt.QtCore import Qt, QUrl, pyqtSignal, pyqtSlot
-from qgis.PyQt.QtGui import QDesktopServices, QFontDatabase
+from qgis.PyQt.QtGui import QDesktopServices, QFontDatabase, QTextOption
 from qgis.PyQt.QtWidgets import (
     QApplication,
     QDialog,
@@ -19,7 +20,10 @@ from qgis.PyQt.QtWidgets import (
     QLabel,
     QLineEdit,
     QPlainTextEdit,
+    QProgressBar,
     QPushButton,
+    QSizePolicy,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -34,8 +38,8 @@ from .menu import choose
 
 # The part of the documentation with the install by hand
 GUIDE = f'{DOCS}qgis-plugin/#install'
-# The lines of the command box
-COMMAND_LINES = 4
+# The lines that the log shows without scrolling: all of an install
+LOG_LINES = 10
 # The tasks that run, kept until they end: a dialog that closes does not
 # wait for its task, and Python must not collect it before QGIS is done
 running: set[install.Task] = set()
@@ -52,7 +56,7 @@ def existing(path: Path) -> Path:
     return path
 
 
-def fixed_width(field: QLineEdit | QPlainTextEdit) -> None:
+def fixed_width(field: QLineEdit | QPlainTextEdit | QTextEdit) -> None:
     field.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
 
 
@@ -64,10 +68,56 @@ def fact(text: str = '') -> QLineEdit:
     return field
 
 
+class Log(QPlainTextEdit):
+    """The lines of the install, which stay at the end as they come and as
+    the dialog changes around them."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setReadOnly(True)
+        margin = not_none(self.document()).documentMargin()
+        self.setMinimumHeight(
+            math.ceil(
+                LOG_LINES * self.fontMetrics().lineSpacing()
+                + 2 * (margin + self.frameWidth())
+            )
+        )
+        bar = not_none(self.verticalScrollBar())
+        bar.rangeChanged.connect(lambda _, end: bar.setValue(end))
+
+    def to_end(self) -> None:
+        bar = not_none(self.verticalScrollBar())
+        bar.setValue(bar.maximum())
+
+
+class Command(QTextEdit):
+    """The command, as high as all of its lines. They wrap anywhere, as a
+    path has no spaces to wrap at."""
+
+    def __init__(self, text: str) -> None:
+        super().__init__()
+        self.setAcceptRichText(False)
+        self.setPlainText(text)
+        self.setReadOnly(True)
+        self.setWordWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
+        document = not_none(self.document())
+        layout = not_none(document.documentLayout())
+        layout.documentSizeChanged.connect(self.fit)
+        self.fit()
+
+    def fit(self) -> None:
+        height = not_none(self.document()).size().height()
+        self.setFixedHeight(math.ceil(height) + 2 * self.frameWidth())
+
+
 class InstallDialog(QDialog):
     """Finds the wheel on PyPI and says what it is, then installs it when
     asked, with the lines of the install as it goes. It ends with what to do
-    next, and on a failure with the install by hand."""
+    next, and on a failure with the install by hand and a retry."""
 
     installed = pyqtSignal(str)
 
@@ -82,11 +132,15 @@ class InstallDialog(QDialog):
         self.release: install.Release | None = None
         self.task: install.Task | None = None
         self.installing = False
+        self.cancelled = False
 
         self.status = QLabel()
         self.status.setWordWrap(True)
         self.status.setTextFormat(Qt.TextFormat.RichText)
         self.status.setOpenExternalLinks(True)
+        self.progress = QProgressBar()
+        self.progress.setRange(0, 100)
+        self.progress.hide()
         self.package_label = QLabel(f'{PACKAGE} {self.version}')
         self.file_field = fact()
         self.source_field = fact()
@@ -112,20 +166,15 @@ class InstallDialog(QDialog):
         self.command_box = QgsCollapsibleGroupBoxBasic(
             tr('Command for {terminal}').format(terminal=install.terminal())
         )
-        self.command = QPlainTextEdit(install.command(self.version))
-        self.command.setReadOnly(True)
+        self.command = Command(install.command(self.version))
         fixed_width(self.command)
-        self.command.setFixedHeight(
-            COMMAND_LINES * self.command.fontMetrics().lineSpacing()
-        )
         self.copy_command = QPushButton(tr('Copy'))
         inside = QHBoxLayout(self.command_box)
         inside.addWidget(self.command, 1)
         inside.addWidget(self.copy_command, 0, Qt.AlignmentFlag.AlignTop)
         self.command_box.setCollapsed(True)
 
-        self.log = QPlainTextEdit()
-        self.log.setReadOnly(True)
+        self.log = Log()
         self.log.hide()
 
         self.buttons = QDialogButtonBox()
@@ -134,7 +183,11 @@ class InstallDialog(QDialog):
                 tr('Copy log'), QDialogButtonBox.ButtonRole.ActionRole
             )
         )
-        self.copy_log.hide()
+        self.retry_button = not_none(
+            self.buttons.addButton(
+                tr('Retry'), QDialogButtonBox.ButtonRole.ActionRole
+            )
+        )
         self.install_button = not_none(
             self.buttons.addButton(
                 tr('Update') if update else tr('Install'),
@@ -144,9 +197,13 @@ class InstallDialog(QDialog):
         self.cancel_button = not_none(
             self.buttons.addButton(QDialogButtonBox.StandardButton.Cancel)
         )
+        # Once all are in: Qt 5 shows every button again as one is added
+        self.copy_log.hide()
+        self.retry_button.hide()
 
         layout = QVBoxLayout(self)
         layout.addWidget(self.status)
+        layout.addWidget(self.progress)
         layout.addWidget(self.facts)
         layout.addWidget(self.log, 1)
         layout.addWidget(self.command_box)
@@ -158,6 +215,7 @@ class InstallDialog(QDialog):
             lambda: copy(self.command.toPlainText())
         )
         self.copy_log.clicked.connect(lambda: copy(self.log.toPlainText()))
+        self.retry_button.clicked.connect(self.retry)
         self.buttons.accepted.connect(self.start)
         self.buttons.rejected.connect(self.reject)
         self.look_up()
@@ -179,6 +237,7 @@ class InstallDialog(QDialog):
             )
         )
         self.facts.hide()
+        self.install_button.show()
         self.install_button.setEnabled(False)
         task = install.ReleaseTask(self.version)
         task.found.connect(self.found)
@@ -206,6 +265,7 @@ class InstallDialog(QDialog):
         if self.release is None or self.task is not None:
             return
         self.installing = True
+        self.cancelled = False
         self.say(
             tr('Installing {package} {version}…').format(
                 package=PACKAGE, version=self.release.version
@@ -216,9 +276,16 @@ class InstallDialog(QDialog):
         self.install_button.hide()
         self.log.show()
         self.copy_log.show()
+        self.progress.setValue(0)
+        self.progress.show()
         task = install.InstallTask(self.release)
         task.done.connect(self.install_done)
+        task.progressChanged.connect(self.progressed)
         self.run(task)
+
+    @pyqtSlot(float)
+    def progressed(self, value: float) -> None:
+        self.progress.setValue(round(value))
 
     @pyqtSlot(str)
     def install_done(self, version: str) -> None:
@@ -249,17 +316,43 @@ class InstallDialog(QDialog):
     @pyqtSlot(str)
     def failed(self, error: str) -> None:
         """Says why, with the install by hand, which may work where this did
-        not."""
+        not. What was cancelled only says so."""
+        # A QGIS that cannot use the package fails again
+        retry = not (
+            isinstance(self.task, install.ReleaseTask)
+            and self.task.reason is not None
+        )
         self.task = None
         self.installing = False
-        self.say(error, link=True)
+        if self.cancelled:
+            self.say(tr('Cancelled.'))
+        else:
+            self.say(error, link=True)
         self.facts.hide()
         self.install_button.hide()
+        self.log.show()
+        self.copy_log.show()
+        self.retry_button.setVisible(retry)
         self.command_box.show()
-        self.command_box.setCollapsed(False)
+        self.command_box.setCollapsed(self.cancelled)
         self.finish()
 
+    def retry(self) -> None:
+        """Starts again from what failed: the look-up or the install."""
+        self.retry_button.hide()
+        self.log.clear()
+        self.command_box.setCollapsed(True)
+        self.cancel_button.setText(tr('Cancel'))
+        if self.release is None:
+            self.log.hide()
+            self.copy_log.hide()
+            self.look_up()
+        else:
+            self.start()
+
     def finish(self) -> None:
+        self.progress.hide()
+        self.log.to_end()
         self.cancel_button.setText(tr('Close'))
         self.cancel_button.setEnabled(True)
         self.cancel_button.setDefault(True)
@@ -289,6 +382,7 @@ class InstallDialog(QDialog):
         """Closes, but an install that runs is cancelled first, and stays to
         say when it stopped."""
         if self.installing:
+            self.cancelled = True
             self.stop()
             self.cancel_button.setEnabled(False)
             self.say(tr('Cancelling…'))

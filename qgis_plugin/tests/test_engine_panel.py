@@ -575,6 +575,8 @@ def test_the_dialog_says_what_it_would_install(
     assert dialog.dependencies_label.text() == 'None'
     assert dialog.install_button.isEnabled()
     assert dialog.install_button.text() == 'Install'
+    assert dialog.copy_log.isHidden()
+    assert dialog.retry_button.isHidden()
     # Nothing is downloaded before the install is asked for
     assert pypi.asked == [JSON]
     assert not (home / VERSION).exists()
@@ -616,6 +618,34 @@ def test_a_release_that_pypi_does_not_have_fails_with_the_command(
     assert dialog.cancel_button.text() == 'Close'
 
 
+def test_a_failed_look_up_shows_its_log(pypi: Index):
+    dialog = looked_up(open_dialog())
+    assert shown(dialog.log)
+    assert shown(dialog.copy_log)
+    lines = dialog.log.toPlainText().splitlines()
+    assert lines[0].startswith('Python 3.12.8')
+    assert lines[-1] == f'PyPI has no topology-checker {VERSION}'
+
+
+def test_retry_looks_up_again(pypi: Index):
+    dialog = looked_up(open_dialog())
+    assert shown(dialog.retry_button)
+    content = make_wheel()
+    url = pypi.serve('/files/wheel.whl', content, kind='x')
+    pypi.release(answer([release_file(LINUX, content, url)]))
+    dialog.retry_button.click()
+    assert dialog.retry_button.isHidden()
+    assert dialog.cancel_button.text() == 'Cancel'
+    looked_up(dialog)
+    assert shown(dialog.facts)
+    assert dialog.install_button.isEnabled()
+    assert shown(dialog.install_button)
+    assert dialog.command_box.isCollapsed()
+    assert dialog.log.isHidden()
+    assert dialog.copy_log.isHidden()
+    assert pypi.asked == [JSON, JSON]
+
+
 def test_a_qgis_that_cannot_use_the_package_shows_why_and_the_command(
     pypi: Index, old_python: str
 ):
@@ -623,6 +653,8 @@ def test_a_qgis_that_cannot_use_the_package_shows_why_and_the_command(
     assert dialog.status.text().startswith(old_python)
     assert not dialog.command_box.isCollapsed()
     assert dialog.install_button.isHidden()
+    # It would fail the same again
+    assert dialog.retry_button.isHidden()
     assert pypi.asked == []
 
 
@@ -646,6 +678,8 @@ def test_the_install_shows_its_lines_as_it_goes(
     assert any(line.startswith('Downloading ') for line in lines)
     assert any(line.endswith(' matches PyPI') for line in lines)
     assert lines[-1] == f'Loaded topology-checker {VERSION}'
+    assert dialog.progress.isHidden()
+    assert dialog.retry_button.isHidden()
     dialog.copy_log.click()
     clipboard = QApplication.clipboard()
     assert clipboard is not None
@@ -720,7 +754,73 @@ def test_a_failed_install_shows_the_error_and_the_command(
     assert shown(dialog.command_box)
     assert not dialog.command_box.isCollapsed()
     assert dialog.cancel_button.text() == 'Close'
+    assert dialog.progress.isHidden()
     assert install.installed() is None
+
+
+def test_retry_installs_again(pypi: Index, home: Path):
+    content = make_wheel()
+    pypi.release(answer([release_file(LINUX, content, f'{pypi.url}/gone')]))
+    dialog = install_in(open_dialog())
+    assert shown(dialog.retry_button)
+    pypi.serve('/gone', content, kind='x')
+    dialog.retry_button.click()
+    assert dialog.retry_button.isHidden()
+    assert dialog.command_box.isHidden()
+    assert dialog.cancel_button.text() == 'Cancel'
+    looked_up(dialog)
+    assert dialog.status.text().startswith(
+        f'Installed topology-checker {VERSION}.'
+    )
+    # The log is that of the install that worked
+    lines = dialog.log.toPlainText().splitlines()
+    assert lines[0] == f'Downloading {wheel_name(LINUX)} (' + (
+        f'{install.size_text(len(content))})'
+    )
+    assert not any(line.startswith('Cannot fetch') for line in lines)
+    assert install.installed() == VERSION
+
+
+def test_a_download_that_does_not_match_says_so_briefly(pypi: Index):
+    content = make_wheel()
+    url = pypi.serve('/files/wheel.whl', content + b'tampered', kind='x')
+    pypi.release(answer([release_file(LINUX, content, url)]))
+    dialog = install_in(open_dialog())
+    assert dialog.status.text().startswith(
+        'The download does not match its SHA-256 on PyPI<br>'
+    )
+    assert sha256(content) not in dialog.status.text()
+    assert f'PyPI has {sha256(content)}' in dialog.log.toPlainText()
+
+
+def test_the_log_and_the_command_have_room_after_a_failure(pypi: Index):
+    content = make_wheel()
+    url = pypi.serve('/files/wheel.whl', content + b'tampered', kind='x')
+    pypi.release(answer([release_file(LINUX, content, url)]))
+    dialog = install_in(open_dialog())
+    QApplication.processEvents()
+    metrics = dialog.log.fontMetrics()
+    assert dialog.log.height() >= installer.LOG_LINES * metrics.lineSpacing()
+    # All of the command shows, and none of it is scrolled away
+    command = dialog.command
+    assert not_none(command.verticalScrollBar()).maximum() == 0
+    assert command.height() >= not_none(command.document()).size().height()
+
+
+def test_the_log_keeps_to_its_end(pypi: Index):
+    dialog = looked_up(open_dialog())
+    dialog.command_box.setCollapsed(True)
+    for number in range(3 * installer.LOG_LINES):
+        dialog.logged(f'Line {number}')
+    QApplication.processEvents()
+    bar = not_none(dialog.log.verticalScrollBar())
+    assert bar.maximum() > 0
+    assert bar.value() == bar.maximum()
+    # The log gets shorter as the command opens under it
+    dialog.command_box.setCollapsed(False)
+    QApplication.processEvents()
+    assert bar.value() == bar.maximum()
+    assert dialog.log.toPlainText().splitlines()[-1] == 'Line 29'
 
 
 def test_cancel_stops_the_install_and_says_so(pypi: Index, home: Path):
@@ -738,14 +838,20 @@ def test_cancel_stops_the_install_and_says_so(pypi: Index, home: Path):
     dialog.install_button.click()
     task = dialog.task
     assert task is not None
-    wait_for(lambda: task.progress() > 0, 30)
+    assert shown(dialog.progress)
+    wait_for(lambda: dialog.progress.value() > 0, 30)
     dialog.cancel_button.click()
     # It stays to say when the install stopped
     assert dialog.isVisible()
     assert dialog.status.text() == 'Cancelling…'
     assert not dialog.cancel_button.isEnabled()
     looked_up(dialog)
-    assert dialog.status.text().startswith('Cancelled<br>')
+    # Not a failure, so no install by hand
+    assert dialog.status.text() == 'Cancelled.'
+    assert shown(dialog.command_box)
+    assert dialog.command_box.isCollapsed()
+    assert shown(dialog.retry_button)
+    assert dialog.progress.isHidden()
     assert dialog.cancel_button.isEnabled()
     assert dialog.cancel_button.text() == 'Close'
     assert not (home / VERSION).exists()

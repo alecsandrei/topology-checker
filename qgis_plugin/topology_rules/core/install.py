@@ -309,11 +309,14 @@ class InstallTask(Task):
         content = self.get(release.url)
         digest = hashlib.sha256(content).hexdigest()
         if digest != release.sha256:
-            raise Failed(
-                tr('SHA-256 {digest} does not match PyPI {expected}').format(
+            # The hashes go to the log; the error is short enough to show
+            self.say(
+                tr('SHA-256 {digest}, PyPI has {expected}').format(
                     digest=digest, expected=release.sha256
-                )
+                ),
+                Qgis.MessageLevel.Warning,
             )
+            raise Failed(tr('The download does not match its SHA-256 on PyPI'))
         self.say(tr('SHA-256 {digest} matches PyPI').format(digest=digest))
         if self.isCanceled():
             raise Failed(tr('Cancelled'))

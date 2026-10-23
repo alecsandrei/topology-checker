@@ -504,9 +504,8 @@ def test_a_wheel_with_another_sha256_is_not_unpacked(pypi: Index, home: Path):
     outcome = run(install.InstallTask(find()))
     [error] = outcome.failed
     tampered = sha256(content + b'tampered')
-    assert error == (
-        f'SHA-256 {tampered} does not match PyPI {sha256(content)}'
-    )
+    assert error == 'The download does not match its SHA-256 on PyPI'
+    assert f'SHA-256 {tampered}, PyPI has {sha256(content)}' in outcome.lines
     assert outcome.done == []
     assert not (home / VERSION).exists()
     assert leftovers(home) == []
