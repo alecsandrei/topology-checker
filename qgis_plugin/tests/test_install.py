@@ -21,9 +21,9 @@ import typing as t
 from pathlib import Path
 
 import pytest
-from qgis.core import QgsApplication
+from qgis.core import QgsApplication, QgsNetworkAccessManager
 from qgis.gui import QgisInterface
-from qgis.PyQt.QtCore import QCoreApplication
+from qgis.PyQt.QtCore import QCoreApplication, QUrl
 
 import topology_rules
 from topology_rules.core import engine, folders, install, wheels
@@ -408,6 +408,35 @@ def test_a_server_error_fails_with_its_status(pypi: Index):
         f'Cannot fetch {pypi.url}/pypi/topology-checker/{VERSION}/json: '
         'HTTP 503 Service Unavailable'
     ]
+
+
+def test_a_server_error_is_not_answered_from_the_cache(
+    published: tuple[Index, bytes],
+):
+    pypi, _ = published
+    find()
+    pypi.serve(f'/pypi/topology-checker/{VERSION}/json', b'', status=503)
+    outcome = run(install.ReleaseTask())
+    assert outcome.found == []
+    assert outcome.failed == [
+        f'Cannot fetch {pypi.url}/pypi/topology-checker/{VERSION}/json: '
+        'HTTP 503 Service Unavailable'
+    ]
+
+
+def test_downloads_are_kept_out_of_the_network_cache(
+    published: tuple[Index, bytes],
+):
+    pypi, _ = published
+    release = find()
+    outcome = run(install.InstallTask(release))
+    assert outcome.done == [VERSION]
+    cache = not_none(QgsNetworkAccessManager.instance().cache())
+    for url in (
+        f'{pypi.url}/pypi/topology-checker/{VERSION}/json',
+        release.url,
+    ):
+        assert not cache.metaData(QUrl(url)).isValid(), url
 
 
 def test_no_network_fails_with_the_error(

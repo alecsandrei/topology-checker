@@ -22,11 +22,17 @@ import sys
 import typing as t
 from pathlib import Path
 
-from qgis.core import Qgis, QgsBlockingNetworkRequest, QgsFeedback, QgsTask
-from qgis.PyQt.QtCore import QCoreApplication, QUrl, pyqtSignal
+from qgis.core import (
+    Qgis,
+    QgsBlockingNetworkRequest,
+    QgsFeedback,
+    QgsNetworkAccessManager,
+    QgsTask,
+)
+from qgis.PyQt.QtCore import QCoreApplication, Qt, QUrl, pyqtSignal
 from qgis.PyQt.QtNetwork import QNetworkRequest
 
-from ..utils import tr
+from ..utils import not_none, tr
 from . import folders, wheels
 from .folders import (
     activate,
@@ -118,6 +124,17 @@ def terminal() -> str:
 # The tasks
 
 
+def uncache(url: str) -> None:
+    """Removes the URL from the network cache, which all threads share."""
+    # The connection that QgsBlockingNetworkRequest asks for in a task
+    manager = not_none(
+        QgsNetworkAccessManager.instance(Qt.ConnectionType.DirectConnection)
+    )
+    cache = manager.cache()
+    if cache is not None:
+        cache.remove(QUrl(url))
+
+
 class Task(QgsTask):
     """A step of the install that logs what it does, live and to the logs,
     and says why it failed."""
@@ -144,7 +161,18 @@ class Task(QgsTask):
     def get(self, url: str, missing: str = '') -> bytes:
         """The body of the URL, fetched with the proxy, SSL and
         authentication settings of QGIS. Raises Failed with missing, when
-        given, for a URL that is not found."""
+        given, for a URL that is not found.
+
+        The URL is kept out of the network cache of QGIS: Qt answers a
+        server error with what the cache holds for the URL, and a wheel has
+        no use there."""
+        uncache(url)
+        try:
+            return self.fetch(url, missing)
+        finally:
+            uncache(url)
+
+    def fetch(self, url: str, missing: str) -> bytes:
         request = QgsBlockingNetworkRequest()
         request.downloadProgress.connect(
             lambda done, total: (
