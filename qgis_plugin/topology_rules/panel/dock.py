@@ -36,7 +36,7 @@ from . import controller, exchange, startup
 from .entries import Entry
 from .icons import icon
 from .installer import InstallDialog
-from .menu import PanelMenu, choose, installable
+from .menu import PanelMenu, choose, installable, reason
 from .messages import RunFeedback, push_summary
 from .narrow import shrink_buttons, shrink_tabs
 from .offer import stop_offering
@@ -196,7 +196,7 @@ class Dock(QgsDockWidget):
     def rules_failed(self, error: ExecutableError) -> None:
         self.available = False
         self.form.set_rules(())
-        self.setup_page.explain(str(error), installable())
+        self.setup_page.explain(reason(error), installable())
         self.update_buttons()
 
     def current_rule(self) -> Rule | None:

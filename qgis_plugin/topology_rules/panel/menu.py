@@ -18,7 +18,7 @@ from qgis.PyQt.QtWidgets import (
 from ..core import binary, engine, install
 from ..core.engine import Engine, Package
 from ..core.wheels import PACKAGE
-from ..exceptions import ExecutableError, PackageError
+from ..exceptions import ExecutableError, MissingError, PackageError
 from ..utils import not_none, tr
 
 
@@ -47,6 +47,15 @@ def installable() -> bool:
         and engine.package() is None
         and install.unsupported() is None
     )
+
+
+def reason(error: ExecutableError) -> str:
+    """Why the engine cannot run, as the panel says it: next to its buttons
+    to install the package and choose the executable, what is missing is
+    enough."""
+    if isinstance(error, MissingError):
+        return tr('topology-checker was not found.')
+    return str(error)
 
 
 class PanelMenu(QMenu):
@@ -128,7 +137,7 @@ class PanelMenu(QMenu):
         try:
             path = binary.find_executable()
         except ExecutableError as error:
-            self.offer(self.engines[Engine.EXECUTABLE], str(error))
+            self.offer(self.engines[Engine.EXECUTABLE], reason(error))
         else:
             self.offer(self.engines[Engine.EXECUTABLE], None, str(path))
 

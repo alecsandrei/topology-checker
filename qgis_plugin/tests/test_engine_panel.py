@@ -34,7 +34,7 @@ from topology_rules.core import binary, engine, folders, install, wheels
 from topology_rules.core.binary import Rule
 from topology_rules.core.engine import Engine, Package
 from topology_rules.enums import Setting
-from topology_rules.exceptions import PackageError
+from topology_rules.exceptions import MissingError, PackageError
 from topology_rules.panel import installer, offer, startup
 from topology_rules.panel.dock import Dock
 from topology_rules.panel.installer import GUIDE, InstallDialog
@@ -333,7 +333,7 @@ def test_the_executable_cannot_be_chosen_without_one(
     menu.fill()
     action = menu.engines[Engine.EXECUTABLE]
     assert not action.isEnabled()
-    assert action.toolTip().startswith('topology-checker was not found.')
+    assert action.toolTip() == 'topology-checker was not found.'
 
 
 def test_the_executable_can_be_chosen_with_one(executable: str):
@@ -994,10 +994,26 @@ def test_the_setup_page_has_no_install_where_qgis_cannot_use_it(
     assert shown(bare.setup_page.browse_button)
 
 
-def test_the_setup_page_says_why_the_engine_cannot_run(bare: Dock):
-    assert bare.setup_page.status.text().startswith(
-        'topology-checker was not found.'
-    )
+def test_the_setup_page_says_what_is_missing(bare: Dock):
+    # Its buttons and link say what to do
+    assert bare.setup_page.status.text() == 'topology-checker was not found.'
+
+
+def test_the_setup_page_says_why_the_package_cannot_run(bare: Dock):
+    choose_engine(Engine.PACKAGE)
+    bare.refresh()
+    assert bare.setup_page.status.text() == MISSING
+
+
+def test_processing_says_where_to_get_an_engine(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    monkeypatch.setenv('PATH', str(tmp_path / 'nothing'))
+    with pytest.raises(MissingError) as raised:
+        binary.find_executable()
+    text = str(raised.value)
+    assert 'Install the Python package from the Topology Rules panel' in text
+    assert 'Settings > Options > Processing > Providers' in text
 
 
 def test_the_setup_page_shows_a_reason_as_it_is(bare: Dock):
