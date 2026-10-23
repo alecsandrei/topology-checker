@@ -245,7 +245,8 @@ jobs:
 
       - uses: conda-incubator/setup-miniconda@v3
         with:
-          miniforge-version: latest
+          # 26.9.4-0 fails `conda init --all` on Windows
+          miniforge-version: 26.7.2-1
           python-version: '3.12'
           channels: conda-forge
           channel-priority: strict
