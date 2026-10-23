@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import html
-
 from processing.core.ProcessingConfig import ProcessingConfig
 from qgis.core import QgsSettings
+from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtWidgets import (
     QFileDialog,
     QLabel,
@@ -19,31 +18,42 @@ INSTALL = 'https://alecsandrei.github.io/topology-checker/stable/install/'
 
 
 class SetupPage(QWidget):
-    """Says why the plugin cannot run, with the way to fix it: install the
-    tool, or point the plugin to it."""
+    """Says why the plugin cannot run, with the ways to fix it: install the
+    Python package, point the plugin to the executable, or read the guide."""
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self.status = QLabel()
         self.status.setWordWrap(True)
-        self.status.setOpenExternalLinks(True)
-        self.browse_button = QPushButton(tr('Choose topology-checker…'))
+        # A reason can hold a path, or quotes, as they are
+        self.status.setTextFormat(Qt.TextFormat.PlainText)
+        self.install_button = QPushButton(tr('Install Python package…'))
+        self.browse_button = QPushButton(tr('Choose executable…'))
+        self.guide = QLabel(
+            f'<a href="{INSTALL}">{tr("How to install topology-checker")}</a>'
+        )
+        self.guide.setOpenExternalLinks(True)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.status)
+        layout.addWidget(self.install_button)
         layout.addWidget(self.browse_button)
+        layout.addWidget(self.guide)
         layout.addStretch(1)
 
     def checking(self) -> None:
         self.status.setText(tr('Checking topology-checker…'))
-        self.browse_button.hide()
+        for widget in (self.install_button, self.browse_button, self.guide):
+            widget.hide()
 
-    def explain(self, reason: str) -> None:
+    def explain(self, reason: str, installable: bool = False) -> None:
+        """Says why, and offers the install where the package can be
+        installed."""
+        self.status.setText(reason)
+        self.install_button.setVisible(installable)
+        self.install_button.setDefault(installable)
         self.browse_button.show()
-        self.status.setText(
-            f'{html.escape(reason)}<br><a href="{INSTALL}">'
-            f'{tr("How to install topology-checker")}</a>'
-        )
+        self.guide.show()
 
     def choose(self) -> bool:
         """Asks for the executable and remembers it, true if one was chosen."""
