@@ -17,6 +17,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import threading
 import time
 import typing as t
 from pathlib import Path
@@ -27,6 +28,7 @@ from qgis.core import (
     QgsApplication,
     QgsFeature,
     QgsGeometry,
+    QgsNetworkAccessManager,
     QgsProcessingAlgRunnerTask,
     QgsProcessingContext,
     QgsProcessingFeedback,
@@ -317,6 +319,27 @@ def usable_package() -> Package:
     if os.environ.get(NEEDS_PACKAGE) == '1':
         pytest.fail(f'{NEEDS_PACKAGE} is 1: {reason}', pytrace=False)
     pytest.skip(reason)
+
+
+# The folder of the network cache of QGIS, a setting at the root of the tree
+NETWORK_CACHE = 'cache/directory'
+
+
+def isolate_network_cache(folder: Path) -> None:
+    """Points the network cache of QGIS at the folder, so that what the tests
+    download stays out of the cache of the user.
+
+    The network managers of all the threads share one disk cache, which
+    takes its folder from the settings as a manager is set up. QGIS set up
+    the one of the main thread as it started, with the folder of the user,
+    so a manager is set up on a thread of its own to move the cache now.
+    """
+    settings = QgsSettings()
+    settings.setValue(NETWORK_CACHE, str(folder))
+    settings.sync()
+    thread = threading.Thread(target=QgsNetworkAccessManager.instance)
+    thread.start()
+    thread.join()
 
 
 def choose_engine(chosen: Engine) -> None:

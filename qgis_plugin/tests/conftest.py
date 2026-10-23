@@ -32,6 +32,7 @@ from topology_rules.provider import Provider
 
 from .helpers import (
     choose_engine,
+    isolate_network_cache,
     real_executable,
     usable_package,
     wait_for,
@@ -40,7 +41,8 @@ from .helpers import (
 
 @pytest.hookimpl(trylast=True)
 def pytest_configure(config: pytest.Config) -> None:
-    """Gives the settings of QGIS a folder for this run alone.
+    """Gives the settings of QGIS a folder for this run alone, with the
+    network cache in it.
 
     pytest-qgis keeps them in `.qgis-settings` of the project, which every
     run from the project shares, and so shares the path of the executable
@@ -51,6 +53,7 @@ def pytest_configure(config: pytest.Config) -> None:
     QSettings.setPath(
         QSettings.Format.IniFormat, QSettings.Scope.UserScope, folder
     )
+    isolate_network_cache(Path(folder) / 'cache')
 
 
 # The size of the text of a user interface, in pixels: 9 points at 96 dpi,
