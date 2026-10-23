@@ -126,6 +126,11 @@ def ramp_text(ramp: QgsColorRamp) -> str:
     return document.toString(-1)
 
 
+def channels(color: QColor) -> tuple[int, int, int, int]:
+    """The red, green, blue and alpha of a colour, from 0 to 255."""
+    return color.red(), color.green(), color.blue(), color.alpha()
+
+
 def same_ramp(first: QgsColorRamp, second: QgsColorRamp) -> bool:
     """Whether two ramps have the same colours. Their texts can differ in
     the last digits of the stops, as when a ramp was turned round twice."""
@@ -137,7 +142,7 @@ def same_ramp(first: QgsColorRamp, second: QgsColorRamp) -> bool:
         one, other = first.color(index / SAMPLES), second.color(index / SAMPLES)
         if any(
             abs(a - b) > 1
-            for a, b in zip(one.getRgb(), other.getRgb(), strict=True)
+            for a, b in zip(channels(one), channels(other), strict=True)
         ):
             return False
     return True
