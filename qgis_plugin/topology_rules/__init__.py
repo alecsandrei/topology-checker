@@ -10,6 +10,7 @@ The plugin runs the executable and shows what it finds.
   * layers, inputs: what a layer is to the tool, and the files made for it
   * checks, invalid: runs rules in one pass; the features it would reject
   * style: how errors are drawn and grouped
+  * install: the Python package from PyPI, in a folder of the profile
 * algorithms/: the Processing algorithms (rule, check, definition, utilities)
   with base and sinks for what they share
 * panel/: the dock
@@ -31,6 +32,11 @@ if t.TYPE_CHECKING:
 
 
 def classFactory(iface: QgisInterface):
+    # The installed package goes on sys.path before any module imports it
+    from .core import install
+
+    install.activate()
+
     from .plugin import TopologyRules
 
     return TopologyRules(iface)
