@@ -1,6 +1,5 @@
-"""The install of the Python package from PyPI into the profile: the wheel
-that fits, its checks, its folders and its logs, against a PyPI of the tests
-on 127.0.0.1."""
+"""The install of the Python package from PyPI into the profile: its checks,
+its folders and its logs, against a PyPI of the tests on 127.0.0.1."""
 
 from __future__ import annotations
 
@@ -8,19 +7,16 @@ import ast
 import collections.abc as c
 import configparser
 import dataclasses
-import hashlib
 import http.server
 import importlib
-import io
+import inspect
 import os
 import platform
 import sys
-import sysconfig
 import threading
 import time
 import types
 import typing as t
-import zipfile
 from pathlib import Path
 
 import pytest
@@ -29,92 +25,31 @@ from qgis.gui import QgisInterface
 from qgis.PyQt.QtCore import QCoreApplication
 
 import topology_rules
-from topology_rules.core import install
+from topology_rules.core import folders, install, wheels
 from topology_rules.utils import not_none
 
 from .helpers import wait_for
+from .wheel_helpers import (
+    LINUX,
+    MARK,
+    VERSION,
+    WHEELS,
+    answer,
+    fake_module,
+    mac,
+    make_wheel,
+    pretend_linux,
+    release_file,
+    sha256,
+    wheel_name,
+    windows,
+)
 
-VERSION = install.wanted()
 # The index of the module, before a test points it to its own server
 PRODUCTION = install.PYPI
-FOLDER = install.folder
-LINUX = 'cp310-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64'
-WHEELS = {
-    'windows': 'cp310-abi3-win_amd64',
-    'mac_intel': 'cp310-abi3-macosx_10_12_x86_64',
-    'mac_arm': 'cp310-abi3-macosx_11_0_arm64',
-    'linux': LINUX,
-}
-MARK = 'from the wheel of the tests'
-
-
-def wheel_name(tag: str, version: str = VERSION) -> str:
-    return f'topology_checker-{version}-{tag}.whl'
-
-
-def make_wheel(
-    version: str = VERSION,
-    tag: str = LINUX,
-    extra: dict[str, str] | None = None,
-) -> bytes:
-    """A wheel of the package as maturin builds it, with a pure Python
-    module in place of the library."""
-    info = f'topology_checker-{version}.dist-info'
-    tags = ''.join(
-        f'Tag: {python}-{abi}-{plat}\n'
-        for python, abi, plats in [tag.split('-')]
-        for plat in plats.split('.')
-    )
-    members = {
-        'topology_checker/__init__.py': f'MARK = {MARK!r}\n',
-        f'{info}/METADATA': (
-            f'Metadata-Version: 2.4\nName: topology-checker\n'
-            f'Version: {version}\nRequires-Dist: shapely>=2,<3\n'
-        ),
-        f'{info}/WHEEL': (
-            'Wheel-Version: 1.0\nGenerator: maturin (1.15.0)\n'
-            f'Root-Is-Purelib: false\n{tags}'
-        ),
-        f'{info}/RECORD': '',
-        **(extra or {}),
-    }
-    buffer = io.BytesIO()
-    with zipfile.ZipFile(buffer, 'w') as archive:
-        for name, text in members.items():
-            archive.writestr(name, text)
-    return buffer.getvalue()
-
-
-def sha256(content: bytes) -> str:
-    return hashlib.sha256(content).hexdigest()
-
-
-def release_file(
-    tag: str, content: bytes, url: str, version: str = VERSION
-) -> dict[str, t.Any]:
-    """A file of a release, as the JSON of PyPI lists it."""
-    return {
-        'filename': wheel_name(tag, version),
-        'url': url,
-        'size': len(content),
-        'digests': {'sha256': sha256(content)},
-        'packagetype': 'bdist_wheel',
-    }
-
-
-def answer(files: list[dict[str, t.Any]], version: str = VERSION) -> dict:
-    sdist = {
-        'filename': f'topology_checker-{version}.tar.gz',
-        'url': 'https://example.invalid/sdist',
-        'size': 1,
-        'digests': {'sha256': sha256(b'sdist')},
-        'packagetype': 'sdist',
-    }
-    return {
-        'info': {'version': version, 'requires_python': '>=3.10'},
-        'urls': [*files, sdist],
-    }
-
+FOLDER = folders.folder
+# The modules of the install
+MODULES = (install, wheels, folders)
 
 # The PyPI of the tests
 
@@ -212,32 +147,16 @@ def published(pypi: Index) -> tuple[Index, bytes]:
     return pypi, content
 
 
-# This QGIS: Linux x86_64 with glibc 2.35, Python 3.12.8, shapely 2.0.6 and
-# pyproj 3.7.0, whatever the machine of the tests
-
-
-def fake_module(name: str, version: str) -> types.ModuleType:
-    module = types.ModuleType(name)
-    module.__version__ = version  # type: ignore[attr-defined]
-    return module
-
-
 @pytest.fixture(autouse=True)
 def linux(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(platform, 'system', lambda: 'Linux')
-    monkeypatch.setattr(platform, 'machine', lambda: 'x86_64')
-    monkeypatch.setattr(platform, 'libc_ver', lambda: ('glibc', '2.35'))
-    monkeypatch.setattr(platform, 'python_version', lambda: '3.12.8')
-    monkeypatch.setattr(platform, 'python_implementation', lambda: 'CPython')
-    monkeypatch.setitem(sys.modules, 'shapely', fake_module('shapely', '2.0.6'))
-    monkeypatch.setitem(sys.modules, 'pyproj', fake_module('pyproj', '3.7.0'))
+    pretend_linux(monkeypatch)
 
 
 @pytest.fixture(autouse=True)
 def home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     """The folder of the package, in a profile of the test."""
     folder = tmp_path / 'profile' / 'python' / 'dependencies' / 'topology_rules'
-    monkeypatch.setattr(install, 'folder', lambda: folder)
+    monkeypatch.setattr(folders, 'folder', lambda: folder)
     return folder
 
 
@@ -245,7 +164,7 @@ def package_modules() -> list[str]:
     return [
         name
         for name in sys.modules
-        if name == install.MODULE or name.startswith(f'{install.MODULE}.')
+        if name == wheels.MODULE or name.startswith(f'{wheels.MODULE}.')
     ]
 
 
@@ -268,7 +187,7 @@ def messages() -> c.Iterator[list[str]]:
     found: list[str] = []
 
     def received(message: str, tag: str, *rest: object) -> None:
-        if tag == install.TAG:
+        if tag == folders.TAG:
             found.append(message)
 
     log = not_none(QgsApplication.messageLog())
@@ -298,6 +217,28 @@ def version_folder(
     )
     (info / 'WHEEL').write_text(f'Wheel-Version: 1.0\nTag: {tag}\n')
     return folder
+
+
+def load_from(
+    folder: Path, monkeypatch: pytest.MonkeyPatch
+) -> types.ModuleType:
+    """A topology_checker imported from a version folder."""
+    loaded = fake_module('topology_checker', folder.name)
+    loaded.__file__ = str(folder / 'topology_checker' / '__init__.py')
+    monkeypatch.setitem(sys.modules, 'topology_checker', loaded)
+    return loaded
+
+
+def lock_libraries(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Deleting a library fails, as on Windows while it is loaded."""
+    unlink = os.unlink
+
+    def locked(path: t.Any, *args: t.Any, **kwargs: t.Any) -> None:
+        if str(path).endswith('.pyd'):
+            raise PermissionError(13, 'Access is denied', str(path))
+        unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, 'unlink', locked)
 
 
 @dataclasses.dataclass
@@ -357,12 +298,15 @@ def test_the_folder_is_in_the_profile():
 
 def test_the_wanted_version_is_that_of_the_plugin():
     parser = configparser.ConfigParser(interpolation=None)
-    parser.read(install.METADATA, encoding='utf-8')
+    parser.read(folders.METADATA, encoding='utf-8')
     assert install.wanted() == parser['general']['version']
 
 
-def test_the_module_fetches_without_pip_or_other_programs():
-    tree = ast.parse(Path(install.__file__).read_text(encoding='utf-8'))
+@pytest.mark.parametrize('module', MODULES)
+def test_the_install_fetches_without_pip_or_other_programs(
+    module: types.ModuleType,
+):
+    tree = ast.parse(Path(str(module.__file__)).read_text(encoding='utf-8'))
     imported = {
         alias.name.split('.')[0]
         for node in ast.walk(tree)
@@ -376,188 +320,51 @@ def test_the_module_fetches_without_pip_or_other_programs():
     assert not imported & {'subprocess', 'urllib', 'requests', 'http', 'pip'}
 
 
-# The wheel that fits
+def test_the_panel_finds_what_it_uses_in_install():
+    for name in install.__all__:
+        assert hasattr(install, name), name
+    assert {
+        'folder',
+        'activate',
+        'unsupported',
+        'wanted',
+        'installed',
+        'outdated',
+        'restart_needed',
+        'dependencies',
+        'command',
+        'terminal',
+        'remove',
+        'size_text',
+        'log',
+        'Release',
+        'Task',
+        'ReleaseTask',
+        'InstallTask',
+    } <= set(install.__all__)
 
 
-def mac(monkeypatch: pytest.MonkeyPatch, machine: str, version: str) -> None:
-    monkeypatch.setattr(platform, 'system', lambda: 'Darwin')
-    monkeypatch.setattr(platform, 'machine', lambda: machine)
-    monkeypatch.setattr(
-        platform, 'mac_ver', lambda: (version, ('', '', ''), '')
-    )
-    # What a universal2 build of Python says on Apple silicon
-    monkeypatch.setattr(sysconfig, 'get_platform', lambda: 'macosx-15.7-x86_64')
-
-
-def windows(monkeypatch: pytest.MonkeyPatch, build: str) -> None:
-    monkeypatch.setattr(platform, 'system', lambda: 'Windows')
-    monkeypatch.setattr(platform, 'machine', lambda: 'AMD64')
-    monkeypatch.setattr(sysconfig, 'get_platform', lambda: build)
-
-
-def listed() -> dict:
-    files = [
-        release_file(tag, make_wheel(tag=tag), f'https://files.invalid/{kind}')
-        for kind, tag in WHEELS.items()
+@pytest.mark.parametrize('module', MODULES)
+def test_each_function_of_the_install_says_what_it_does(
+    module: types.ModuleType,
+):
+    unsaid = [
+        name
+        for name, function in inspect.getmembers(module, inspect.isfunction)
+        if function.__module__ == module.__name__ and not function.__doc__
     ]
-    return answer(files)
+    assert unsaid == []
 
 
-@pytest.mark.parametrize(
-    ('system', 'expected'),
-    [
-        ('windows', 'windows'),
-        ('mac_arm', 'mac_arm'),
-        ('mac_intel', 'mac_intel'),
-        ('linux', 'linux'),
-    ],
-)
-def test_the_wheel_of_the_platform_is_chosen(
-    monkeypatch: pytest.MonkeyPatch, system: str, expected: str
-):
-    if system == 'windows':
-        windows(monkeypatch, 'win-amd64')
-    elif system == 'mac_arm':
-        mac(monkeypatch, 'arm64', '15.7.1')
-    elif system == 'mac_intel':
-        mac(monkeypatch, 'x86_64', '13.6')
-    release = install.pick(listed(), VERSION)
-    assert release.filename == wheel_name(WHEELS[expected])
-    assert release.url == f'https://files.invalid/{expected}'
-
-
-def test_a_release_holds_what_the_consent_shows(home: Path):
-    data = listed()
-    release = install.pick(data, VERSION)
-    linux = next(f for f in data['urls'] if f['filename'] == release.filename)
-    assert release.version == VERSION
-    assert release.size == linux['size']
-    assert release.sha256 == linux['digests']['sha256']
-    assert release.target == home / VERSION
-
-
-def test_an_older_macos_than_the_wheel_has_none(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    mac(monkeypatch, 'x86_64', '10.11')
-    with pytest.raises(install.Failed, match='no wheel'):
-        install.pick(listed(), VERSION)
-
-
-def test_a_wheel_for_another_python_is_not_chosen():
-    tag = 'cp313-cp313-manylinux_2_17_x86_64'
-    data = answer([release_file(tag, b'x', 'https://files.invalid/313')])
-    with pytest.raises(install.Failed, match='no wheel'):
-        install.pick(data, VERSION)
-
-
-def test_another_version_from_pypi_is_refused():
-    data = listed()
-    data['info']['version'] = '0.0.1'
-    with pytest.raises(install.Failed, match=r'0\.0\.1 for '):
-        install.pick(data, VERSION)
-
-
-def test_a_file_without_a_sha256_is_refused():
-    data = listed()
-    for file in data['urls']:
-        file['digests'] = {}
-    with pytest.raises(install.Failed, match='SHA-256'):
-        install.pick(data, VERSION)
+def test_a_release_goes_into_the_folder_of_its_version(home: Path):
+    release = install.Release(
+        VERSION, wheel_name(LINUX), 'https://files.invalid/x', 1, sha256(b'')
+    )
+    assert install.folder_of(release.version) == home / VERSION
+    assert install.InstallTask(release).target == home / VERSION
 
 
 # Why this QGIS cannot use the package
-
-
-def test_this_qgis_can_use_it():
-    assert install.unsupported() is None
-
-
-def test_the_dependencies_are_those_of_qgis(monkeypatch: pytest.MonkeyPatch):
-    assert install.dependencies() == {'shapely': '2.0.6', 'pyproj': '3.7.0'}
-    monkeypatch.setitem(sys.modules, 'pyproj', None)
-    assert install.dependencies() == {'shapely': '2.0.6', 'pyproj': None}
-
-
-def thirty_two_bits(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(sys, 'maxsize', 2**31 - 1)
-
-
-@pytest.mark.parametrize(
-    ('patch', 'reason'),
-    [
-        (
-            lambda m: m.setattr(platform, 'python_version', lambda: '3.9.18'),
-            'Needs Python 3.10 or newer, QGIS has Python 3.9.18',
-        ),
-        (
-            lambda m: m.setattr(
-                platform, 'python_implementation', lambda: 'PyPy'
-            ),
-            'Needs CPython, QGIS has PyPy',
-        ),
-        (
-            lambda m: windows(m, 'win32'),
-            'No wheel for Windows win32',
-        ),
-        (
-            lambda m: windows(m, 'win-arm64'),
-            'No wheel for Windows win-arm64',
-        ),
-        (
-            lambda m: mac(m, 'i386', '10.15'),
-            'No wheel for macOS i386',
-        ),
-        (
-            lambda m: m.setattr(platform, 'machine', lambda: 'aarch64'),
-            'No wheel for Linux aarch64',
-        ),
-        (thirty_two_bits, 'No wheel for 32-bit Python'),
-        (
-            lambda m: m.setattr(platform, 'libc_ver', lambda: ('', '')),
-            'Needs glibc 2.17 or newer, Linux has no glibc',
-        ),
-        (
-            lambda m: m.setattr(
-                platform, 'libc_ver', lambda: ('glibc', '2.12')
-            ),
-            'Needs glibc 2.17 or newer, Linux has glibc 2.12',
-        ),
-        (
-            lambda m: m.setattr(platform, 'system', lambda: 'FreeBSD'),
-            'No wheel for FreeBSD x86_64',
-        ),
-        (
-            lambda m: m.setitem(sys.modules, 'shapely', None),
-            'Needs shapely 2 or newer, which does not load',
-        ),
-        (
-            lambda m: m.setitem(
-                sys.modules, 'shapely', fake_module('shapely', '1.8.5')
-            ),
-            'Needs shapely 2 or newer, QGIS has shapely 1.8.5',
-        ),
-        (
-            lambda m: m.setitem(sys.modules, 'pyproj', None),
-            'Needs pyproj 3.4 or newer, which does not load',
-        ),
-        (
-            lambda m: m.setitem(
-                sys.modules, 'pyproj', fake_module('pyproj', '3.3.1')
-            ),
-            'Needs pyproj 3.4 or newer, QGIS has pyproj 3.3.1',
-        ),
-    ],
-)
-def test_why_this_qgis_cannot_use_it_is_said(
-    monkeypatch: pytest.MonkeyPatch,
-    patch: c.Callable[[pytest.MonkeyPatch], None],
-    reason: str,
-):
-    patch(monkeypatch)
-    found = install.unsupported()
-    assert found is not None
-    assert found.startswith(reason)
 
 
 def test_a_qgis_that_cannot_use_it_asks_pypi_nothing(
@@ -777,9 +584,7 @@ def test_an_upgrade_loads_after_a_restart(
     published: tuple[Index, bytes], home: Path, monkeypatch: pytest.MonkeyPatch
 ):
     old = version_folder(home, '0.0.1')
-    loaded = fake_module('topology_checker', '0.0.1')
-    loaded.__file__ = str(old / 'topology_checker' / '__init__.py')
-    monkeypatch.setitem(sys.modules, 'topology_checker', loaded)
+    loaded = load_from(old, monkeypatch)
     outcome = run(install.InstallTask(find()))
     assert outcome.done == [VERSION]
     assert outcome.lines[-1] == (
@@ -802,6 +607,45 @@ def test_the_same_version_is_installed_again_over_a_broken_one(
     assert outcome.done == [VERSION]
     assert not (broken / 'stray.py').exists()
     assert install.installed() == VERSION
+
+
+def test_a_loaded_package_is_left_as_it_is(
+    published: tuple[Index, bytes],
+    home: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    pypi, _ = published
+    folder = version_folder(home, VERSION)
+    library = folder / 'topology_checker' / '_native.pyd'
+    library.write_text('')
+    before = sorted(path.relative_to(folder) for path in folder.rglob('*'))
+    load_from(folder, monkeypatch)
+    lock_libraries(monkeypatch)
+    outcome = run(install.InstallTask(find()))
+    assert outcome.failed == [
+        f'Cannot replace {folder} while it is loaded. Restart QGIS and '
+        'install again'
+    ]
+    assert outcome.done == []
+    assert sorted(p.relative_to(folder) for p in folder.rglob('*')) == before
+    assert install.installed() == VERSION
+    # Refused before the download
+    assert pypi.asked == [f'/pypi/topology-checker/{VERSION}/json']
+    assert leftovers(home) == []
+
+
+def test_a_package_loaded_during_the_download_is_left_as_it_is(
+    home: Path, monkeypatch: pytest.MonkeyPatch
+):
+    folder = version_folder(home, VERSION)
+    before = sorted(path.relative_to(folder) for path in folder.rglob('*'))
+    unpacked = home / f'.{VERSION}-a1b2'
+    (unpacked / 'topology_checker').mkdir(parents=True)
+    load_from(folder, monkeypatch)
+    with pytest.raises(wheels.Failed, match='while it is loaded'):
+        folders.place(unpacked, folder)
+    assert sorted(p.relative_to(folder) for p in folder.rglob('*')) == before
+    assert not unpacked.exists()
 
 
 # The log
@@ -908,9 +752,7 @@ def test_activate_keeps_the_folder_of_a_loaded_package(
 ):
     old = version_folder(home, '0.0.1')
     version_folder(home, VERSION)
-    loaded = fake_module('topology_checker', '0.0.1')
-    loaded.__file__ = str(old / 'topology_checker' / '__init__.py')
-    monkeypatch.setitem(sys.modules, 'topology_checker', loaded)
+    load_from(old, monkeypatch)
     install.activate()
     assert old.exists()
 
@@ -970,7 +812,7 @@ def test_an_older_install_is_offered_an_update(
     home: Path, monkeypatch: pytest.MonkeyPatch
 ):
     version_folder(home, '0.2.1')
-    monkeypatch.setattr(install, 'wanted', lambda: '0.10.0')
+    monkeypatch.setattr(folders, 'wanted', lambda: '0.10.0')
     assert install.installed() == '0.2.1'
     assert install.outdated()
 
@@ -980,7 +822,7 @@ def test_the_newest_install_is_used(
 ):
     version_folder(home, '0.2.0')
     version_folder(home, '0.10.0')
-    monkeypatch.setattr(install, 'wanted', lambda: '0.10.0')
+    monkeypatch.setattr(folders, 'wanted', lambda: '0.10.0')
     assert install.installed() == '0.10.0'
 
 
@@ -1033,14 +875,7 @@ def test_what_a_locked_library_keeps_goes_at_the_next_start(
     library = folder / 'topology_checker' / '_native.pyd'
     library.write_text('')
     unlink = os.unlink
-
-    def locked(path: t.Any, *args: t.Any, **kwargs: t.Any) -> None:
-        # Windows keeps a library that is loaded
-        if str(path).endswith('.pyd'):
-            raise PermissionError(13, 'Access is denied', str(path))
-        unlink(path, *args, **kwargs)
-
-    monkeypatch.setattr(os, 'unlink', locked)
+    lock_libraries(monkeypatch)
     install.remove()
     assert library.exists()
     assert list(folder.glob('*.dist-info')) == []
@@ -1103,7 +938,7 @@ def test_the_command_quotes_a_folder_with_spaces(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
     folder = tmp_path / 'Application Support' / 'topology_rules'
-    monkeypatch.setattr(install, 'folder', lambda: folder)
+    monkeypatch.setattr(folders, 'folder', lambda: folder)
     assert f"--target '{folder / VERSION}' " in install.command()
 
 
@@ -1115,7 +950,7 @@ GUIDE = 'https://alecsandrei.github.io/topology-checker/stable/qgis-plugin/'
 
 def test_the_about_text_names_the_package_and_links_the_guide():
     parser = configparser.ConfigParser(interpolation=None)
-    parser.read(install.METADATA, encoding='utf-8')
+    parser.read(folders.METADATA, encoding='utf-8')
     about = parser['general']['about']
     assert 'topology-checker Python package' in about
     assert 'uses the shapely and pyproj that come with QGIS' in about
@@ -1123,7 +958,7 @@ def test_the_about_text_names_the_package_and_links_the_guide():
 
 
 def test_the_guide_has_the_command_for_each_system():
-    page = install.METADATA.parents[2] / 'docs' / 'qgis-plugin.md'
+    page = folders.METADATA.parents[2] / 'docs' / 'qgis-plugin.md'
     if not page.is_file():
         pytest.skip('The docs are not next to the plugin')
     text = page.read_text(encoding='utf-8')

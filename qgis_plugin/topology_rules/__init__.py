@@ -10,7 +10,8 @@ The plugin runs the executable and shows what it finds.
   * layers, inputs: what a layer is to the tool, and the files made for it
   * checks, invalid: runs rules in one pass; the features it would reject
   * style: how errors are drawn and grouped
-  * install: the Python package from PyPI, in a folder of the profile
+  * install, wheels, folders: the Python package from PyPI; the wheel that
+    fits this QGIS; its folders in the profile
 * algorithms/: the Processing algorithms (rule, check, definition, utilities)
   with base and sinks for what they share
 * panel/: the dock
