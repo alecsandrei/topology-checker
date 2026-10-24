@@ -682,3 +682,70 @@ fn progress_stops_before_the_rule_that_fails() {
     assert!(result.stdout.is_empty());
     assert!(!output.exists());
 }
+
+/// Squares meeting along their edges: no violations, and seconds of overlap
+/// checks in debug and release builds alike.
+fn touching_squares(path: &std::path::Path) {
+    use std::fmt::Write;
+    let side = if cfg!(debug_assertions) { 120 } else { 400 };
+    let mut text = String::from(r#"{"type":"FeatureCollection","features":["#);
+    for k in 0..side * side {
+        let (x, y) = (k % side, k / side);
+        let (x1, y1) = (x + 1, y + 1);
+        if k > 0 {
+            text.push(',');
+        }
+        write!(
+            text,
+            r#"{{"type":"Feature","id":{k},"properties":{{}},"geometry":{{"type":"Polygon","coordinates":[[[{x},{y}],[{x1},{y}],[{x1},{y1}],[{x},{y1}],[{x},{y}]]]}}}}"#
+        )
+        .unwrap();
+    }
+    text.push_str("]}");
+    std::fs::write(path, text).unwrap();
+}
+
+#[test]
+fn progress_lines_arrive_while_later_rules_still_run() {
+    use std::io::BufRead;
+    let dir = tempfile::tempdir().unwrap();
+    progress_inputs(dir.path());
+    touching_squares(&dir.path().join("squares.geojson"));
+    let config = dir.path().join("topology.toml");
+    std::fs::write(
+        &config,
+        "[layers]\nroads = { path = \"lines.geojson\" }\nsquares = { path = \"squares.geojson\" }\n\n[[rules]]\nrule = \"line/must-not-have-dangles\"\nlayer = \"roads\"\n\n[[rules]]\nrule = \"polygon/must-not-overlap\"\nlayer = \"squares\"\n",
+    )
+    .unwrap();
+    let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_topology-checker"))
+        .arg("validate")
+        .arg(&config)
+        .arg(PROGRESS)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stderr = std::io::BufReader::new(child.stderr.take().unwrap());
+    let mut line = || {
+        let mut line = String::new();
+        stderr.read_line(&mut line).unwrap();
+        (line, std::time::Instant::now())
+    };
+    let (first, first_at) = line();
+    let running = child.try_wait().unwrap().is_none();
+    let (second, second_at) = line();
+    let status = child.wait().unwrap();
+    assert_eq!(
+        [first.as_str(), second.as_str()],
+        [
+            "checked rule 1/2 (line/must-not-have-dangles): 2 errors\n",
+            "checked rule 2/2 (polygon/must-not-overlap): 0 errors\n",
+        ]
+    );
+    assert_eq!(status.code(), Some(1));
+    // Checking the squares takes seconds; load only makes that longer. Lines
+    // held back until the end would arrive together.
+    assert!(running);
+    let gap = second_at - first_at;
+    assert!(gap.as_secs_f64() > 0.5, "the lines came {gap:?} apart");
+}

@@ -10,6 +10,7 @@ import random
 import threading
 import time
 import weakref
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, cast
@@ -37,14 +38,13 @@ from topology_checker import (
     Rule,
     RuleReport,
     Topology,
+    ValidationStream,
+    Violation,
     _native,
 )
 
 VARIANTS = [(rule, variant) for rule in Rule for variant in rule.variants]
 FAMILIES = (GeometryKind.POINT, GeometryKind.LINE, GeometryKind.POLYGON)
-# Generous next to the milliseconds cancellation takes, and well below the
-# seconds the heavy rule needs.
-PROMPT = 2.0
 
 
 def test_every_native_variant_is_generated() -> None:
@@ -459,11 +459,61 @@ def test_failure_after_reports_keeps_them_and_raises_at_the_failing_rule() -> No
     assert no_workers()
 
 
+def run_together(count: int, work: Callable[[int], object]) -> None:
+    """Run work(i) on count threads released at once; re-raise the first failure."""
+    barrier = threading.Barrier(count)
+    failures: list[BaseException] = []
+
+    def run(i: int) -> None:
+        try:
+            barrier.wait()
+            work(i)
+        except BaseException as error:
+            failures.append(error)
+
+    threads = [threading.Thread(target=run, args=(i,)) for i in range(count)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    if failures:
+        raise failures[0]
+
+
+def crowded(seed: int) -> Topology:
+    """Hundreds of overlapping points and dangles, so streams refill often."""
+    rng = random.Random(seed)
+
+    def xy(size: int) -> tuple[int, int]:
+        return rng.randrange(size), rng.randrange(size)
+
+    topology = Topology()
+    topology.add_rule(Rule.MUST_NOT_OVERLAP, [Point(xy(4)) for _ in range(120)])
+    lines = [LineString([xy(20), xy(20)]) for _ in range(60)]
+    topology.add_rule(Rule.MUST_NOT_HAVE_DANGLES, lines)
+    return topology
+
+
+@pytest.mark.parametrize("seed", range(30))
+def test_threads_sharing_a_violation_stream_get_each_violation_once(seed: int) -> None:
+    topology = crowded(seed)
+    eager = topology.validate()
+    assert eager.error_count > 300
+    stream = topology.iter_validate(batch_size=1 + seed % 4)
+    got: list[list[Violation]] = [[] for _ in range(4)]
+    run_together(4, lambda i: got[i].extend(stream))
+    assert Counter(v for part in got for v in part) == Counter(eager.violations)
+    assert sum(1 for part in got if part) > 1
+    assert stream.summary is not None
+    assert stream.summary.error_count == eager.error_count
+    assert no_workers(0)
+
+
 @pytest.fixture(scope="module")
 def grid() -> Any:
-    """250 000 touching squares: seconds of overlap checking, no violations."""
-    x = [float(k % 500) for k in range(250_000)]
-    y = [float(k // 500) for k in range(250_000)]
+    """100 000 touching squares: about a second of overlap checks, no violations."""
+    x = [float(k % 400) for k in range(100_000)]
+    y = [float(k // 400) for k in range(100_000)]
     return shapely.box(x, y, [v + 1 for v in x], [v + 1 for v in y])
 
 
@@ -475,25 +525,83 @@ def heavy(grid: Any, cheap_first: bool) -> Topology:
     return topology
 
 
+def full_run(grid: Any) -> Callable[[], float]:
+    """Start the heavy rule on another thread; the result waits for its end.
+
+    It returns how long the rule took. Timings compared with it, rather than
+    with a fixed bound, hold however loaded the machine is.
+    """
+    topology = heavy(grid, cheap_first=False)
+    took: list[float] = []
+
+    def run() -> None:
+        started = time.monotonic()
+        topology.validate()
+        took.append(time.monotonic() - started)
+
+    thread = threading.Thread(target=run)
+    thread.start()
+
+    def wait() -> float:
+        thread.join()
+        return took[0]
+
+    return wait
+
+
+def close_together(stream: ReportStream | ValidationStream) -> list[int]:
+    """Close from three threads at once; each records the workers still running."""
+    seen: list[int] = []
+
+    def close(_: int) -> None:
+        stream.close()
+        seen.append(_native.live_workers(0))
+
+    run_together(3, close)
+    return seen
+
+
+@pytest.mark.parametrize("kind", ["reports", "violations"])
+def test_every_concurrent_close_returns_after_the_worker_stopped(
+    grid: Any, kind: str
+) -> None:
+    topology = heavy(grid, cheap_first=False)
+    assert no_workers()
+    for _ in range(40):
+        stream = (
+            topology.iter_reports() if kind == "reports" else topology.iter_validate()
+        )
+        assert close_together(stream) == [0, 0, 0]
+        assert stream.summary is None
+
+
 def test_close_during_a_long_rule_is_prompt(grid: Any) -> None:
+    full = full_run(grid)
     stream = heavy(grid, cheap_first=True).iter_reports()
     assert next(stream).is_valid
     started = time.monotonic()
     stream.close()
-    assert time.monotonic() - started < PROMPT
+    closing = time.monotonic() - started
     assert stream.summary is None and list(stream) == []
     assert no_workers(0)
+    # Waiting for the rule would take about as long as the concurrent full run.
+    assert closing < full() / 4
 
 
 def test_dropping_a_stream_during_a_long_rule_stops_its_worker(grid: Any) -> None:
+    full = full_run(grid)
     stream = heavy(grid, cheap_first=True).iter_reports()
     next(stream)
+    started = time.monotonic()
     del stream
     gc.collect()
-    assert no_workers(PROMPT)
+    assert no_workers(60.0)
+    stopping = time.monotonic() - started
+    assert stopping < full() / 4
 
 
 def test_close_from_another_thread_wakes_a_waiting_consumer(grid: Any) -> None:
+    full = full_run(grid)
     stream = heavy(grid, cheap_first=False).iter_reports()
     waiting = threading.Event()
     outcome: list[object] = []
@@ -507,15 +615,16 @@ def test_close_from_another_thread_wakes_a_waiting_consumer(grid: Any) -> None:
     waiting.wait()
     started = time.monotonic()
     stream.close()
-    consumer.join(PROMPT)
-    assert time.monotonic() - started < PROMPT
-    assert not consumer.is_alive()
+    consumer.join()
+    closing = time.monotonic() - started
     assert outcome == ["stopped"]
     assert stream.summary is None
     assert no_workers(0)
+    assert closing < full() / 4
 
 
 def test_close_while_another_thread_holds_the_gil(grid: Any) -> None:
+    full = full_run(grid)
     stop = threading.Event()
     spins = [0]
 
@@ -534,9 +643,10 @@ def test_close_while_another_thread_holds_the_gil(grid: Any) -> None:
             pass
         started = time.monotonic()
         stream.close()
-        assert time.monotonic() - started < PROMPT
+        closing = time.monotonic() - started
     finally:
         stop.set()
         spinner.join()
     assert stream.summary is None
     assert no_workers(0)
+    assert closing < full() / 4
