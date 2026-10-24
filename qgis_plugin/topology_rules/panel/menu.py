@@ -5,8 +5,9 @@ drawn."""
 from __future__ import annotations
 
 import typing as t
+from pathlib import Path
 
-from qgis.PyQt.QtCore import pyqtSignal
+from qgis.PyQt.QtCore import Qt, pyqtSignal
 from qgis.PyQt.QtWidgets import (
     QAction,
     QActionGroup,
@@ -21,6 +22,10 @@ from ..core.wheels import PACKAGE
 from ..exceptions import ExecutableError, MissingError, PackageError
 from ..utils import not_none, tr
 from .style_menu import StyleMenu
+
+# The width of the path of the executable in the menu, in characters: the
+# middle of a longer one is left out
+PATH_WIDTH = 48
 
 
 def engine_names() -> dict[Engine, str]:
@@ -40,6 +45,15 @@ def installable() -> bool:
         and engine.package() is None
         and install.unsupported() is None
     )
+
+
+def home_path(path: Path) -> str:
+    """The path with the home folder as `~`."""
+    try:
+        return str(Path('~') / path.relative_to(Path.home()))
+    except (RuntimeError, ValueError):
+        # No home folder, or a path outside it
+        return str(path)
 
 
 def reason(error: ExecutableError) -> str:
@@ -123,6 +137,7 @@ class PanelMenu(QMenu):
         else:
             self.usable(
                 Engine.PACKAGE,
+                found.version,
                 tr('{package} {version} in {folder}').format(
                     package=PACKAGE,
                     version=found.version,
@@ -134,7 +149,7 @@ class PanelMenu(QMenu):
         except ExecutableError as error:
             self.unusable(Engine.EXECUTABLE, reason(error), tr('not found'))
         else:
-            self.usable(Engine.EXECUTABLE, str(path))
+            self.usable(Engine.EXECUTABLE, self.described(path), str(path))
 
         version = install.installed()
         self.install_action.setVisible(version is None and found is None)
@@ -157,9 +172,31 @@ class PanelMenu(QMenu):
         )
         self.remove_action.setVisible(version is not None)
 
-    def usable(self, choice: Engine, tip: str) -> None:
+    def described(self, path: Path) -> str:
+        """The version and the path of the executable, with the home folder
+        as `~` and the middle of a long path left out."""
+        metrics = self.fontMetrics()
+        shown = metrics.elidedText(
+            home_path(path),
+            Qt.TextElideMode.ElideMiddle,
+            metrics.averageCharWidth() * PATH_WIDTH,
+        )
+        version = binary.version(str(path))
+        if not version:
+            return shown
+        return tr('{version}, {path}').format(version=version, path=shown)
+
+    def usable(self, choice: Engine, details: str, tip: str) -> None:
+        """Lets the engine be chosen, with what it is after its name, as the
+        tip shows only to a pointer that rests on the item."""
         action = self.engines[choice]
-        action.setText(engine_names()[choice])
+        name = engine_names()[choice]
+        if details:
+            # An & of a path would mark a shortcut, and not show
+            name = tr('{name} ({details})').format(
+                name=name, details=details.replace('&', '&&')
+            )
+        action.setText(name)
         self.offer(action, None, tip)
 
     def unusable(self, choice: Engine, reason: str, brief: str) -> None:

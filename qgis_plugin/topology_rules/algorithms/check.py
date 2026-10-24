@@ -23,7 +23,7 @@ from qgis.core import (
 )
 
 from .._typing import Parameters
-from ..core import engine
+from ..core import engine, folders
 from ..core.checks import Job, renumber_errors, run_jobs
 from ..core.invalid import append_invalid
 from ..core.layers import Input, require_kind
@@ -202,6 +202,9 @@ class CheckRulesAlgorithm(Planned):
                 tolerance_of(self, parameters, context),
                 output,
             )
+            # The panel runs its checks here, and says in the log what runs
+            # them, as Processing says in the log of a run
+            folders.log(engine.describe(tool), file=False)
 
         return self.prepare_with(prepare)
 

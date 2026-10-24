@@ -11,7 +11,9 @@ from qgis.PyQt.QtWidgets import (
     QWidget,
 )
 
+from ..core import binary
 from ..enums import SETTING_NAME, Setting
+from ..exceptions import ExecutableError
 from ..utils import tr
 
 INSTALL = 'https://alecsandrei.github.io/topology-checker/stable/install/'
@@ -56,9 +58,14 @@ class SetupPage(QWidget):
         self.guide.show()
 
     def choose(self) -> bool:
-        """Asks for the executable and remembers it, true if one was chosen."""
+        """Asks for the executable and remembers it, true if one was chosen.
+        The dialog opens in the folder of the executable in use."""
+        try:
+            folder = str(binary.find_executable().parent)
+        except ExecutableError:
+            folder = ''
         path, _ = QFileDialog.getOpenFileName(
-            self, tr('Choose topology-checker')
+            self, tr('Choose topology-checker'), folder
         )
         if not path:
             return False
