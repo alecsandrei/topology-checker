@@ -326,10 +326,20 @@ impl LineGraph {
                 part.nodes = list[span].to_vec();
             }
         }
-        let mut contacts = BTreeMap::<_, Vec<_>>::new();
+        let mut by_node = BTreeMap::<_, Vec<_>>::new();
         for (coordinate, contact) in original_contacts {
             let node = cluster.insert(coordinate);
-            contacts.entry(node).or_default().push(contact);
+            by_node.entry(node).or_default().push(contact);
+        }
+        let mut contacts = Contacts {
+            nodes: Vec::new(),
+            offsets: vec![0],
+            values: Vec::new(),
+        };
+        for (node, list) in by_node {
+            contacts.nodes.push(node);
+            contacts.values.extend(list);
+            contacts.offsets.push(contacts.values.len());
         }
         let coords = cluster.finish();
         // Each node lists the parts of its edges in the order of their nodes,
@@ -929,12 +939,12 @@ mod tests {
     const STEPS: &str = "\
         cluster cluster.batch cluster.ends cluster.points cluster.sort collapsed \
         connected.components connected.join connected.sort connected.spans contacts \
-        contacts.features contacts.sort crack cuts directions edges edges.count edges.cursor \
-        edges.group edges.incident edges.incident.init edges.offsets edges.sort ends ends.init \
-        ends.sort fill gather.contacts gather.edges index index.arrange matches.features \
-        matches.index matches.pairs matches.retain matches.sort noding order pairs pairs.join \
-        parts retain.components retain.confined retain.found retain.groups retain.ids \
-        retain.junctions retain.junctions.sort retain.meetings retain.meetings.sort \
+        contacts.features contacts.nodes contacts.sort contacts.values crack cuts directions edges \
+        edges.count edges.cursor edges.group edges.incident edges.incident.init edges.offsets \
+        edges.sort ends ends.init ends.sort fill gather.contacts gather.edges index index.arrange \
+        matches.features matches.index matches.pairs matches.retain matches.sort noding order \
+        pairs pairs.join parts retain.components retain.confined retain.found retain.groups \
+        retain.ids retain.junctions retain.junctions.sort retain.meetings retain.meetings.sort \
         retain.positions retain.runs retain.spans retain.spans.join retain.spans.sort \
         retain.support retain.support.spans returns.chord returns.first returns.last returns.near \
         returns.segments sort.buckets sort.classes sort.copy sort.moves sort.samples sort.serial \
