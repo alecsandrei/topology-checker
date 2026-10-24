@@ -20,7 +20,7 @@ fn main() -> ExitCode {
     let stderr = io::stderr();
     let mut diagnostics = stderr.lock();
     let command = cli::command();
-    let matches = match command.try_get_matches() {
+    let matches = match command.try_get_matches().and_then(cli::check) {
         Ok(m) => m,
         Err(e) => {
             let code = if matches!(
@@ -268,15 +268,21 @@ fn finish(
     diagnostics: &mut impl Write,
 ) -> Result<u8> {
     let progress = matches!(args.try_get_one::<bool>("progress"), Ok(Some(true)));
+    // `cli::check` only lets --stream through together with --json.
+    let stream = matches!(args.try_get_one::<bool>("stream"), Ok(Some(true)));
+    let summary = matches.get_flag("summary");
     let rules = topology.rules().len();
     let result = topology_checker_io::report_store::DiskReport::validate_with_progress(
         topology,
         None,
-        |rule| {
+        |rule, rows| {
             if progress {
                 // Progress is advisory, like warnings: an unwritable stderr never fails validation.
                 let _ = writeln!(diagnostics, "{}", progress_line(rule, rules));
                 let _ = diagnostics.flush();
+            }
+            if stream {
+                report::stream_rule(output, rule, (!summary).then_some(rows))?;
             }
             Ok(())
         },
@@ -312,14 +318,18 @@ fn finish(
             warnings.push("Shapefile fields use viol_id, orig_layer, orig_part, dest_layer, dest_fid and dest_part to fit the 10-character limit".into());
         }
     }
-    report::print(
-        &result,
-        &warnings,
-        matches.get_flag("json"),
-        matches.get_flag("summary"),
-        output,
-        diagnostics,
-    )?;
+    if stream {
+        report::stream_end(&result, &warnings, output, diagnostics)?;
+    } else {
+        report::print(
+            &result,
+            &warnings,
+            matches.get_flag("json"),
+            summary,
+            output,
+            diagnostics,
+        )?;
+    }
     Ok(if result.is_valid() { 0 } else { 1 })
 }
 

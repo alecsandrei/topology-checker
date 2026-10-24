@@ -8,7 +8,7 @@ use std::{
     path::Path,
 };
 use topology_checker_core::{
-    FeatureRef, LayerId, ReportSummary, RuleSummary, Topology, ValidationEvent, Violation,
+    FeatureRef, LayerId, ReportSummary, Rule, RuleSummary, Topology, ValidationEvent, Violation,
     ViolationKind,
 };
 
@@ -43,9 +43,10 @@ impl DiskReport {
     /// # Errors
     /// Returns input, validation, encoding or disk-write failures.
     pub fn validate(topology: &Topology, parent: Option<&Path>) -> Result<Self> {
-        Self::validate_with_progress(topology, parent, |_| Ok(()))
+        Self::validate_with_progress(topology, parent, |_, _| Ok(()))
     }
-    /// Like [`validate`](Self::validate), calling `rule_end` as each rule finishes.
+    /// Like [`validate`](Self::validate), calling `rule_end` with each rule's
+    /// stored rows as soon as the rule finishes, before the next one starts.
     /// An error from `rule_end` stops validation and is returned.
     ///
     /// # Errors
@@ -53,7 +54,7 @@ impl DiskReport {
     pub fn validate_with_progress(
         topology: &Topology,
         parent: Option<&Path>,
-        mut rule_end: impl FnMut(&RuleSummary) -> Result<()>,
+        mut rule_end: impl FnMut(&RuleSummary, RuleRows<'_>) -> Result<()>,
     ) -> Result<Self> {
         let mut builder = tempfile::Builder::new();
         builder.prefix("topology-report-");
@@ -61,14 +62,31 @@ impl DiskReport {
             Some(root) => builder.tempdir_in(root)?,
             None => builder.tempdir()?,
         };
-        let mut rows = BufWriter::new(File::create(storage.path().join("rows.bin"))?);
+        let path = storage.path().join("rows.bin");
+        let layers = topology.layers().map(|(id, _)| id).collect::<Vec<_>>();
+        let mut rows = BufWriter::new(File::create(&path)?);
         let mut offsets = BufWriter::new(File::create(storage.path().join("offsets.bin"))?);
         let mut offset = 0_u64;
+        let mut rule_start = 0_u64;
         let summary = topology
             .validate_events(|event| -> Result<()> {
                 let (spec, v) = match event {
                     ValidationEvent::Violation(spec, v) => (spec, v),
-                    ValidationEvent::RuleEnd(summary) => return rule_end(summary),
+                    ValidationEvent::RuleEnd(summary) => {
+                        let start = std::mem::replace(&mut rule_start, offset);
+                        return rule_end(
+                            summary,
+                            RuleRows {
+                                writer: &mut rows,
+                                path: &path,
+                                start,
+                                summary,
+                                layers: &layers,
+                                left: summary.total,
+                                input: None,
+                            },
+                        );
+                    }
                     _ => return Ok(()),
                 };
                 let metadata = serde_json::to_vec(&Metadata {
@@ -94,7 +112,7 @@ impl DiskReport {
         Ok(Self {
             storage,
             summary,
-            layers: topology.layers().map(|(id, _)| id).collect(),
+            layers,
         })
     }
     /// Number of aggregated violations.
@@ -123,43 +141,15 @@ impl DiskReport {
         self.read_row(&mut rows)
     }
     fn read_row(&self, input: &mut impl Read) -> Result<(usize, Violation)> {
-        let mut bytes = [0; 8];
-        input.read_exact(&mut bytes)?;
-        let metadata_length = usize::try_from(u64::from_le_bytes(bytes))?;
-        input.read_exact(&mut bytes)?;
-        let wkb_length = usize::try_from(u64::from_le_bytes(bytes))?;
-        let mut metadata = vec![0; metadata_length];
-        input.read_exact(&mut metadata)?;
-        let metadata: Metadata = serde_json::from_slice(&metadata)?;
-        let mut wkb = vec![0; wkb_length];
-        input.read_exact(&mut wkb)?;
-        let decode = |r: Option<(usize, i64, Option<u32>)>| -> Result<Option<FeatureRef>> {
-            r.map(|(layer, fid, part)| {
-                Ok(FeatureRef::new(
-                    *self.layers.get(layer).context("invalid stored layer")?,
-                    fid,
-                    part,
-                ))
-            })
-            .transpose()
-        };
-        let rule = self
-            .summary
-            .rules
-            .get(metadata.rule)
-            .context("invalid stored rule")?
-            .spec
-            .rule;
-        Ok((
-            metadata.rule,
-            Violation::new(
-                rule,
-                metadata.kind,
-                codec::decode(&wkb)?.geometry,
-                decode(metadata.origin)?,
-                decode(metadata.destination)?,
-            ),
-        ))
+        read_row(input, &self.layers, |index| {
+            Ok(self
+                .summary
+                .rules
+                .get(index)
+                .context("invalid stored rule")?
+                .spec
+                .rule)
+        })
     }
     /// Iterate rows sequentially without rereading or retaining the disk index.
     pub fn rows(&self) -> impl Iterator<Item = Result<(usize, Violation)>> + '_ {
@@ -170,6 +160,87 @@ impl DiskReport {
             Err(e) => Err(anyhow::anyhow!("opening report: {e}")),
         })
     }
+}
+
+/// The stored rows of one finished rule, read back from disk in order.
+#[derive(Debug)]
+pub struct RuleRows<'a> {
+    writer: &'a mut BufWriter<File>,
+    path: &'a Path,
+    start: u64,
+    summary: &'a RuleSummary,
+    layers: &'a [LayerId],
+    left: usize,
+    input: Option<BufReader<File>>,
+}
+impl RuleRows<'_> {
+    fn read(&mut self) -> Result<Violation> {
+        let input = match &mut self.input {
+            Some(input) => input,
+            None => {
+                self.writer.flush()?;
+                let mut file = File::open(self.path).context("opening report")?;
+                file.seek(SeekFrom::Start(self.start))?;
+                self.input.insert(BufReader::new(file))
+            }
+        };
+        let spec = self.summary.spec;
+        let (_, v) = read_row(input, self.layers, |index| {
+            ensure!(index == spec.id.index(), "stored rule order");
+            Ok(spec.rule)
+        })?;
+        Ok(v)
+    }
+}
+impl Iterator for RuleRows<'_> {
+    type Item = Result<Violation>;
+    fn next(&mut self) -> Option<Self::Item> {
+        self.left = self.left.checked_sub(1)?;
+        let row = self.read();
+        if row.is_err() {
+            self.left = 0;
+        }
+        Some(row)
+    }
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.left, Some(self.left))
+    }
+}
+fn read_row(
+    input: &mut impl Read,
+    layers: &[LayerId],
+    rule: impl FnOnce(usize) -> Result<Rule>,
+) -> Result<(usize, Violation)> {
+    let mut bytes = [0; 8];
+    input.read_exact(&mut bytes)?;
+    let metadata_length = usize::try_from(u64::from_le_bytes(bytes))?;
+    input.read_exact(&mut bytes)?;
+    let wkb_length = usize::try_from(u64::from_le_bytes(bytes))?;
+    let mut metadata = vec![0; metadata_length];
+    input.read_exact(&mut metadata)?;
+    let metadata: Metadata = serde_json::from_slice(&metadata)?;
+    let mut wkb = vec![0; wkb_length];
+    input.read_exact(&mut wkb)?;
+    let decode = |r: Option<(usize, i64, Option<u32>)>| -> Result<Option<FeatureRef>> {
+        r.map(|(layer, fid, part)| {
+            Ok(FeatureRef::new(
+                *layers.get(layer).context("invalid stored layer")?,
+                fid,
+                part,
+            ))
+        })
+        .transpose()
+    };
+    Ok((
+        metadata.rule,
+        Violation::new(
+            rule(metadata.rule)?,
+            metadata.kind,
+            codec::decode(&wkb)?.geometry,
+            decode(metadata.origin)?,
+            decode(metadata.destination)?,
+        ),
+    ))
 }
 
 #[cfg(test)]

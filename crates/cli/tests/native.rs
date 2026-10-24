@@ -749,3 +749,373 @@ fn progress_lines_arrive_while_later_rules_still_run() {
     let gap = second_at - first_at;
     assert!(gap.as_secs_f64() > 0.5, "the lines came {gap:?} apart");
 }
+
+const STREAM: &str = "--stream";
+
+/// Check that `--stream` prints the `rules` of the plain report one per line,
+/// then its tolerance and warnings, with the same bytes, stderr and status.
+fn assert_stream_matches_report(mode: &[&str], config: &std::path::Path) -> Vec<Value> {
+    let plain = validate(mode, config, &[]);
+    let stream = validate(mode, config, &[OsStr::new(STREAM)]);
+    let stderr = String::from_utf8_lossy(&plain.stderr).into_owned();
+    assert_eq!(stream.status.code(), plain.status.code(), "{stderr}");
+    assert_eq!(
+        String::from_utf8_lossy(&stream.stderr),
+        stderr,
+        "{config:?} {mode:?}"
+    );
+    if plain.status.code() == Some(2) {
+        assert!(
+            plain.stdout.is_empty() && stream.stdout.is_empty(),
+            "{stderr}"
+        );
+        return Vec::new();
+    }
+    let text = String::from_utf8(stream.stdout).unwrap();
+    assert!(text.ends_with('\n'), "{text}");
+    let lines = text.lines().collect::<Vec<_>>();
+    let (last, rules) = lines.split_last().unwrap();
+    let report: Value = serde_json::from_slice(&plain.stdout).unwrap();
+    let parsed = rules
+        .iter()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(Value::Array(parsed.clone()), report["rules"], "{mode:?}");
+    assert_eq!(
+        serde_json::from_str::<Value>(last).unwrap(),
+        json!({"tolerance": report["tolerance"], "warnings": report["warnings"]})
+    );
+    // The plain report is the last line with the other lines as its rules.
+    let head = last.strip_suffix('}').unwrap();
+    let rebuilt = format!("{head},\"rules\":[{}]}}\n", rules.join(","));
+    assert_eq!(
+        rebuilt,
+        String::from_utf8(plain.stdout).unwrap(),
+        "{mode:?}"
+    );
+    for rule in &parsed {
+        assert_eq!(rule.get("errors").is_none(), mode.contains(&"--summary"));
+    }
+    parsed
+}
+
+/// GeoJSON inputs with mixed-family errors: a line that runs inside a square
+/// and touches its corner, and a point far away from the square.
+fn mixed_inputs(dir: &std::path::Path) {
+    for (name, geometry) in [
+        (
+            "mixed",
+            json!({"type":"MultiLineString","coordinates":[[[1,1],[2,1]],[[-1,1],[0,0],[1,-1]]]}),
+        ),
+        (
+            "square",
+            json!({"type":"Polygon","coordinates":[[[0,0],[10,0],[10,10],[0,10],[0,0]]]}),
+        ),
+        ("far", json!({"type":"Point","coordinates":[20,20]})),
+    ] {
+        let collection = json!({"type":"FeatureCollection","features":[
+            {"type":"Feature","id":1,"properties":{},"geometry":geometry}
+        ]});
+        std::fs::write(dir.join(format!("{name}.geojson")), collection.to_string()).unwrap();
+    }
+}
+
+/// A definition of pair rules whose errors fall in every geometry family.
+fn pair_config(dir: &std::path::Path) -> std::path::PathBuf {
+    let path = dir.join("pairs.toml");
+    std::fs::write(
+        &path,
+        "tolerance = 0\n[layers]\nroads = { path = \"lines.geojson\" }\nwells = { path = \"points.geojson\" }\nmixed = { path = \"mixed.geojson\" }\nsquare = { path = \"square.geojson\" }\nfar = { path = \"far.geojson\" }\n\n[[rules]]\nrule = \"line/must-not-intersect-polygons\"\nlayer = \"mixed\"\nother = \"square\"\n\n[[rules]]\nrule = \"polygon/must-contain-one-point\"\nlayer = \"square\"\nother = \"far\"\n\n[[rules]]\nrule = \"point/must-be-covered-by-lines\"\nlayer = \"wells\"\nother = \"roads\"\n\n[[rules]]\nrule = \"point/must-not-overlap-with\"\nlayer = \"far\"\nother = \"wells\"\n",
+    )
+    .unwrap();
+    path
+}
+
+#[test]
+fn stream_lines_are_the_rules_of_the_json_report() {
+    let dir = tempfile::tempdir().unwrap();
+    progress_inputs(dir.path());
+    mixed_inputs(dir.path());
+    let layer = |name: &str, line: [(f64, f64); 2]| {
+        DatasetLayer::new(
+            name,
+            Some(crs::parse("EPSG:4326").unwrap()),
+            vec![Record {
+                id: Some(1),
+                geometry: Some(LineString::from(line.to_vec()).into()),
+                properties: Map::new(),
+            }],
+        )
+    };
+    for (file, layers) in [
+        (
+            "network.gpkg",
+            [
+                layer("east", [(5., 52.), (6., 53.)]),
+                layer("west", [(5.5, 52.), (6.5, 53.)]),
+            ],
+        ),
+        (
+            "crossing.gpkg",
+            [
+                layer("north", [(5., 53.), (6., 52.)]),
+                layer("south", [(9., 52.), (10., 53.)]),
+            ],
+        ),
+    ] {
+        write::dataset(&dir.path().join(file), None, false, &layers).unwrap();
+    }
+    let network = dir.path().join("network.toml");
+    std::fs::write(
+        &network,
+        "[layers]\nnetwork = { path = \"network.gpkg\" }\ncrossing = { path = \"crossing.gpkg\" }\n\n[[rules]]\nrule = \"line/must-not-have-dangles\"\nlayer = \"network\"\n\n[[rules]]\nrule = \"line/must-not-intersect-with\"\nlayer = \"network\"\nother = \"crossing\"\n",
+    )
+    .unwrap();
+    // No rules, one failing rule, one passing rule and several rules, with
+    // their exit codes.
+    for (rules, code) in [
+        (&[][..], 2),
+        (&[("line/must-not-have-dangles", "roads")], 1),
+        (&[("line/must-not-self-overlap", "roads")], 0),
+        (&THREE_RULES, 1),
+    ] {
+        let config = progress_config(dir.path(), rules);
+        assert_eq!(
+            validate(&["--json"], &config, &[]).status.code(),
+            Some(code)
+        );
+        let count = if code == 2 { 0 } else { rules.len() };
+        for mode in [&["--json"][..], &["--json", "--summary"]] {
+            assert_eq!(assert_stream_matches_report(mode, &config).len(), count);
+        }
+    }
+    let pairs = pair_config(dir.path());
+    let lines = assert_stream_matches_report(&["--json"], &pairs);
+    assert_eq!(lines.len(), 4);
+    assert!(lines[0]["errors"][0]["geometry"]["GeometryCollection"].is_array());
+    assert_eq!(lines[1]["other"], "far");
+    assert_stream_matches_report(&["--json", "--summary"], &pairs);
+    // Each check of a two-layer input is one rule per layer, or layer pair.
+    let lines = assert_stream_matches_report(&["--json"], &network);
+    assert_eq!(lines.len(), 6);
+    assert_eq!(lines[2]["layer"], "network:east");
+    assert_eq!(lines[2]["other"], "crossing:north");
+    let errors = |line: &Value| line["errors"].as_array().unwrap().len();
+    assert_eq!(
+        lines[2..].iter().map(errors).collect::<Vec<_>>(),
+        [1, 0, 1, 0]
+    );
+    assert_stream_matches_report(&["--json", "--summary"], &network);
+}
+
+#[test]
+fn stream_needs_json() {
+    let dir = tempfile::tempdir().unwrap();
+    progress_inputs(dir.path());
+    let config = progress_config(dir.path(), &THREE_RULES);
+    for mode in [&[][..], &["--summary"]] {
+        for extra in [&[STREAM][..], &[STREAM, PROGRESS]] {
+            let extra = extra.iter().map(OsStr::new).collect::<Vec<_>>();
+            let output = validate(mode, &config, &extra);
+            assert_eq!(output.status.code(), Some(2));
+            let stderr = String::from_utf8(output.stderr).unwrap();
+            assert!(stderr.contains("--stream"), "{stderr}");
+            assert!(stderr.contains("--json"), "{stderr}");
+            assert!(output.stdout.is_empty());
+        }
+    }
+    // --json is global, so it may also follow the subcommand.
+    let output = validate(&[], &config, &[OsStr::new(STREAM), OsStr::new("--json")]);
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(String::from_utf8(output.stdout).unwrap().lines().count(), 4);
+}
+
+#[test]
+fn stream_keeps_progress_and_writes_the_same_outputs() {
+    let dir = tempfile::tempdir().unwrap();
+    progress_inputs(dir.path());
+    mixed_inputs(dir.path());
+    let config = progress_config(dir.path(), &THREE_RULES);
+    let stream = validate(&["--json"], &config, &[OsStr::new(STREAM)]);
+    let both = validate(
+        &["--json"],
+        &config,
+        &[OsStr::new(STREAM), OsStr::new(PROGRESS)],
+    );
+    assert_eq!(both.status.code(), Some(1));
+    assert_eq!(both.stdout, stream.stdout);
+    let stderr = String::from_utf8(both.stderr).unwrap();
+    assert_eq!(progress_lines(&stderr).len(), 3, "{stderr}");
+    let rest = stderr
+        .lines()
+        .filter(|l| !l.starts_with("checked rule "))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        rest,
+        String::from_utf8(stream.stderr)
+            .unwrap()
+            .lines()
+            .collect::<Vec<_>>()
+    );
+    let pairs = pair_config(dir.path());
+    for case in ["geojson", "gpkg", "fgb", "shp"] {
+        let run = |name: &str, extra: &[&str]| {
+            let folder = dir.path().join(format!("{case}-{name}"));
+            std::fs::create_dir(&folder).unwrap();
+            let output = folder.join(format!("errors.{case}"));
+            let mut args = vec![OsStr::new("-o"), output.as_os_str()];
+            args.extend(extra.iter().map(OsStr::new));
+            let result = validate(&["--json"], &pairs, &args);
+            assert_eq!(result.status.code(), Some(1), "{case}");
+            (result.stdout, result.stderr, folder)
+        };
+        let (plain, plain_err, plain_folder) = run("plain", &[]);
+        let (_, _, again_folder) = run("again", &[]);
+        let (stream, stream_err, stream_folder) = run("stream", &[STREAM]);
+        assert_eq!(stream_err, plain_err, "{case}");
+        // The last line carries the warnings of the report, such as the
+        // Shapefile field names.
+        let report: Value = serde_json::from_slice(&plain).unwrap();
+        let text = String::from_utf8(stream).unwrap();
+        let last: Value = serde_json::from_str(text.lines().last().unwrap()).unwrap();
+        assert_eq!(last["warnings"], report["warnings"], "{case}");
+        assert_eq!(
+            report["warnings"].to_string().contains("viol_id"),
+            case == "shp"
+        );
+        let names = |f: &std::path::Path| {
+            folder(f)
+                .into_iter()
+                .map(|(name, _)| name)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(names(&plain_folder), names(&stream_folder), "{case}");
+        if folder(&plain_folder) == folder(&again_folder) {
+            assert_eq!(folder(&plain_folder), folder(&stream_folder), "{case}");
+        } else {
+            // Formats that stamp the write time differ run to run; compare contents.
+            assert!(!decoded(&plain_folder).is_empty(), "{case}");
+            assert_eq!(decoded(&plain_folder), decoded(&stream_folder), "{case}");
+        }
+    }
+}
+
+#[test]
+fn stream_keeps_the_finished_rules_when_a_later_rule_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    progress_inputs(dir.path());
+    let first = progress_config(dir.path(), &[("line/must-not-have-dangles", "roads")]);
+    let expected: Value =
+        serde_json::from_slice(&validate(&["--json"], &first, &[]).stdout).unwrap();
+    let config = progress_config(
+        dir.path(),
+        &[
+            ("line/must-not-have-dangles", "roads"),
+            ("polygon/must-not-have-gaps", "parcels"),
+            ("point/must-not-overlap", "wells"),
+        ],
+    );
+    let output = dir.path().join("errors.geojson");
+    let result = validate(
+        &["--json"],
+        &config,
+        &[OsStr::new(STREAM), OsStr::new("-o"), output.as_os_str()],
+    );
+    assert_eq!(result.status.code(), Some(2));
+    let stdout = String::from_utf8(result.stdout).unwrap();
+    assert!(stdout.ends_with('\n'), "{stdout}");
+    let lines = stdout.lines().collect::<Vec<_>>();
+    assert_eq!(lines.len(), 1, "{stdout}");
+    let line: Value = serde_json::from_str(lines[0]).unwrap();
+    assert_eq!(line, expected["rules"][0]);
+    // The error is reported as without --stream.
+    let stderr = String::from_utf8(result.stderr).unwrap();
+    let error: Value = serde_json::from_str(stderr.lines().last().unwrap()).unwrap();
+    assert!(
+        error["error"]
+            .as_str()
+            .unwrap()
+            .contains("precision failure"),
+        "{stderr}"
+    );
+    assert!(!output.exists());
+}
+
+/// A definition whose second rule takes seconds, with the report of the first
+/// rule run alone.
+fn slow_definition(dir: &std::path::Path) -> (std::path::PathBuf, Value) {
+    progress_inputs(dir);
+    touching_squares(&dir.join("squares.geojson"));
+    let layers = "[layers]\nroads = { path = \"lines.geojson\" }\nsquares = { path = \"squares.geojson\" }\n\n[[rules]]\nrule = \"line/must-not-have-dangles\"\nlayer = \"roads\"\n";
+    let first = dir.join("first.toml");
+    std::fs::write(&first, layers).unwrap();
+    let report: Value = serde_json::from_slice(&validate(&["--json"], &first, &[]).stdout).unwrap();
+    let config = dir.join("topology.toml");
+    std::fs::write(
+        &config,
+        format!("{layers}\n[[rules]]\nrule = \"polygon/must-not-overlap\"\nlayer = \"squares\"\n"),
+    )
+    .unwrap();
+    (config, report["rules"][0].clone())
+}
+
+fn spawn_stream(config: &std::path::Path) -> std::process::Child {
+    std::process::Command::new(env!("CARGO_BIN_EXE_topology-checker"))
+        .args(["--json", "validate"])
+        .arg(config)
+        .arg(STREAM)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap()
+}
+
+#[test]
+fn stream_lines_arrive_while_later_rules_still_run() {
+    use std::io::BufRead;
+    let dir = tempfile::tempdir().unwrap();
+    let (config, first_rule) = slow_definition(dir.path());
+    let mut child = spawn_stream(&config);
+    let mut stdout = std::io::BufReader::new(child.stdout.take().unwrap());
+    let mut line = || {
+        let mut line = String::new();
+        stdout.read_line(&mut line).unwrap();
+        (line, std::time::Instant::now())
+    };
+    let (first, first_at) = line();
+    let running = child.try_wait().unwrap().is_none();
+    let (second, second_at) = line();
+    let (last, _) = line();
+    let status = child.wait().unwrap();
+    assert_eq!(status.code(), Some(1));
+    assert_eq!(serde_json::from_str::<Value>(&first).unwrap(), first_rule);
+    let second: Value = serde_json::from_str(&second).unwrap();
+    assert_eq!(second["spec"]["rule"], "polygon/must-not-overlap");
+    assert_eq!(second["errors"], json!([]));
+    assert!(serde_json::from_str::<Value>(&last).unwrap()["tolerance"].is_number());
+    // Checking the squares takes seconds; lines held back until the end
+    // would arrive together.
+    assert!(running);
+    let gap = second_at - first_at;
+    assert!(gap.as_secs_f64() > 0.5, "the lines came {gap:?} apart");
+}
+
+#[test]
+fn killing_a_stream_keeps_the_rules_already_printed() {
+    use std::io::{BufRead, Read};
+    let dir = tempfile::tempdir().unwrap();
+    let (config, first_rule) = slow_definition(dir.path());
+    let mut child = spawn_stream(&config);
+    let mut stdout = std::io::BufReader::new(child.stdout.take().unwrap());
+    let mut first = String::new();
+    stdout.read_line(&mut first).unwrap();
+    child.kill().unwrap();
+    let status = child.wait().unwrap();
+    let mut rest = String::new();
+    stdout.read_to_string(&mut rest).unwrap();
+    assert!(!status.success());
+    assert!(first.ends_with('\n'));
+    assert_eq!(serde_json::from_str::<Value>(&first).unwrap(), first_rule);
+    // The second rule never finished, so nothing follows.
+    assert_eq!(rest, "");
+}
