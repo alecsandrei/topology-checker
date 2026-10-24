@@ -4,10 +4,11 @@ use pyo3::{prelude::*, types::PyBytes};
 use std::{
     collections::BTreeMap,
     sync::{
-        Mutex,
+        Condvar, Mutex, PoisonError,
         mpsc::{self, Receiver},
     },
     thread::JoinHandle,
+    time::Duration,
 };
 use topology_checker_core::{
     CancellationToken, FeatureRef, ReportSummary, RuleSpec, RuleSummary, SinkError, Topology,
@@ -151,6 +152,36 @@ enum Stop {
     Closed,
     Failed(String),
 }
+/// Validation worker threads that have not finished yet.
+static WORKERS: (Mutex<usize>, Condvar) = (Mutex::new(0), Condvar::new());
+/// Counts one worker from before its spawn until its thread body returns.
+struct Live;
+impl Live {
+    fn new() -> Self {
+        *WORKERS.0.lock().unwrap_or_else(PoisonError::into_inner) += 1;
+        Self
+    }
+}
+impl Drop for Live {
+    fn drop(&mut self) {
+        *WORKERS.0.lock().unwrap_or_else(PoisonError::into_inner) -= 1;
+        WORKERS.1.notify_all();
+    }
+}
+/// Wait up to `timeout` seconds for all workers to finish; return how many remain.
+#[pyfunction]
+#[pyo3(signature = (timeout=0.0))]
+pub(crate) fn live_workers(py: Python<'_>, timeout: f64) -> PyResult<usize> {
+    let timeout = Duration::try_from_secs_f64(timeout).map_err(value_error)?;
+    detached(py, || {
+        let count = WORKERS.0.lock().unwrap_or_else(PoisonError::into_inner);
+        let (count, _) = WORKERS
+            .1
+            .wait_timeout_while(count, timeout, |n| *n > 0)
+            .unwrap_or_else(PoisonError::into_inner);
+        Ok(*count)
+    })
+}
 #[derive(Debug)]
 struct State<T> {
     receiver: Option<Receiver<Event<T>>>,
@@ -164,14 +195,17 @@ impl<T: Send + 'static> State<T> {
     fn spawn(
         core: Topology,
         capacity: usize,
-        mut emit: impl FnMut(ValidationEvent<'_>) -> Result<Option<T>, String> + Send + 'static,
+        emit: impl FnMut(ValidationEvent<'_>) -> Result<Option<T>, String> + Send + 'static,
     ) -> PyResult<Self> {
         let cancellation = CancellationToken::default();
         let worker_cancellation = cancellation.clone();
         let (sender, receiver) = mpsc::sync_channel(capacity);
+        let live = Live::new();
         let worker = std::thread::Builder::new()
             .name("topology-validation".into())
             .spawn(move || {
+                // Locals drop in reverse order, so the count falls after the snapshot is freed.
+                let (_live, core, mut emit, sender) = (live, core, emit, sender);
                 let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     core.validate_events_cancellable(worker_cancellation, |event| {
                         match emit(event).map_err(Stop::Failed)? {
@@ -182,7 +216,10 @@ impl<T: Send + 'static> State<T> {
                 }));
                 let event = match outcome {
                     Ok(Ok(summary)) => Event::End(summary.into()),
-                    Ok(Err(SinkError::Consumer(Stop::Closed))) => return,
+                    Ok(
+                        Err(SinkError::Consumer(Stop::Closed))
+                        | Err(SinkError::Core(topology_checker_core::Error::Cancelled)),
+                    ) => return,
                     Ok(Err(SinkError::Core(
                         e @ topology_checker_core::Error::Precision { .. },
                     ))) => Event::Precision(e.to_string()),
@@ -208,6 +245,11 @@ impl<T> State<T> {
             return Ok(None);
         };
         let event = receiver.recv();
+        if self.cancellation.is_cancelled() {
+            // Closed from another thread while this one waited.
+            self.close();
+            return Ok(None);
+        }
         let error = match event {
             Ok(Event::Item(item)) => return Ok(Some(item)),
             Ok(Event::End(summary)) => {
@@ -245,6 +287,7 @@ impl<T> Drop for State<T> {
 #[derive(Debug)]
 pub(crate) struct NativeValidationStream {
     state: Mutex<State<NativeViolation>>,
+    cancellation: CancellationToken,
     batch_size: usize,
 }
 impl NativeValidationStream {
@@ -259,6 +302,7 @@ impl NativeValidationStream {
             _ => Ok(None),
         })?;
         Ok(Self {
+            cancellation: state.cancellation.clone(),
             state: Mutex::new(state),
             batch_size,
         })
@@ -280,14 +324,18 @@ impl NativeValidationStream {
         })
     }
     fn close(&self, py: Python<'_>) -> PyResult<()> {
+        // Cancel first: a consumer blocked in another thread holds the state.
+        self.cancellation.cancel();
         detached(py, || {
             self.state.lock().map_err(runtime_error)?.close();
             Ok(())
         })
     }
     #[getter]
-    fn summary(&self) -> PyResult<Option<NativeSummary>> {
-        Ok(self.state.lock().map_err(runtime_error)?.summary.clone())
+    fn summary(&self, py: Python<'_>) -> PyResult<Option<NativeSummary>> {
+        detached(py, || {
+            Ok(self.state.lock().map_err(runtime_error)?.summary.clone())
+        })
     }
 }
 /// Rule reports in registration order, each sent when its rule ends.
@@ -295,6 +343,7 @@ impl NativeValidationStream {
 #[derive(Debug)]
 pub(crate) struct NativeReportStream {
     state: Mutex<State<RuleItem>>,
+    cancellation: CancellationToken,
 }
 impl NativeReportStream {
     pub fn new(core: Topology) -> PyResult<Self> {
@@ -313,6 +362,7 @@ impl NativeReportStream {
             _ => Ok(None),
         })?;
         Ok(Self {
+            cancellation: state.cancellation.clone(),
             state: Mutex::new(state),
         })
     }
@@ -323,13 +373,17 @@ impl NativeReportStream {
         detached(py, || self.state.lock().map_err(runtime_error)?.next())
     }
     fn close(&self, py: Python<'_>) -> PyResult<()> {
+        // Cancel first: a consumer blocked in another thread holds the state.
+        self.cancellation.cancel();
         detached(py, || {
             self.state.lock().map_err(runtime_error)?.close();
             Ok(())
         })
     }
     #[getter]
-    fn summary(&self) -> PyResult<Option<NativeSummary>> {
-        Ok(self.state.lock().map_err(runtime_error)?.summary.clone())
+    fn summary(&self, py: Python<'_>) -> PyResult<Option<NativeSummary>> {
+        detached(py, || {
+            Ok(self.state.lock().map_err(runtime_error)?.summary.clone())
+        })
     }
 }
