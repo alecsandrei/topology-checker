@@ -21,7 +21,7 @@ from ..core import binary
 from ..core.layers import Input, same_file, uri_parts
 from ..enums import Asset
 from ..exceptions import ExecutableError, RunError
-from ..utils import QgsProcessingException, not_none
+from ..utils import QgsProcessingException, not_none, tr
 
 INPUT = 'INPUT'
 OTHER = 'OTHER'
@@ -86,8 +86,10 @@ def refuse_files(outputs: c.Iterable[str], files: c.Iterable[str]) -> None:
         for path in files:
             if same_file(output, path):
                 raise QgsProcessingException(
-                    f'The output {output} is a file of an input layer, which '
-                    'the run would replace. Choose another output.'
+                    tr(
+                        'The output {output} is a file of an input layer, '
+                        'which the run would replace. Choose another output.'
+                    ).format(output=output)
                 )
 
 
@@ -153,8 +155,10 @@ def free_file(path: str) -> str:
             )
             if index > MAX_NAMES:
                 raise QgsProcessingException(
-                    f'The file {path} cannot be replaced: it is in use. '
-                    'Choose another output.'
+                    tr(
+                        'The file {path} cannot be replaced: it is in use. '
+                        'Choose another output.'
+                    ).format(path=path)
                 ) from None
 
 

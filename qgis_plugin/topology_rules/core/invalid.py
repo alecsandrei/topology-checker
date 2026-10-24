@@ -17,9 +17,9 @@ from qgis.core import (
 )
 
 from ..exceptions import RunError
-from ..utils import not_none
+from ..utils import not_none, tr
 from .inputs import not_finite
-from .layers import wkb_kind
+from .layers import geometry_word, wkb_kind
 
 # The columns of the tool, as a memory layer defines them
 FIELDS = (
@@ -126,7 +126,11 @@ def append_invalid(
                 [item.feature(layer.fields()) for item in found]
             )
             if not added:
-                raise RunError(f'Could not write the {kind} errors')
+                raise RunError(
+                    tr('Could not write the {kind} errors').format(
+                        kind=geometry_word(kind)
+                    )
+                )
             continue
         features = [item.feature(fields) for item in found]
         options = QgsVectorFileWriter.SaveVectorOptions()
@@ -146,5 +150,9 @@ def append_invalid(
             options,
         )
         if writer is None or not writer.addFeatures(features):
-            raise RunError(f'Could not write the {kind} errors')
+            raise RunError(
+                tr('Could not write the {kind} errors').format(
+                    kind=geometry_word(kind)
+                )
+            )
         del writer

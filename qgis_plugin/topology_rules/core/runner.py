@@ -13,6 +13,7 @@ import time
 import typing as t
 
 from ..exceptions import RunError
+from ..utils import tr
 
 if t.TYPE_CHECKING:
     from qgis.core import QgsProcessingFeedback
@@ -58,7 +59,11 @@ def run(
             start_new_session=sys.platform != 'win32',
         )
     except OSError as error:
-        raise RunError(f'Could not run {command[0]}: {error}') from error
+        raise RunError(
+            tr('Could not run {program}: {error}').format(
+                program=command[0], error=error
+            )
+        ) from error
     started = time.monotonic()
     while True:
         try:
@@ -67,11 +72,13 @@ def run(
         except subprocess.TimeoutExpired:
             if feedback is not None and feedback.isCanceled():
                 stop(process)
-                raise RunError('Canceled') from None
+                raise RunError(tr('Canceled')) from None
             if timeout is not None and time.monotonic() - started > timeout:
                 stop(process)
                 raise RunError(
-                    f'{command[0]} did not answer within {timeout:g} s'
+                    tr('{program} did not answer within {seconds:g} s').format(
+                        program=command[0], seconds=timeout
+                    )
                 ) from None
     return Completed(process.returncode, stdout, stderr)
 
@@ -95,7 +102,9 @@ def error_message(completed: Completed) -> str:
             continue
         if isinstance(value, dict) and 'error' in value:
             return str(t.cast('dict[str, t.Any]', value)['error'])
-    return text or f'Exited with code {completed.exit_code}'
+    return text or tr('Exited with code {code}').format(
+        code=completed.exit_code
+    )
 
 
 def stop(process: subprocess.Popen[str]) -> None:

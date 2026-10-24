@@ -28,7 +28,7 @@ from qgis.core import (
 )
 
 from ..exceptions import RunError
-from ..utils import QgsCsException, named, not_none
+from ..utils import QgsCsException, named, not_none, tr
 from .layers import Dataset, Input, wkb_kind
 
 # How many features are read by their ids, or written, at once
@@ -213,7 +213,9 @@ def require_readable(item: Input) -> None:
     """Raises if the data of the input cannot be read."""
     if not item.valid:
         raise RunError(
-            f'The layer {item.name} is not valid, its data cannot be read.'
+            tr(
+                'The layer {layer} is not valid, its data cannot be read.'
+            ).format(layer=item.name)
         )
     if item.gone:
         raise RunError(item.gone)
@@ -240,7 +242,9 @@ def reprojection(
     if target is None or not moves(crs, target):
         return None
     feedback.pushInfo(
-        f'Reprojecting {item.name} from {crs.authid()} to {target.authid()}'
+        tr('Reprojecting {layer} from {source} to {target}').format(
+            layer=item.name, source=crs.authid(), target=target.authid()
+        )
     )
     return QgsCoordinateTransform(crs, target, context.transformContext())
 
@@ -259,7 +263,9 @@ def geometries(
                 geometry.transform(transform)
             except QgsCsException as error:
                 raise RunError(
-                    f'Could not reproject {item.name}: {error}'
+                    tr('Could not reproject {layer}: {error}').format(
+                        layer=item.name, error=error
+                    )
                 ) from error
         yield feature.id(), geometry
 
@@ -293,7 +299,7 @@ def chosen(
             )
         for feature in found:
             if feedback.isCanceled():
-                raise RunError('Canceled')
+                raise RunError(tr('Canceled'))
             yield feature
 
 
@@ -341,7 +347,11 @@ def write(
 ) -> None:
     """Writes the features of the batch to the export, and empties it."""
     if batch and not writer.addFeatures(batch):
-        raise RunError(f'Could not export {name}: {writer.errorMessage()}')
+        raise RunError(
+            tr('Could not export {layer}: {error}').format(
+                layer=name, error=writer.errorMessage()
+            )
+        )
     batch.clear()
 
 
@@ -393,7 +403,11 @@ def export_dataset(
         writer.hasError() != QgsVectorFileWriter.WriterError.NoError
     ):
         message = '' if writer is None else writer.errorMessage()
-        raise RunError(f'Could not export {item.name}: {message}')
+        raise RunError(
+            tr('Could not export {layer}: {error}').format(
+                layer=item.name, error=message
+            )
+        )
     ids: list[int] = []
     skipped: list[Skipped] = []
     batch: list[QgsFeature] = []

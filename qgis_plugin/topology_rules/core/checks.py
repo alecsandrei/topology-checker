@@ -16,7 +16,7 @@ from qgis.core import (
 )
 
 from ..exceptions import RunError
-from ..utils import not_none
+from ..utils import not_none, tr
 from .binary import Rule
 from .commands import (
     ERROR_LAYERS,
@@ -123,8 +123,10 @@ def run_jobs(
     outcome = retried(jobs, attempt, feedback)
     if outcome.invalid:
         feedback.pushWarning(
-            f'{len(outcome.invalid)} features with an invalid geometry '
-            'were left out of the run'
+            tr(
+                '{count} features with an invalid geometry were left out of '
+                'the run'
+            ).format(count=len(outcome.invalid))
         )
     return outcome
 
@@ -167,7 +169,9 @@ def retried(
                 skips.setdefault(rejected.key, {})[rejected.fid] = (
                     rejected.reason
                 )
-                feedback.pushInfo(f'Left out of the run: {rejected}')
+                feedback.pushInfo(
+                    tr('Left out of the run: {reason}').format(reason=rejected)
+                )
         except RunError as error:
             # The tool cannot read a geometry of a file (crates/io codec),
             # and does not say which: the export leaves out what it would
@@ -181,7 +185,7 @@ def retried(
             if not UNREADABLE.search(str(error)) or keys <= exported:
                 raise
             exported.update(keys)
-    raise first or RunError('Too many features were rejected by the tool')
+    raise first or RunError(tr('Too many features were rejected by the tool'))
 
 
 def run_once(
@@ -325,4 +329,8 @@ def renumber_errors(path: str, ids: IdMap) -> None:
         if changes and not not_none(layer.dataProvider()).changeAttributeValues(
             changes
         ):
-            raise RunError(f'Could not write the feature ids to {path}')
+            raise RunError(
+                tr('Could not write the feature ids to {path}').format(
+                    path=path
+                )
+            )

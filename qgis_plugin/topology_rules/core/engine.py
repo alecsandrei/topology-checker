@@ -192,9 +192,9 @@ def rules(used: Tool) -> tuple[Rule, ...]:
 def describe(used: Tool) -> str:
     """The engine of a run, as the log names it."""
     if isinstance(used, Package):
-        version = f' {used.version}' if used.version else ''
-        return (
-            f'Engine: Python package {DISTRIBUTION}{version} ({used.location})'
+        package = ' '.join(filter(None, (DISTRIBUTION, used.version)))
+        return tr('Engine: Python package {package} ({location})').format(
+            package=package, location=used.location
         )
-    version = binary.version(used)
-    return f'Engine: executable {used}{f" {version}" if version else ""}'
+    executable = ' '.join(filter(None, (used, binary.version(used))))
+    return tr('Engine: executable {executable}').format(executable=executable)

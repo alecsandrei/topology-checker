@@ -8,6 +8,7 @@ from pathlib import Path
 
 from ..enums import ExitCode
 from ..exceptions import RunError
+from ..utils import tr
 from .binary import Rule
 from .layers import Dataset
 from .runner import Completed, error_message, execute
@@ -174,7 +175,9 @@ def rule_counts(completed: Completed) -> list[int]:
         return [sum(rule['counts'].values()) for rule in report['rules']]
     except (ValueError, KeyError, TypeError) as error:
         raise RunError(
-            f'Could not read the report: {completed.stdout[:200]!r}'
+            tr('Could not read the report: {report}').format(
+                report=repr(completed.stdout[:200])
+            )
         ) from error
 
 

@@ -13,12 +13,16 @@ from qgis.core import (
 
 from ..core.commands import ERROR_LAYERS
 from ..core.style import STYLED, ColourBy, Legend, style_layer
-from ..utils import not_none
+from ..utils import not_none, tr
 
-GROUP_NAME = 'Topology errors'
 # Marks the group and the layers that the plugin added, so that a group of
 # the user with the same name is left alone
 PROPERTY = 'topology_rules/errors'
+
+
+def group_name() -> str:
+    """The name of the group of the error layers in the layer tree."""
+    return tr('Topology errors')
 
 
 def remove_errors() -> None:
@@ -49,7 +53,7 @@ def add_errors(
     executable may write to the file as another one."""
     project = not_none(QgsProject.instance())
     group = not_none(
-        not_none(project.layerTreeRoot()).insertGroup(0, GROUP_NAME)
+        not_none(project.layerTreeRoot()).insertGroup(0, group_name())
     )
     group.setCustomProperty(PROPERTY, True)
     layers: list[QgsVectorLayer] = []

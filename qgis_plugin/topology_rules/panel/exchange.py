@@ -227,7 +227,11 @@ def write_layer(
         options,
     )
     if error != QgsVectorFileWriter.WriterError.NoError:
-        raise DefinitionError(f'Could not save {layer.name()}: {message}')
+        raise DefinitionError(
+            tr('Could not save {layer}: {error}').format(
+                layer=layer.name(), error=message
+            )
+        )
 
 
 def save_layers(
@@ -275,7 +279,7 @@ def export_definition(
     checks and not the layer it checks it against."""
     checked = [entry for entry in entries if entry.checked]
     if not checked:
-        raise DefinitionError('Check at least one rule to export.')
+        raise DefinitionError(tr('Check at least one rule to export.'))
     # Each layer with what is asked of it: the selection, or the whole
     limit = selected or extent is not None
     wanted = [((entry.layer, limit), entry.layer_name) for entry in checked]
@@ -304,14 +308,15 @@ def export_definition(
             gone.append(name)
     if gone:
         raise DefinitionError(
-            'These layers are not in the project: '
-            + ', '.join(dict.fromkeys(gone))
+            tr('These layers are not in the project: {layers}').format(
+                layers=', '.join(dict.fromkeys(gone))
+            )
         )
     data = data_path(path)
     saved: dict[str, str] = {}
     if unreadable:
         if data.exists() and not overwrite(data):
-            raise DefinitionError('Export canceled.')
+            raise DefinitionError(tr('Export canceled.'))
         written = save_layers(
             [
                 (

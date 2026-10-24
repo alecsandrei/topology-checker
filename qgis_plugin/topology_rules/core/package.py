@@ -26,7 +26,7 @@ from qgis.core import (
 )
 
 from ..exceptions import RunError
-from ..utils import not_none
+from ..utils import not_none, tr
 from .binary import Rule, known
 from .checks import Job, Outcome
 from .commands import unique
@@ -374,7 +374,11 @@ def add_rule(
         None,
     )
     if rule is None:
-        raise RunError(f'The Python package has no rule {job.rule.name}')
+        raise RunError(
+            tr('The Python package has no rule {rule}').format(
+                rule=job.rule.name
+            )
+        )
     other = None if job.other is None else by_key[job.other.key].layer
     try:
         spec = topology.add_rule(rule, by_key[job.layer.key].layer, other=other)
@@ -382,8 +386,9 @@ def add_rule(
         raise RunError(f'{job.rule.name}: {error}') from error
     if spec.resolved_rule.value != job.rule.name:
         raise RunError(
-            f'The Python package runs {spec.resolved_rule.value} for '
-            f'{job.rule.name}'
+            tr('The Python package runs {found} for {rule}').format(
+                found=spec.resolved_rule.value, rule=job.rule.name
+            )
         )
 
 
@@ -426,12 +431,12 @@ def validate(
     names = {entry.layer: entry.name for entry in registered}
     rows: dict[str, list[tuple[QgsGeometry, list[object]]]] = {}
     if feedback.isCanceled():
-        raise RunError('Canceled')
+        raise RunError(tr('Canceled'))
     try:
         with topology.iter_validate() as stream:
             for index, violation in enumerate(stream):
                 if feedback.isCanceled():
-                    raise RunError('Canceled')
+                    raise RunError(tr('Canceled'))
                 values = attributes(index, violation, names)
                 for member in members(from_wkb(violation.wkb)):
                     family = wkb_kind(member.wkbType())
@@ -495,7 +500,11 @@ def create_layer(
         writer.hasError() != QgsVectorFileWriter.WriterError.NoError
     ):
         message = '' if writer is None else writer.errorMessage()
-        raise RunError(f'Could not write {name} to {path}: {message}')
+        raise RunError(
+            tr('Could not write {layer} to {path}: {error}').format(
+                layer=name, path=path, error=message
+            )
+        )
     return writer
 
 

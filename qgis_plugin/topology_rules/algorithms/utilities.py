@@ -24,7 +24,7 @@ from ..core.commands import utility_command
 from ..core.inputs import Skipped, prepare
 from ..core.layers import Input, require_kind
 from ..core.runner import error_message, execute
-from ..utils import QgsProcessingException, not_none, source_type
+from ..utils import QgsProcessingException, not_none, source_type, tr
 from .base import (
     INPUT,
     OUTPUT,
@@ -53,8 +53,6 @@ class UtilityAlgorithm(Planned):
 
     command = ''
     algorithm_name = ''
-    display = ''
-    help = ''
 
     def __init__(self) -> None:
         super().__init__()
@@ -66,31 +64,27 @@ class UtilityAlgorithm(Planned):
     def name(self) -> str:
         return self.algorithm_name
 
-    def displayName(self) -> str:
-        return self.display
-
     def group(self) -> str:
-        return 'Utilities'
+        return tr('Utilities')
 
     def groupId(self) -> str:
         return 'utilities'
 
-    def shortHelpString(self) -> str:
-        return self.help
-
     def initAlgorithm(self, configuration: Parameters | None = None):
         self.addParameter(
             QgsProcessingParameterVectorLayer(
-                INPUT, 'Input layer', [source_type('VectorLine')]
+                INPUT, tr('Input layer'), [source_type('VectorLine')]
             )
         )
         self.addParameter(
             QgsProcessingParameterFeatureSink(
-                OUTPUT, 'Output', source_type('VectorLine')
+                OUTPUT, tr('Output'), source_type('VectorLine')
             )
         )
         self.addOutput(
-            QgsProcessingOutputNumber(SKIPPED, 'Features left out of the run')
+            QgsProcessingOutputNumber(
+                SKIPPED, tr('Features left out of the run')
+            )
         )
 
     def prepareAlgorithm(
@@ -151,7 +145,7 @@ class UtilityAlgorithm(Planned):
             result = QgsVectorLayer(copy, 'output', 'ogr')
             try:
                 if not result.isValid():
-                    raise QgsProcessingException('The tool wrote no output')
+                    raise QgsProcessingException(tr('The tool wrote no output'))
                 # The lines are in the CRS of the input, which the executable
                 # may write to the file as another one
                 crs = plan.item.crs if plan.item.crs.isValid() else result.crs()
@@ -227,24 +221,35 @@ def report_skipped(
     """Says in the log which features were left out of the run."""
     if skipped:
         feedback.pushWarning(
-            f'{len(skipped)} features of {item.name} were left out of the run'
+            tr('{count} features of {layer} were left out of the run').format(
+                count=len(skipped), layer=item.name
+            )
         )
     for left_out in skipped:
         feedback.pushInfo(
-            f'Left out of the run: {item.name}, feature {left_out.fid}: '
-            f'{left_out.reason}'
+            tr('Left out of the run: {layer}, feature {fid}: {reason}').format(
+                layer=item.name, fid=left_out.fid, reason=left_out.reason
+            )
         )
 
 
 class MergeLines(UtilityAlgorithm):
     command = 'merge-lines'
     algorithm_name = 'merge_lines'
-    display = 'Merge lines'
-    help = 'Join lines at endpoints shared by exactly two lines.'
+
+    def displayName(self) -> str:
+        return tr('Merge lines')
+
+    def shortHelpString(self) -> str:
+        return tr('Join lines at endpoints shared by exactly two lines.')
 
 
 class ExplodeLines(UtilityAlgorithm):
     command = 'explode-lines'
     algorithm_name = 'explode_lines'
-    display = 'Explode lines'
-    help = 'Split lines into single segments.'
+
+    def displayName(self) -> str:
+        return tr('Explode lines')
+
+    def shortHelpString(self) -> str:
+        return tr('Split lines into single segments.')

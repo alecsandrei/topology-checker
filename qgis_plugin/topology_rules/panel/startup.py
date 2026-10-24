@@ -9,6 +9,7 @@ from ..core import binary, engine
 from ..core.binary import Rule
 from ..core.engine import Engine
 from ..exceptions import ExecutableError, PackageError
+from ..utils import tr
 
 if t.TYPE_CHECKING:
     from .dock import Dock
@@ -76,4 +77,4 @@ def answered(
     elif isinstance(error, ExecutableError):
         dock.rules_failed(error)
     else:
-        dock.rules_failed(ExecutableError(str(error or 'No answer')))
+        dock.rules_failed(ExecutableError(str(error or tr('No answer'))))

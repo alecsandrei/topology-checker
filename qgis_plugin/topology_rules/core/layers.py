@@ -21,7 +21,7 @@ from qgis.core import (
 )
 
 from ..exceptions import RunError
-from ..utils import named, not_none
+from ..utils import named, not_none, tr
 from .binary import readable_extensions
 
 # Formats with several layers per file, which need the layer name. Their
@@ -167,15 +167,33 @@ def wkb_kind(wkb_type: t.Any) -> str:
     )
 
 
+def geometry_word(kind: str) -> str:
+    """The geometry kind ('point', 'line' or 'polygon') in words."""
+    return {
+        'point': tr('point'),
+        'line': tr('line'),
+        'polygon': tr('polygon'),
+    }.get(kind, kind)
+
+
+def described(kind: str) -> str:
+    """A layer of the geometry kind, as a message names it."""
+    return {
+        'any': tr('a layer with geometries'),
+        'point': tr('a point layer'),
+        'line': tr('a line layer'),
+        'polygon': tr('a polygon layer'),
+    }.get(kind, tr('a layer without geometries'))
+
+
 def require_kind(item: Input, kind: str) -> None:
     """Raises if the input is not of the geometry kind ('any' needs one)."""
     found = item.kind
     if found == 'none' or kind not in ('any', found):
-        wanted = (
-            'a layer with geometries' if kind == 'any' else f'a {kind} layer'
-        )
         raise RunError(
-            f'{item.name} is a {found} layer, but {wanted} is needed.'
+            tr('{layer} is {found}, but {wanted} is needed.').format(
+                layer=item.name, found=described(found), wanted=described(kind)
+            )
         )
 
 
@@ -202,7 +220,11 @@ def layer_file(layer: QgsVectorLayer) -> str | None:
         return None
     path = str(uri_parts(layer).get('path') or '')
     if path and Path(path).suffix and not Path(path).exists():
-        raise RunError(f'The file of the layer {layer.name()} is gone: {path}')
+        raise RunError(
+            tr('The file of the layer {layer} is gone: {path}').format(
+                layer=layer.name(), path=path
+            )
+        )
     return path if path and Path(path).is_file() else None
 
 
