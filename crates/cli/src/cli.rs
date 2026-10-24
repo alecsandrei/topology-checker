@@ -1,6 +1,21 @@
-use clap::{Arg, ArgAction, Command, value_parser};
+use clap::{Arg, ArgAction, ArgMatches, Command, error::ErrorKind, value_parser};
 use std::path::PathBuf;
 use topology_checker_core::Rule;
+
+/// Reject flag combinations Clap cannot check itself: `requires` does not see
+/// a global flag given before the subcommand.
+pub fn check(matches: ArgMatches) -> Result<ArgMatches, clap::Error> {
+    if let Some(("validate", args)) = matches.subcommand()
+        && args.get_flag("stream")
+        && !matches.get_flag("json")
+    {
+        return Err(command().error(
+            ErrorKind::MissingRequiredArgument,
+            "--stream requires --json",
+        ));
+    }
+    Ok(matches)
+}
 
 fn input() -> Arg {
     Arg::new("input")
@@ -101,6 +116,12 @@ pub fn command() -> Command {
                         .long("progress")
                         .action(ArgAction::SetTrue)
                         .help("Print each rule's error count to stderr when it finishes"),
+                )
+                .arg(
+                    Arg::new("stream")
+                        .long("stream")
+                        .action(ArgAction::SetTrue)
+                        .help("With --json, print each rule's report on its own line as soon as the rule is done"),
                 ),
         )
         .subcommand(Command::new("rules").about("List rule definitions and GIS equivalents"))

@@ -59,6 +59,7 @@ Columns: `violation_id`, `rule`, `error_type`, `origin_layer`, `origin_fid`, `or
 ## Output and exit codes
 
 - stdout: a summary table, or the report as JSON with `--json`. With `--summary`, the JSON leaves out the list of violations and keeps the counts.
+- `validate --stream` needs `--json`. It prints each entry of `rules` to stdout on its own line as the rule finishes, then a last line with `tolerance` and `warnings`.
 - stderr: warnings, and any error. With `--json`, an error is printed as `{"error": "..."}`. `validate --progress` also prints `checked rule K/N (<rule>): C errors` as each rule finishes.
 
 | Exit code | Meaning |
