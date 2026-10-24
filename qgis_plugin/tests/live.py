@@ -3,19 +3,22 @@ run tells while it goes.
 
 With the Python package, each report of `Topology.iter_reports` waits at a
 gate until the test lets it through. The executable is a script that runs
-the real tool, then says each line of `--progress` when the test lets it.
-Nothing waits for a time: what a test waits for is told by the run."""
+the real tool, then says the report of each rule, as `--stream` does, when
+the test lets it. Nothing waits for a time: what a test waits for is told by
+the run."""
 
 from __future__ import annotations
 
 import collections.abc as c
 import dataclasses
+import shutil
 import textwrap
 import threading
 import typing as t
 from pathlib import Path
 
 from qgis.core import (
+    QgsFeature,
     QgsGeometry,
     QgsProcessingContext,
     QgsProcessingFeedback,
@@ -24,12 +27,14 @@ from qgis.core import (
 
 from topology_rules.core import package
 from topology_rules.core.checks import Job, Outcome, run_jobs
-from topology_rules.core.commands import WITHOUT_SUMMARY, validate_command
+from topology_rules.core.commands import ERROR_LAYERS, validate_command
 from topology_rules.core.engine import Tool
-from topology_rules.core.package import Errors, attributes, from_wkb, members
-from topology_rules.core.progress import Checked, Progress, Stage
+from topology_rules.core.errors import Errors, Gathered, found_in, from_wkb
+from topology_rules.core.layers import private_layer
+from topology_rules.core.package import attributes
+from topology_rules.core.progress import Checked, Found, Progress, Stage
+from topology_rules.core.report import IdMap, Report, source_id
 from topology_rules.core.runner import Completed, execute
-from topology_rules.enums import ExitCode
 from topology_rules.exceptions import RunError
 from topology_rules.utils import not_none, tr
 
@@ -207,10 +212,14 @@ def hold_reading(monkeypatch: t.Any, armed: bool = True) -> Hold:
 
 
 def hold_writing(monkeypatch: t.Any, armed: bool = True) -> Hold:
-    """Holds the runs of the package before they write the errors."""
-    from topology_rules.core import package
+    """Holds the runs of both engines before they write the errors."""
+    from topology_rules.core import checks, package
 
-    return hold_calls(monkeypatch, ((package, 'write_errors'),), armed)
+    return hold_calls(
+        monkeypatch,
+        ((package, 'write_errors'), (checks, 'write_errors')),
+        armed,
+    )
 
 
 # Executables
@@ -231,29 +240,43 @@ def replaying_executable(
     killed_after: int | None = None,
     noise: bool = False,
 ) -> Path:
-    """A tool that runs the real tool, and then says each line of
-    `--progress` once the test has made the file of the gates folder named
-    after its number, or the file 'all'. It writes its process number to the
-    started file first.
+    """A tool that runs the real tool, and then says the report of each rule
+    on a line of its own, as `--stream` has it, once the test has made the
+    file of the gates folder named after its number, or the file 'all'. It
+    writes its process number to the started file first. Without --stream
+    it is the real tool.
 
-    It ends once the file 'end' or 'all' is there. It can crash, or kill
-    itself, before the line of a rule, and say lines that are not about
-    rules, with Windows line ends, bytes that are not UTF-8 and lines that
-    are long."""
+    It says the last line, and ends, once the file 'end' or 'all' is there.
+    It can crash before the line of a rule, or kill itself halfway through
+    the line, and say lines that are not of the report: with Windows line
+    ends, bytes that are not UTF-8, lines that are long or nested deep,
+    numbers of thousands of digits, and reports of rules that are not of
+    the run."""
     real = real_executable()
     assert real is not None, 'set TOPOLOGY_CHECKER'
     gates.mkdir(exist_ok=True)
     source = f"""#!/usr/bin/env python3
+import json
 import os
 import signal
 import subprocess
 import sys
 import time
 {follow_tool(real)}
+if '--stream' not in sys.argv:
+{textwrap.indent(hand_over(real), '    ')}
 with open({str(started)!r} + '.part', 'w') as file:
     file.write(str(os.getpid()))
 os.replace({str(started)!r} + '.part', {str(started)!r})
-done = subprocess.run([{real!r}, *sys.argv[1:]], capture_output=True)
+arguments = [argument for argument in sys.argv[1:] if argument != '--stream']
+done = subprocess.run([{real!r}, *arguments], capture_output=True)
+sys.stderr.buffer.write(done.stderr)
+sys.stderr.buffer.flush()
+try:
+    report = json.loads(done.stdout)
+except ValueError:
+    sys.stdout.buffer.write(done.stdout)
+    sys.exit(done.returncode)
 
 
 def wait(name):
@@ -266,42 +289,55 @@ def wait(name):
         time.sleep(0.01)
 
 
-def say(data):
-    sys.stderr.buffer.write(data)
-    sys.stderr.buffer.flush()
+def say(data, stream=sys.stdout):
+    stream.buffer.write(data)
+    stream.buffer.flush()
 
 
-said = 0
-for line in done.stderr.splitlines(keepends=True):
-    if line.startswith(b'checked rule '):
-        if said == {crash_after!r}:
-            wait(str(said))
-            say(b"thread 'main' panicked at src/main.rs: the tool broke\\n")
-            sys.exit(101)
-        if said == {killed_after!r}:
-            wait(str(said))
-            os.kill(os.getpid(), signal.SIGKILL)
-        if {noise!r}:
-            say(b'reading roads\\r\\n')
-            say(b'caf\\xe9 \\xff\\xfe not utf-8\\n')
-            say(b'x' * 100000 + b'\\n')
-            say(b'checked rule 0/0 (nothing): 1 error\\n')
-        wait(str(said))
-        said += 1
-    say(line)
+OTHER = {{
+    'spec': {{'rule': 'line/no-such-rule', 'layer': 0, 'other': None}},
+    'layer': 'x',
+    'other': None,
+    'counts': {{'dangle': 1}},
+    'errors': [],
+}}
+for number, rule in enumerate(report.pop('rules')):
+    line = json.dumps(rule).encode()
+    if number == {crash_after!r}:
+        wait(str(number))
+        say(b"thread 'main' panicked at main.rs: the tool broke\\n", sys.stderr)
+        sys.exit(101)
+    if number == {killed_after!r}:
+        wait(str(number))
+        say(line[: len(line) // 2])
+        os.kill(os.getpid(), signal.SIGKILL)
+    if {noise!r}:
+        say(b'reading roads\\r\\n', sys.stderr)
+        say(b'caf\\xe9 \\xff\\xfe not utf-8\\n', sys.stderr)
+        say(b'x' * 100000 + b'\\n', sys.stderr)
+        say(b'reading roads\\r\\n')
+        say(b'caf\\xe9 \\xff\\xfe not utf-8\\n')
+        say(b'x' * 100000 + b'\\n')
+        say(b'[' * 100000 + b'\\n')
+        say(b'9' * 5000 + b'\\n')
+        say(b'{{"spec": {{"layer": ' + b'9' * 5000 + b'}}}}\\n')
+        say(b'{{"spec": null, "errors": [1]}}\\n')
+        say(json.dumps(OTHER).encode() + b'\\n')
+        say(b'null\\n')
+    wait(str(number))
+    say(line + b'\\r\\n' if {noise!r} else line + b'\\n')
 if {noise!r}:
-    say(b'done\\r\\n')
+    say(b'done\\r\\n', sys.stderr)
 # As the tool, which writes its file after the last rule
 wait('end')
-sys.stdout.buffer.write(done.stdout)
-sys.stdout.buffer.flush()
+say(json.dumps(report).encode() + b'\\n')
 sys.exit(done.returncode)
 """
     return write_tool(directory / 'topology-checker', source)
 
 
 def let_lines(gates: Path, count: int) -> None:
-    """Lets a replaying tool say its first `count` lines of progress."""
+    """Lets a replaying tool say the reports of its first `count` rules."""
     for number in range(count):
         (gates / str(number)).touch()
 
@@ -324,7 +360,7 @@ def close_gates(gates: Path) -> None:
 def refusing_executable(
     directory: Path, name: str = 'topology-checker', log: Path | None = None
 ) -> Path:
-    """A tool from before --progress: it refuses the flag as the parser of
+    """A tool from before --stream: it refuses the flag as the parser of
     its arguments does, and is the real tool otherwise. With a log it writes
     down each of its commands."""
     real = real_executable()
@@ -339,8 +375,8 @@ def refusing_executable(
     source = f"""#!/usr/bin/env python3
 import os
 import sys
-{logged}if '--progress' in sys.argv:
-    print("error: unexpected argument '--progress' found", file=sys.stderr)
+{logged}if '--stream' in sys.argv:
+    print("error: unexpected argument '--stream' found", file=sys.stderr)
     print('', file=sys.stderr)
     print('Usage: topology-checker validate <CONFIG>', file=sys.stderr)
     print('', file=sys.stderr)
@@ -426,25 +462,28 @@ def run_told(
 
 
 def expected_stages(
-    total: int, executable: bool
+    total: int, streams: bool = True, refused: bool = False
 ) -> list[tuple[Stage, int | None, int]]:
-    """What a run of a number of rules says it does, from start to end: the
-    executable does not say which rule it checks until the first is done."""
-    first: tuple[Stage, int | None, int] = (
-        (Stage.CHECKING, None, total)
-        if executable
-        else (Stage.CHECKING, 0, total)
+    """What a run of a number of rules says it does, from start to end. An
+    executable that is known not to stream says which rule it checks only
+    once all are done; one that refuses to stream is first taken to."""
+    first: list[tuple[Stage, int | None, int]] = (
+        [(Stage.CHECKING, 0, total)] if streams or refused else []
     )
+    if not streams:
+        first.append((Stage.CHECKING, None, total))
     return [
         (Stage.READING, None, 0),
-        first,
+        *first,
         *((Stage.CHECKING, index, total) for index in range(1, total)),
         (Stage.WRITING, None, total),
     ]
 
 
-def wkt_of(geometry: QgsGeometry) -> str:
-    return geometry.asWkt(6)
+def wkt_of(geometry: QgsGeometry) -> tuple[str, str]:
+    """The geometry as text, and as WKB to the last bit of each coordinate,
+    as the tests of the files read it."""
+    return geometry.asWkt(6), bytes(geometry.asWkb()).hex()
 
 
 def found_rows(checks: c.Iterable[Checked]) -> dict[str, list[list[object]]]:
@@ -452,7 +491,7 @@ def found_rows(checks: c.Iterable[Checked]) -> dict[str, list[list[object]]]:
     hold them: the geometry, then the columns."""
     rows: dict[str, list[list[object]]] = {}
     for done in checks:
-        for found in done.errors or ():
+        for found in done.errors:
             rows.setdefault(found.family, []).append(
                 [wkt_of(found.geometry), *found.values]
             )
@@ -478,7 +517,7 @@ def validate_untold(
     import topology_checker as tc
 
     names = {entry.layer: entry.name for entry in registered}
-    rows: dict[str, list[tuple[QgsGeometry, list[object]]]] = {}
+    rows: dict[str, list[Found]] = {}
     if feedback.isCanceled():
         raise RunError(tr('Canceled'))
     try:
@@ -487,9 +526,8 @@ def validate_untold(
                 if feedback.isCanceled():
                     raise RunError(tr('Canceled'))
                 values = attributes(index, violation, names)
-                for member in members(from_wkb(violation.wkb)):
-                    family = package.wkb_kind(member.wkbType())
-                    rows.setdefault(family, []).append((member, values))
+                for found in found_in(from_wkb(violation.wkb), values):
+                    rows.setdefault(found.family, []).append(found)
             summary = not_none(stream.summary)
     except (ValueError, tc.PrecisionError) as error:
         raise RunError(str(error)) from error
@@ -500,27 +538,83 @@ def validate_untold(
     )
 
 
-def run_validate_untold(
-    executable: str,
-    config: str,
-    tolerance: float | None,
-    output: str,
-    feedback: QgsProcessingFeedback,
-    done: object = None,
-) -> Completed:
-    """How the executable was run: without --progress, its error output
-    read at the end."""
-    if executable not in WITHOUT_SUMMARY:
-        completed = execute(
-            validate_command(executable, config, tolerance, output, True),
-            feedback,
-        )
-        known = completed.exit_code != ExitCode.ERROR.value or (
-            '--summary' not in completed.stderr + completed.stdout
-        )
-        if known:
-            return completed
-        WITHOUT_SUMMARY.add(executable)
-    return execute(
-        validate_command(executable, config, tolerance, output), feedback
-    )
+class Untold(Gathered):
+    """The errors of the rules, of which nothing is told."""
+
+    def add(self, found: c.Sequence[Found], count: int) -> None:
+        for item in found:
+            self.rows.setdefault(item.family, []).append(item)
+        self.counts.append(count)
+
+
+def renumber_errors(path: str, ids: IdMap) -> None:
+    """Gives the errors of a GeoPackage the ids of the source features."""
+    for name in ERROR_LAYERS:
+        layer = private_layer(f'{path}|layername={name}', name)
+        if not layer.isValid():
+            continue
+        fields = layer.fields()
+        changes: dict[int, dict[int, object]] = {}
+        for feature in t.cast('c.Iterable[QgsFeature]', layer.getFeatures()):
+            new: dict[int, object] = {}
+            for layer_column, id_column in (
+                ('origin_layer', 'origin_fid'),
+                ('destination_layer', 'destination_fid'),
+            ):
+                before = feature[id_column]
+                after = source_id(ids, feature[layer_column], before)
+                if after != before:
+                    new[fields.indexOf(id_column)] = after
+            if new:
+                changes[feature.id()] = new
+        if changes:
+            assert layer.startEditing()
+            for fid, values in changes.items():
+                assert layer.changeAttributeValues(fid, values)
+            assert layer.commitChanges()
+
+
+def untold_executable(monkeypatch: t.Any) -> None:
+    """How the executable was run: it wrote the errors itself, to the file
+    of the output, and the plugin gave them the ids of the source features.
+    Nothing was told of a rule until the end."""
+    from topology_rules.core import checks
+
+    tables: list[IdMap] = []
+    written: list[Path] = []
+
+    class Recorded(Report):
+        def __init__(self, gathered: Gathered, ids: IdMap) -> None:
+            super().__init__(gathered, ids)
+            tables.append(ids)
+
+    def run_validate(
+        executable: str,
+        config: str,
+        tolerance: float | None,
+        feedback: QgsProcessingFeedback,
+        out: c.Callable[[str], bool],
+        older: object = None,
+    ) -> Completed:
+        own = Path(config).with_name('own.gpkg')
+        command = validate_command(executable, config, tolerance, False)
+        completed = execute([*command, '-o', str(own), '--overwrite'], feedback)
+        written.append(own)
+        for line in completed.stdout.splitlines():
+            out(line)
+        return completed
+
+    def write_errors(path: str, *_: object) -> None:
+        shutil.copyfile(written[-1], path)
+        renumber_errors(path, tables[-1])
+
+    monkeypatch.setattr(checks, 'Gathered', Untold)
+    monkeypatch.setattr(checks, 'Report', Recorded)
+    monkeypatch.setattr(checks, 'run_validate', run_validate)
+    monkeypatch.setattr(checks, 'write_errors', write_errors)
+
+
+def untold(monkeypatch: t.Any) -> None:
+    """Both engines as they ran before they told of each rule."""
+    monkeypatch.setattr(package, 'validate', validate_untold)
+    untold_executable(monkeypatch)

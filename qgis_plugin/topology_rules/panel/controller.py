@@ -49,8 +49,6 @@ class Run:
     crs: QgsCoordinateReferenceSystem
     # The errors of each rule that is done, by its place in the run
     done: dict[int, int] = dataclasses.field(default_factory=dict)
-    # Whether the errors of the rules that are done are in the tree
-    live: bool = False
 
 
 # A task works with its context and feedback in another thread, so they stay
@@ -154,7 +152,6 @@ def stage_changed(dock: Dock, run: Run, staged: Staged) -> None:
         if run.done:
             # The run starts over, without the features that stopped it
             run.done.clear()
-            run.live = False
             for entry in run.entries:
                 entry.errors = None
             dock.rule_list.show_entries()
@@ -166,28 +163,29 @@ def stage_changed(dock: Dock, run: Run, staged: Staged) -> None:
     if stage is Stage.WRITING:
         dock.stage.say(tr('Writing errors…'))
     elif index is None:
+        # The engine tells of the rules only when they are all done
         dock.stage.say(
-            tr('Checking 1 rule…')
+            tr('Checking 1 rule')
             if total == 1
-            else tr('Checking {count} rules…').format(count=total)
+            else tr('Checking {count} rules').format(count=total)
         )
     elif 0 <= index < total:
         template = (
-            tr('Checking {rule}…')
+            tr('Checking {rule}')
             if total == 1
-            else tr('Checking {rule} ({index} of {total})…').format(
+            else tr('Checking {rule} ({index} of {total})').format(
                 rule='{rule}', index=index + 1, total=total
             )
         )
-        dock.stage.say_about(template, rule_label(run.entries[index]))
+        dock.stage.say_about(template, run.entries[index].title)
     if index is not None or run.done:
         dock.progress.setRange(0, total)
         dock.progress.setValue(len(run.done))
 
 
 def rule_done(dock: Dock, run: Run, found: Done) -> None:
-    """Shows what a rule that is done found: its count in the list and, when
-    the engine has them, its errors in the tree."""
+    """Shows what a rule that is done found: its count in the list and its
+    errors in the tree."""
     if not current(dock, run):
         return
     done, rows = found
@@ -197,18 +195,10 @@ def rule_done(dock: Dock, run: Run, found: Done) -> None:
     key = f'e{done.index}'
     run.done[done.index] = done.count
     dock.run_keys[entry.key] = key
-    if rows is not None:
-        run.live = True
-        dock.results.add_rule(key, rows, done.layers)
-        entry.errors = len(dock.results.active(key))
-    else:
-        entry.errors = done.count
-        if not run.live:
-            dock.results.waiting()
+    dock.results.add_rule(key, rows, done.layers)
+    entry.errors = len(dock.results.active(key))
     dock.rule_list.set_count(entry)
-    dock.set_error_count(
-        len(dock.results.active()) if run.live else sum(run.done.values())
-    )
+    dock.set_error_count(len(dock.results.active()))
     dock.progress.setRange(0, done.total)
     dock.progress.setValue(len(run.done))
 
@@ -247,14 +237,11 @@ def done(dock: Dock, run: Run, ok: bool, results: dict[str, t.Any]) -> None:
 def finish(dock: Dock, run: Run, ok: bool, results: dict[str, t.Any]) -> None:
     """Shows the outcome of a run when its task is done. A canceled run
     shows what the rules that were done found, as a run of those rules
-    would. A run that failed keeps what it showed of them."""
+    would; one canceled once all its rules were done is a whole run. A run
+    that failed keeps what it showed of them."""
     feedback = run.feedback
     todo = run.entries
     settle(dock)
-    if not run.live:
-        # The tab counted errors that the tree does not have: the engine
-        # gives them only with the layers
-        dock.set_error_count(0)
     bar = not_none(dock.iface.messageBar())
     canceled = feedback.isCanceled()
     if not ok and not canceled:
@@ -265,17 +252,12 @@ def finish(dock: Dock, run: Run, ok: bool, results: dict[str, t.Any]) -> None:
         # Nothing was written: what the list and the tree show is all
         push_summary(
             bar,
-            canceled_text(
-                len(run.done),
-                len(todo),
-                len(dock.results.active())
-                if run.live
-                else sum(run.done.values()),
-            ),
+            canceled_text(len(run.done), len(todo), len(dock.results.active())),
             Qgis.MessageLevel.Info,
         )
         return
     counts = loads(results.get(COUNTS), [])
+    canceled = canceled and len(counts) < len(todo)
     for entry, count in zip(todo, counts, strict=False):
         entry.errors = int(count)
     dock.rule_list.show_entries()
@@ -361,8 +343,6 @@ def show_errors(
     """Replaces the errors of the last run with those of this one, which
     take the place of what the tree showed during the run."""
     todo = run.entries
-    if not run.live:
-        dock.results.clear()
     remove_errors()
     layers = loads(results.get(LAYERS), {})
     names = {
@@ -379,10 +359,7 @@ def show_errors(
         entry.key: f'e{i}' for i, entry in enumerate(todo[: len(counts)])
     }
     rows = read_rows(add_errors(path, dock.legends, run.crs), names, grouping)
-    if run.live:
-        dock.results.hand_over(rows, layers, grouping, labels)
-    else:
-        dock.results.show_rows(rows, layers, grouping, labels)
+    dock.results.hand_over(rows, layers, grouping, labels)
     # A layer can be several inputs of the run, each with a name of its own
     invalid: dict[str, int] = {}
     for alias, layer_id in layers.items():

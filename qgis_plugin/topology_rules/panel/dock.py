@@ -123,8 +123,10 @@ class Dock(QgsDockWidget):
         )
         self.menu_button.setMenu(self.menu)
         self.style_menu = self.menu.style_menu
+        # The rules that are done, as the stage counts them
         self.progress = QProgressBar()
         self.progress.setRange(0, 0)
+        self.progress.setTextVisible(False)
         self.progress.hide()
         # What the run does now
         self.stage = StageLabel()

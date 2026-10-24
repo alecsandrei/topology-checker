@@ -16,14 +16,10 @@ import threading
 import typing as t
 
 from qgis.core import (
-    Qgis,
     QgsCoordinateReferenceSystem,
-    QgsFeature,
-    QgsFields,
     QgsGeometry,
     QgsProcessingContext,
     QgsProcessingFeedback,
-    QgsVectorFileWriter,
     QgsVectorLayer,
     QgsWkbTypes,
 )
@@ -32,9 +28,18 @@ from ..exceptions import RunError
 from ..utils import not_none, tr
 from .binary import Rule, known
 from .checks import Job, Outcome
-from .commands import ERROR_LAYERS, unique
+from .commands import unique
+from .errors import (
+    MULTI,
+    Errors,
+    Gathered,
+    create_layer,
+    found_in,
+    from_wkb,
+    write_errors,
+    write_rows,
+)
 from .inputs import (
-    BATCH,
     Skipped,
     geometries,
     invalid_reason,
@@ -46,21 +51,14 @@ from .inputs import (
     require_readable,
     stem,
     straight,
-    write,
 )
-from .invalid import FIELDS, Invalid, Rejected, parse_failure
-from .layers import Dataset, Input, default_tolerance, geographic, wkb_kind
-from .progress import Checked, Found, Stage, checked, log_rule, staged
+from .invalid import Invalid, Rejected, parse_failure
+from .layers import Dataset, Input, default_tolerance, geographic
+from .progress import Found, Stage, staged
 
 if t.TYPE_CHECKING:
     import topology_checker as tc
 
-# The geometry of each layer that the executable writes
-MULTI = {
-    'point': Qgis.WkbType.MultiPoint,
-    'line': Qgis.WkbType.MultiLineString,
-    'polygon': Qgis.WkbType.MultiPolygon,
-}
 # The layer that each utility writes
 UTILITY_LAYERS = {
     'merge-lines': 'merged_line',
@@ -68,14 +66,6 @@ UTILITY_LAYERS = {
 }
 # What the executable says when a tolerance is in degrees
 ANGULAR = 'tolerance is in angular units; calculations are planar'
-# The id of "Undefined geographic SRS", which the executable gives a layer
-# without a CRS
-NO_CRS = 'SRID=0'
-# The columns of an error as the executable writes them: texts of any
-# length and 64-bit integers
-COLUMNS = FIELDS.replace(':string', ':string(0)').replace(':integer', ':long')
-# The families of the error layers, in the order the panel reads them
-FAMILIES = tuple(name.removeprefix('errors_') for name in ERROR_LAYERS)
 # How often a run that waits for a rule looks whether it was canceled
 POLL_SECONDS = 0.1
 
@@ -356,7 +346,6 @@ def run_once(
     feedback.setProgress(100)
     return Outcome(
         errors.counts,
-        {},
         layers,
         [
             Invalid(entry.name, skipped.fid, skipped.geometry, skipped.reason)
@@ -400,33 +389,6 @@ def add_rule(
                 found=spec.resolved_rule.value, rule=job.rule.name
             )
         )
-
-
-@dataclasses.dataclass
-class Errors:
-    """The errors of a run, as the rows of the layer of each family of
-    geometry, and what the package said about the data."""
-
-    rows: dict[str, list[tuple[QgsGeometry, list[object]]]]
-    counts: list[int]
-    warnings: list[str]
-
-
-def from_wkb(wkb: bytes) -> QgsGeometry:
-    geometry = QgsGeometry()
-    geometry.fromWkb(wkb)
-    return geometry
-
-
-def members(geometry: QgsGeometry) -> c.Iterator[QgsGeometry]:
-    """The geometry, or each member of a collection, which the executable
-    writes to the layer of its family."""
-    collection = Qgis.WkbType.GeometryCollection
-    if QgsWkbTypes.flatType(geometry.wkbType()) == collection:
-        for part in geometry.asGeometryCollection():
-            yield from members(part)
-    else:
-        yield geometry
 
 
 class Canceled(Exception):
@@ -495,7 +457,9 @@ class Reports:
             return
         # Stopped first: the rule that is checked stops at once, and the run
         # ends without waiting for the package, which can take seconds to
-        # stop a large rule
+        # stop a large rule. A daemon thread that is still in the package
+        # when Python exits is ended inside native code; this goes once the
+        # package stops any rule within a fraction of a second
         closing = threading.Thread(
             target=self.close, name='topology-reports-close'
         )
@@ -522,17 +486,15 @@ def validate(
     """Runs the rules, telling the feedback of each as soon as it is done.
 
     A canceled run stops at once, with the errors of the rules that are
-    done. When none is, it raises.
+    done and the warnings known by then. When no rule is done, it raises.
     """
     import topology_checker as tc
 
     names = {entry.layer: entry.name for entry in registered}
-    rows: dict[str, list[tuple[QgsGeometry, list[object]]]] = {}
-    counts: list[int] = []
+    gathered = Gathered(jobs, layers, feedback)
     if feedback.isCanceled():
         raise RunError(tr('Canceled'))
-    total = len(jobs)
-    staged(feedback, Stage.CHECKING, 0, total)
+    staged(feedback, Stage.CHECKING, 0, len(jobs))
     index = 0
     try:
         with Reports(topology) as stream:
@@ -543,41 +505,23 @@ def validate(
                         raise Canceled
                     values = attributes(index, violation, names)
                     index += 1
-                    for member in members(from_wkb(violation.wkb)):
-                        family = wkb_kind(member.wkbType())
-                        member.convertToMultiType()
-                        found.append(Found(family, member, values))
-                for item in found:
-                    rows.setdefault(item.family, []).append(
-                        (item.geometry, t.cast('list[object]', item.values))
-                    )
-                count = report.error_count
-                counts.append(count)
-                log_rule(feedback, jobs, len(counts) - 1, count)
-                # The errors in the order the panel reads them from the
-                # layers: by family, then as they were found
-                ordered = sorted(found, key=lambda f: FAMILIES.index(f.family))
-                checked(
-                    feedback,
-                    Checked(
-                        len(counts) - 1, total, count, tuple(ordered), layers
-                    ),
-                )
+                    found += found_in(from_wkb(violation.wkb), values)
+                gathered.add(found, report.error_count)
             summary = not_none(stream.summary)
     except Canceled:
-        if not counts:
+        if not gathered.counts:
             raise RunError(tr('Canceled')) from None
-        return Errors(rows, counts, [])
+        return gathered.errors(topology.warnings())
     except (ValueError, tc.PrecisionError) as error:
         raise RunError(str(error)) from error
-    return Errors(rows, counts, list(summary.warnings))
+    return gathered.errors(summary.warnings)
 
 
 def attributes(
     index: int,
     violation: tc.Violation,
     names: t.Mapping[tc.LayerId, str],
-) -> list[object]:
+) -> tuple[object, ...]:
     """The columns of an error, in the order of FIELDS."""
     values: list[object] = [
         index,
@@ -590,84 +534,7 @@ def attributes(
             if feature is None
             else [names[feature.layer], feature.fid, feature.part]
         )
-    return values
-
-
-def create_layer(
-    path: str,
-    name: str,
-    fields: QgsFields,
-    kind: Qgis.WkbType,
-    crs: QgsCoordinateReferenceSystem,
-    first: bool,
-    context: QgsProcessingContext,
-) -> QgsVectorFileWriter:
-    """A new layer of the GeoPackage at the path, which the first one
-    creates."""
-    options = QgsVectorFileWriter.SaveVectorOptions()
-    options.driverName = 'GPKG'
-    options.fileEncoding = 'UTF-8'
-    options.layerName = name
-    options.actionOnExistingFile = (
-        QgsVectorFileWriter.ActionOnExistingFile.CreateOrOverwriteFile
-        if first
-        else QgsVectorFileWriter.ActionOnExistingFile.CreateOrOverwriteLayer
-    )
-    if not crs.isValid():
-        options.layerOptions = [NO_CRS]
-    writer = QgsVectorFileWriter.create(
-        path, fields, kind, crs, context.transformContext(), options
-    )
-    if writer is None or (
-        writer.hasError() != QgsVectorFileWriter.WriterError.NoError
-    ):
-        message = '' if writer is None else writer.errorMessage()
-        raise RunError(
-            tr('Could not write {layer} to {path}: {error}').format(
-                layer=name, path=path, error=message
-            )
-        )
-    return writer
-
-
-def write_rows(
-    writer: QgsVectorFileWriter,
-    rows: c.Iterable[tuple[QgsGeometry, list[object]]],
-    fields: QgsFields,
-    name: str,
-) -> None:
-    """Writes the geometries, as multi geometries, with their columns."""
-    batch: list[QgsFeature] = []
-    for geometry, values in rows:
-        geometry.convertToMultiType()
-        feature = QgsFeature(fields)
-        feature.setGeometry(geometry)
-        feature.setAttributes(values)
-        batch.append(feature)
-        if len(batch) == BATCH:
-            write(writer, batch, name)
-    write(writer, batch, name)
-
-
-def write_errors(
-    path: str,
-    errors: Errors,
-    crs: QgsCoordinateReferenceSystem,
-    context: QgsProcessingContext,
-) -> None:
-    """Writes the errors to the layers `errors_line`, `errors_point` and
-    `errors_polygon` of the GeoPackage, those that have any."""
-    columns = QgsVectorLayer(f'None?field={COLUMNS}', 'errors', 'memory')
-    fields = columns.fields()
-    for index, family in enumerate(sorted(errors.rows)):
-        name = f'errors_{family}'
-        writer = create_layer(
-            path, name, fields, MULTI[family], crs, index == 0, context
-        )
-        try:
-            write_rows(writer, errors.rows[family], fields, name)
-        finally:
-            del writer
+    return tuple(values)
 
 
 def run_utility(

@@ -169,7 +169,7 @@ def found_rows(done: Checked, names: c.Mapping[str, str]) -> list[Row]:
     error layers later, with the names of the layers of the project by their
     ids, and the geometry of each error, as there is no layer yet."""
     rows: list[Row] = []
-    for found in done.errors or ():
+    for found in done.errors:
         _, rule, error, origin, fid, _, other, other_fid, _ = (
             value_text(value) for value in found.values
         )

@@ -1,15 +1,20 @@
-"""The executable with --progress: what it says is read as it says it, from
+"""The executable with --stream: what it says is read as it says it, from
 both pipes at once, whatever bytes and line ends it uses, and a canceled
-run ends it at once. A tool that does not know the flag runs as before, and
-is asked again once it is replaced."""
+run ends it at once. The report of each rule is read as soon as the tool
+says it; what is not of the report, or is cut off, is left out. A tool that
+does not know the flag says its report at the end, and is asked again once
+it is replaced."""
 
 from __future__ import annotations
 
 import contextlib
+import errno
+import json
 import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 import typing as t
 from pathlib import Path
@@ -18,14 +23,19 @@ import pytest
 from qgis.core import QgsProcessingFeedback
 
 from topology_rules.core import commands, runner
-from topology_rules.core.progress import Stage
+from topology_rules.core.checks import Job
 from topology_rules.exceptions import RunError
+from topology_rules.utils import not_none
 
 from .helpers import process_alive, wait_for, write_tool
 from .live import (
-    forwarding_executable,
+    Recorder,
+    Told,
+    expected_stages,
+    found_rows,
     let_all_lines,
     let_end,
+    let_lines,
     refusing_executable,
     replaying_executable,
     run_told,
@@ -36,8 +46,8 @@ not_on_windows = pytest.mark.skipif(
     sys.platform == 'win32', reason='a test of the sessions of POSIX'
 )
 
-# The start of each tool here: it says bytes on its error output, and
-# waits for the files that the test makes
+# The start of each tool here: it says bytes on either pipe, and waits for
+# the files that the test makes
 PRELUDE = """#!/usr/bin/env python3
 import os
 import subprocess
@@ -45,9 +55,9 @@ import sys
 import time
 
 
-def say(data):
-    sys.stderr.buffer.write(data)
-    sys.stderr.buffer.flush()
+def say(data, stream=sys.stderr):
+    stream.buffer.write(data)
+    stream.buffer.flush()
 
 
 def wait(path):
@@ -78,25 +88,29 @@ def numbers(path: Path) -> list[int]:
 
 @pytest.fixture(autouse=True)
 def asked_afresh(monkeypatch: pytest.MonkeyPatch) -> None:
-    """No tool is known to refuse --progress before the test."""
-    monkeypatch.setattr(commands, 'WITHOUT_PROGRESS', set())
+    """No tool is known to refuse --stream before the test."""
+    monkeypatch.setattr(commands, 'WITHOUT_STREAM', set())
 
 
 # Reading what the tool says
 
 
-def test_each_line_is_read_as_soon_as_the_tool_says_it(tmp_path: Path):
+@pytest.mark.parametrize('pipe', ['stdout', 'stderr'])
+def test_each_line_is_read_as_soon_as_the_tool_says_it(
+    tmp_path: Path, pipe: str
+):
     """The tool says its next line only once the test has read the last:
     a run that read the lines at the end would wait for ever."""
+    other = 'stderr' if pipe == 'stdout' else 'stdout'
     gates = tmp_path / 'gates'
     gates.mkdir()
     command = tool(
         tmp_path / 'tool',
         f"""
 for number in range(3):
-    say(f'line {{number}}\\n'.encode())
+    say(f'line {{number}}\\n'.encode(), sys.{pipe})
     wait(os.path.join({str(gates)!r}, str(number)))
-print('out')
+say(b'other\\n', sys.{other})
 """,
     )
     seen: list[str] = []
@@ -106,11 +120,12 @@ print('out')
         (gates / str(len(seen) - 1)).touch()
         return True
 
-    completed = runner.run([command], QgsProcessingFeedback(), lines=take)
+    taker = {'out': take} if pipe == 'stdout' else {'lines': take}
+    completed = runner.run([command], QgsProcessingFeedback(), **taker)
     assert completed.exit_code == 0
     assert seen == ['line 0', 'line 1', 'line 2']
-    assert completed.stdout == 'out\n'
-    assert completed.stderr == ''
+    assert getattr(completed, other) == 'other\n'
+    assert getattr(completed, pipe) == ''
 
 
 def test_both_pipes_are_read_while_the_tool_fills_them(tmp_path: Path):
@@ -119,12 +134,13 @@ def test_both_pipes_are_read_while_the_tool_fills_them(tmp_path: Path):
         tmp_path / 'tool',
         """
 for number in range(2000):
-    sys.stdout.write('o' * 1000 + '\\n')
+    sys.stdout.write(f'o{number:04d}' + 'o' * 1000 + '\\n')
     say(f'e{number}\\n'.encode())
 sys.stdout.flush()
 """,
     )
     taken: list[str] = []
+    out: list[str] = []
 
     def take(line: str) -> bool:
         if int(line[1:]) % 2 == 0:
@@ -132,67 +148,119 @@ sys.stdout.flush()
             return True
         return False
 
+    def take_out(line: str) -> bool:
+        if int(line[1:5]) % 2 == 1:
+            out.append(line)
+            return True
+        return False
+
     # A run that read one pipe only would stop here
-    completed = runner.run([command], timeout=60, lines=take)
+    completed = runner.run([command], timeout=60, lines=take, out=take_out)
     assert completed.exit_code == 0
-    assert completed.stdout == ('o' * 1000 + '\n') * 2000
+    assert out == [f'o{n:04d}' + 'o' * 1000 for n in range(1, 2000, 2)]
+    assert completed.stdout == ''.join(
+        f'o{n:04d}' + 'o' * 1000 + '\n' for n in range(0, 2000, 2)
+    )
     assert taken == [f'e{n}' for n in range(0, 2000, 2)]
     assert completed.stderr == ''.join(f'e{n}\n' for n in range(1, 2000, 2))
 
 
-def test_progress_is_read_whatever_else_the_tool_says(tmp_path: Path):
+def test_the_report_is_read_whatever_else_the_tool_says(tmp_path: Path):
     """Windows line ends, bytes that are not UTF-8, a long line, a line in
-    two writes, a line of no rule and a last line with no end."""
+    two writes and a last line with no end."""
     command = tool(
         tmp_path / 'tool',
         """
-say(b'reading roads\\r\\n')
-say(b'checked rule 1/3 (line/must-not-have-dangles): 3 errors\\r\\n')
-say(b'caf\\xe9 \\xff\\xfe\\n')
-say(b'x' * 1000000 + b'\\n')
-say(b'checked rule ')
-say(b'2/3 (line/must-not-intersect): 1 error\\n')
-say(b'checked rule 0/0 (nothing): 1 error\\n')
-say(b'checked rule 3/3 (line/must-not-self-intersect): 0 errors')
+out = sys.stdout
+say(b'reading roads\\r\\n', out)
+say(b'{"rule": 1}\\r\\n', out)
+say(b'caf\\xe9 \\xff\\xfe\\n', out)
+say(b'"' + b'x' * 1000000 + b'"\\n', out)
+say(b'{"rule": ', out)
+say(b'2}\\n', out)
+say(b'not json\\n', out)
+say(b'{"rule": 3}', out)
 """,
     )
-    told: list[tuple[int, int, int]] = []
-    take = commands.follower(lambda *done: told.append(done))
-    completed = runner.run([command], QgsProcessingFeedback(), lines=take)
+    taken: list[object] = []
+
+    def take(line: str) -> bool:
+        try:
+            value = json.loads(line)
+        except ValueError:
+            return False
+        if not isinstance(value, dict):
+            return False
+        taken.append(value)
+        return True
+
+    completed = runner.run([command], QgsProcessingFeedback(), out=take)
     assert completed.exit_code == 0
-    assert told == [(0, 3, 3), (1, 3, 1), (2, 3, 0)]
-    assert completed.stderr == (
+    assert taken == [{'rule': 1}, {'rule': 2}, {'rule': 3}]
+    assert completed.stdout == (
         'reading roads\n'
         + b'caf\xe9 \xff\xfe\n'.decode('utf-8', 'replace')
+        + '"'
         + 'x' * 1000000
-        + '\n'
-        + 'checked rule 0/0 (nothing): 1 error\n'
+        + '"\n'
+        + 'not json\n'
     )
 
 
-@pytest.mark.parametrize(
-    ('line', 'found'),
-    [
-        ('checked rule 1/1 (line/must-not-have-dangles): 1 error', (0, 1, 1)),
-        ('checked rule 2/8 (polygon/must-not-overlap): 46 errors', (1, 8, 46)),
-        (
-            'checked rule 8/8 (point/must-be-covered-by-lines): 0 errors',
-            (7, 8, 0),
-        ),
-        ('  checked rule 3/4 (a (b)): 2 errors \r', (2, 4, 2)),
-        ('checked rule 0/4 (line/must-not-intersect): 1 error', None),
-        ('checked rule 5/4 (line/must-not-intersect): 1 error', None),
-        ('checked rule 1/4 (line/must-not-intersect): many errors', None),
-        ('checked rule 1/4 line/must-not-intersect: 1 error', None),
-        ('rule 1/4 (line/must-not-intersect): 1 error', None),
-        ('checked rule 1/4 (line/must-not-intersect): 1 error and more', None),
-        ('', None),
-    ],
-)
-def test_what_a_line_of_progress_says(
-    line: str, found: tuple[int, int, int] | None
+def test_a_reader_that_fails_ends_the_tool(tmp_path: Path):
+    """What raises while a line is read ends the tool and what it started,
+    which are reaped, and goes on up."""
+    pids = tmp_path / 'pids'
+    command = tool(
+        tmp_path / 'tool',
+        f"""
+child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(600)'])
+tell({str(pids)!r}, f'{{os.getpid()}} {{child.pid}}')
+say(b'first\\n', sys.stdout)
+time.sleep(600)
+""",
+    )
+
+    class Broken(Exception):
+        pass
+
+    def take(line: str) -> bool:
+        raise Broken(line)
+
+    with pytest.raises(Broken, match='first'):
+        runner.run([command], QgsProcessingFeedback(), out=take)
+    started, child = numbers(pids)
+    # A process that is not reaped is still there
+    wait_for(lambda: not process_alive(started), 30)
+    wait_for(lambda: not process_alive(child), 30)
+
+
+@not_on_windows
+@pytest.mark.parametrize('error', [PermissionError, ProcessLookupError])
+def test_a_group_that_is_gone_is_not_an_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, error: type[OSError]
 ):
-    assert commands.progress_of(line) == found
+    """macOS tells of a group whose processes ended, and are not reaped
+    yet, as a lack of permission."""
+    process = subprocess.Popen(
+        [tool(tmp_path / 'tool', '')],
+        stdout=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    # Its output ends as it ends, and it waits to be reaped
+    assert not_none(process.stdout).read() == ''
+    runner.kill(process)
+    sent: list[int] = []
+
+    def killpg(group: int, number: int) -> None:
+        sent.append(group)
+        raise error(errno.EPERM, 'gone')
+
+    monkeypatch.setattr(os, 'killpg', killpg)
+    runner.stop(process)
+    assert sent == [process.pid]
+    assert process.returncode == 0
 
 
 # Canceling
@@ -205,7 +273,7 @@ def test_canceling_ends_the_tool_and_what_it_started_at_once(tmp_path: Path):
         f"""
 child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(600)'])
 tell({str(pids)!r}, f'{{os.getpid()}} {{child.pid}}')
-say(b'ready\\n')
+say(b'ready\\n', sys.stdout)
 time.sleep(600)
 """,
     )
@@ -219,7 +287,7 @@ time.sleep(600)
         return True
 
     with pytest.raises(RunError, match='Canceled'):
-        runner.run([command], feedback, lines=take)
+        runner.run([command], feedback, out=take)
     # Without waiting for the readers, which see the end of the pipes
     assert time.monotonic() - canceled[0] < runner.STOP_SECONDS
     started, child = numbers(pids)
@@ -243,7 +311,7 @@ child = subprocess.Popen(
     start_new_session=True,
 )
 tell({str(pids)!r}, f'{{os.getpid()}} {{child.pid}}')
-say(b'ready\\n')
+say(b'ready\\n', sys.stdout)
 time.sleep(600)
 """,
     )
@@ -258,7 +326,7 @@ time.sleep(600)
 
     try:
         with pytest.raises(RunError, match='Canceled'):
-            runner.run([command], feedback, lines=take)
+            runner.run([command], feedback, out=take)
         assert time.monotonic() - canceled[0] < 3.0
         started, child = numbers(pids)
         wait_for(lambda: not process_alive(started), 30)
@@ -271,14 +339,186 @@ time.sleep(600)
 
 def test_a_tool_that_ends_alone_is_not_held_up_by_its_lines(tmp_path: Path):
     """A tool that says nothing more and ends: the run ends with it."""
-    command = tool(tmp_path / 'tool', "say(b'only line\\n')\nsys.exit(4)\n")
-    completed = runner.run(
-        [command], QgsProcessingFeedback(), lines=lambda line: False
+    command = tool(
+        tmp_path / 'tool',
+        "say(b'only line\\n')\nsay(b'out\\n', sys.stdout)\nsys.exit(4)\n",
     )
-    assert completed == runner.Completed(4, '', 'only line\n')
+    completed = runner.run(
+        [command],
+        QgsProcessingFeedback(),
+        lines=lambda line: False,
+        out=lambda line: False,
+    )
+    assert completed == runner.Completed(4, 'out\n', 'only line\n')
 
 
-# A tool from before --progress
+# The report as the tool says it
+
+
+def replaying(tmp_path: Path, **how: t.Any) -> tuple[str, Path]:
+    """A replaying tool, and the folder of its gates."""
+    folder = tmp_path / 'tool'
+    folder.mkdir()
+    gates = tmp_path / 'gates'
+    path = replaying_executable(folder, gates, tmp_path / 'started', **how)
+    return str(path), gates
+
+
+class Running:
+    """A run in a thread of its own, as in a task."""
+
+    def __init__(self, tool: str, jobs: list[Job], folder: Path) -> None:
+        self.recorder = Recorder()
+        self.result: list[Told | BaseException] = []
+        self.thread = threading.Thread(
+            target=self.run, args=(tool, jobs, folder), daemon=True
+        )
+        self.thread.start()
+
+    def run(self, tool: str, jobs: list[Job], folder: Path) -> None:
+        try:
+            self.result.append(
+                run_told(tool, jobs, folder, feedback=self.recorder)
+            )
+        except BaseException as error:
+            self.result.append(error)
+
+    def told(self) -> Told:
+        self.thread.join(120)
+        (result,) = self.result
+        if isinstance(result, BaseException):
+            raise result
+        return result
+
+
+def test_each_rule_is_read_as_soon_as_the_tool_says_it(
+    executable: str, tmp_path: Path
+):
+    """The tool says the report of the next rule only once the test lets
+    it, which it does once the run told of the last."""
+    path, gates = replaying(tmp_path)
+    jobs = jobs_of(path, lines())
+    reference = run_told(executable, jobs, tmp_path / 'reference')
+    stages = expected_stages(len(jobs))
+    running = Running(path, jobs, tmp_path / 'run')
+    recorder = running.recorder
+    try:
+        for done in range(1, len(jobs) + 1):
+            let_lines(gates, done)
+            wait_for(lambda done=done: len(recorder.checks()) == done)
+            # It says which rule is next, or that it writes the errors
+            assert recorder.stages()[-1] == stages[done + 1]
+            # The next rule is not told before it is let through
+            assert len(recorder.checks()) == done
+    finally:
+        let_all_lines(gates)
+        let_end(gates)
+    ran = running.told()
+    assert ran.outcome.counts == reference.outcome.counts
+    assert file_rows(ran.output) == file_rows(reference.output)
+    assert found_rows(recorder.checks()) == file_rows(reference.output)
+    assert recorder.stages() == expected_stages(len(jobs))
+
+
+def test_lines_that_are_not_of_the_report_are_left_out(
+    executable: str, tmp_path: Path
+):
+    """What the tool says on its error output is in the log; lines of its
+    output that are not of the report, or of no rule of the run, are left
+    out, and the rules are told as from a quiet tool."""
+    noisy, gates = replaying(tmp_path, noise=True)
+    let_all_lines(gates)
+    let_end(gates)
+    jobs = jobs_of(noisy, lines())
+    told = run_told(noisy, jobs, tmp_path / 'run')
+    reference = run_told(executable, jobs, tmp_path / 'reference')
+    assert told.outcome.counts == reference.outcome.counts
+    assert [d.count for d in told.feedback.checks()] == (
+        reference.outcome.counts
+    )
+    assert file_rows(told.output) == file_rows(reference.output)
+    assert found_rows(told.feedback.checks()) == file_rows(reference.output)
+    assert told.feedback.stages() == expected_stages(len(jobs))
+    log = told.feedback.textLog()
+    assert 'reading roads' in log
+    assert b'caf\xe9 \xff\xfe not utf-8'.decode('utf-8', 'replace') in log
+    assert 'x' * 100000 in log
+    assert '[' * 1000 not in log
+    assert '9' * 4000 not in log
+    assert 'line/no-such-rule' not in log
+
+
+@not_on_windows
+@pytest.mark.parametrize('done', [0, 1, 2])
+def test_a_tool_killed_halfway_through_a_line_fails(
+    executable: str, tmp_path: Path, done: int
+):
+    """The rules before it are told; the line that is cut off is not."""
+    path, gates = replaying(tmp_path, killed_after=done)
+    let_all_lines(gates)
+    jobs = jobs_of(path, lines())
+    reference = run_told(executable, jobs, tmp_path / 'reference')
+    recorder = Recorder()
+    with pytest.raises(RunError, match=f'Exited with code {-signal.SIGKILL}'):
+        run_told(path, jobs, tmp_path / 'run', feedback=recorder)
+    counts = [d.count for d in recorder.checks()]
+    assert counts == reference.outcome.counts[:done]
+    assert not (tmp_path / 'run' / 'errors.gpkg').exists()
+
+
+def test_a_tool_that_crashes_fails_with_what_it_said(
+    executable: str, tmp_path: Path
+):
+    path, gates = replaying(tmp_path, crash_after=1)
+    let_all_lines(gates)
+    jobs = jobs_of(path, lines())
+    recorder = Recorder()
+    with pytest.raises(RunError, match='the tool broke'):
+        run_told(path, jobs, tmp_path / 'run', feedback=recorder)
+    assert len(recorder.checks()) == 1
+
+
+@pytest.mark.parametrize('done', [0, 1, 2, 3])
+def test_a_canceled_run_keeps_the_rules_that_are_done(
+    executable: str, tmp_path: Path, done: int
+):
+    """The tool is ended at once, and the run ends with the errors of the
+    rules that it told of, as a whole run has them; with none it fails. A
+    run canceled once the tool said all rules is whole."""
+    path, gates = replaying(tmp_path)
+    jobs = jobs_of(path, lines())
+    reference = run_told(executable, jobs, tmp_path / 'reference')
+    whole = file_rows(reference.output)
+    running = Running(path, jobs, tmp_path / 'run')
+    started = tmp_path / 'started'
+    try:
+        let_lines(gates, done)
+        wait_for(started.exists)
+        wait_for(lambda: len(running.recorder.checks()) == done)
+        running.recorder.cancel()
+        if done == 0:
+            with pytest.raises(RunError, match='Canceled'):
+                running.told()
+            return
+        told = running.told()
+    finally:
+        pid = int(started.read_text()) if started.exists() else None
+        let_all_lines(gates)
+        let_end(gates)
+    assert pid is not None
+    wait_for(lambda: not process_alive(pid), 30)
+    found = sum(reference.outcome.counts[:done])
+    assert told.outcome.counts == reference.outcome.counts[:done]
+    assert told.outcome.layers == reference.outcome.layers
+    assert file_rows(told.output) == {
+        family: kept
+        for family, rows in whole.items()
+        if (kept := [row for row in rows if t.cast(int, row[1]) < found])
+    }
+    assert found_rows(running.recorder.checks()) == file_rows(told.output)
+
+
+# A tool from before --stream
 
 
 def validate_lines(log: Path) -> list[list[str]]:
@@ -289,7 +529,7 @@ def validate_lines(log: Path) -> list[list[str]]:
     ]
 
 
-def test_a_tool_without_progress_runs_as_before(
+def test_a_tool_without_stream_tells_the_rules_at_the_end(
     executable: str, tmp_path: Path
 ):
     log = tmp_path / 'commands'
@@ -302,67 +542,50 @@ def test_a_tool_without_progress_runs_as_before(
     assert file_rows(told.output) == file_rows(reference.output)
     # Asked once with the flag, which it refused, then without
     asked = validate_lines(log)
-    assert ['--progress' in command for command in asked] == [True, False]
-    # It tells no rule, and which rule it checks is never known
-    assert told.feedback.checks() == []
-    assert [
-        stage for stage in told.feedback.stages() if stage[0] is Stage.CHECKING
-    ] == [(Stage.CHECKING, None, len(jobs))]
+    assert ['--stream' in command for command in asked] == [True, False]
+    # It writes no file of its own: the report has the errors
+    assert all('-o' not in command for command in asked)
+    # The rules are told once it is done, with their errors
+    assert [d.index for d in told.feedback.checks()] == list(range(len(jobs)))
+    assert found_rows(told.feedback.checks()) == file_rows(told.output)
+    assert told.feedback.stages() == expected_stages(
+        len(jobs), streams=False, refused=True
+    )
     # The next run does not ask with the flag again
-    run_told(old, jobs, tmp_path / 'again')
-    assert ['--progress' in command for command in validate_lines(log)] == [
+    again = run_told(old, jobs, tmp_path / 'again')
+    assert ['--stream' in command for command in validate_lines(log)] == [
         True,
         False,
         False,
     ]
+    assert again.feedback.stages() == expected_stages(len(jobs), streams=False)
+    assert file_rows(again.output) == file_rows(reference.output)
 
 
 def test_a_tool_that_is_replaced_at_its_path_is_asked_again(
     executable: str, tmp_path: Path
 ):
-    log = tmp_path / 'commands'
     folder = tmp_path / 'tool'
     folder.mkdir()
-    path = refusing_executable(folder, log=log)
+    path = refusing_executable(folder)
     jobs = jobs_of(str(path), lines())
     run_told(str(path), jobs, tmp_path / 'old')
-    assert len(commands.WITHOUT_PROGRESS) == 1
+    assert len(commands.WITHOUT_STREAM) == 1
     # A newer tool at the same path, which knows the flag
     changed = os.stat(path).st_mtime_ns
-    replaced = forwarding_executable(folder, log)
+    gates = tmp_path / 'gates'
+    replaced = replaying_executable(folder, gates, tmp_path / 'started')
     assert replaced == path
     later = changed + 10**9
     os.utime(path, ns=(later, later))
+    let_all_lines(gates)
+    let_end(gates)
     told = run_told(str(path), jobs, tmp_path / 'new')
-    assert '--progress' in validate_lines(log)[-1]
+    assert (tmp_path / 'started').exists()
+    assert told.feedback.stages() == expected_stages(len(jobs))
     assert [done.index for done in told.feedback.checks()] == list(
         range(len(jobs))
     )
-
-
-def test_lines_of_no_rule_go_to_the_log(executable: str, tmp_path: Path):
-    """What the tool says besides its progress is in the log of the run,
-    and the rules are told as from a quiet tool."""
-    gates = tmp_path / 'gates'
-    folder = tmp_path / 'tool'
-    folder.mkdir()
-    noisy = str(
-        replaying_executable(folder, gates, tmp_path / 'started', noise=True)
-    )
-    let_all_lines(gates)
-    let_end(gates)
-    jobs = jobs_of(noisy, lines())
-    told = run_told(noisy, jobs, tmp_path / 'run')
-    reference = run_told(executable, jobs, tmp_path / 'reference')
-    assert [d.count for d in told.feedback.checks()] == (
-        reference.outcome.counts
-    )
-    assert file_rows(told.output) == file_rows(reference.output)
-    log = told.feedback.textLog()
-    assert 'reading roads' in log
-    assert b'caf\xe9 \xff\xfe'.decode('utf-8', 'replace') in log
-    assert 'x' * 100000 in log
-    assert 'checked rule 0/0 (nothing): 1 error' in log
 
 
 # Windows, with a patched platform and a process that is not started
@@ -372,25 +595,18 @@ CREATE_NO_WINDOW = 0x08000000
 CREATE_NEW_PROCESS_GROUP = 0x00000200
 
 
-class Output:
-    def __init__(self, text: str = '') -> None:
-        self.text = text
-        self.closed = False
+class Lines:
+    """A pipe that has its lines at once."""
 
-    def read(self) -> str:
-        return self.text
-
-    def close(self) -> None:
-        self.closed = True
-
-
-class ErrorLines:
     def __init__(self, lines: list[str]) -> None:
         self.lines = lines
         self.closed = False
 
     def __iter__(self) -> t.Iterator[str]:
         return iter(self.lines)
+
+    def read(self) -> str:
+        return ''.join(self.lines)
 
     def close(self) -> None:
         self.closed = True
@@ -402,7 +618,7 @@ class FollowedProcess:
 
     def __init__(
         self,
-        stdout: str = '',
+        stdout: list[str] | None = None,
         stderr: list[str] | None = None,
         ends: bool = True,
     ) -> None:
@@ -410,8 +626,8 @@ class FollowedProcess:
         self.returncode: int | None = None
         self.ends = ends
         self.killed = False
-        self.stdout = Output(stdout)
-        self.stderr = ErrorLines(stderr or [])
+        self.stdout = Lines(stdout or [])
+        self.stderr = Lines(stderr or [])
 
     def poll(self) -> int | None:
         if self.killed:
@@ -464,23 +680,25 @@ def started_as(
     return calls
 
 
-def test_progress_is_read_on_windows(
+def test_the_report_is_read_on_windows(
     windows: list[list[str]], monkeypatch: pytest.MonkeyPatch
 ):
     process = FollowedProcess(
-        '{}',
-        [
-            'checked rule 1/2 (line/must-not-have-dangles): 3 errors\r\n',
-            'something else\r\n',
-            'checked rule 2/2 (line/must-not-intersect): 1 error\r\n',
-        ],
+        ['{"rule": 1}\r\n', 'something else\r\n', '{"rule": 2}\r\n'],
+        ['reading\r\n'],
     )
     calls = started_as(monkeypatch, process)
-    told: list[tuple[int, int, int]] = []
-    take = commands.follower(lambda *done: told.append(done))
-    completed = runner.run(['tc.exe'], QgsProcessingFeedback(), lines=take)
-    assert told == [(0, 2, 3), (1, 2, 1)]
-    assert completed == runner.Completed(0, '{}', 'something else\r\n')
+    told: list[str] = []
+
+    def take(line: str) -> bool:
+        if line.startswith('{'):
+            told.append(line)
+            return True
+        return False
+
+    completed = runner.run(['tc.exe'], QgsProcessingFeedback(), out=take)
+    assert told == ['{"rule": 1}', '{"rule": 2}']
+    assert completed == runner.Completed(0, 'something else\r\n', 'reading\r\n')
     (call,) = calls
     assert call['creationflags'] == CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
     assert call['start_new_session'] is False
@@ -500,6 +718,6 @@ def test_canceling_on_windows_ends_the_tree_of_the_followed_tool(
     feedback = QgsProcessingFeedback()
     feedback.cancel()
     with pytest.raises(RunError, match='Canceled'):
-        runner.run(['tc.exe'], feedback, lines=lambda line: True)
+        runner.run(['tc.exe'], feedback, out=lambda line: True)
     assert windows == [['taskkill', '/T', '/F', '/PID', '4242']]
     assert process.killed

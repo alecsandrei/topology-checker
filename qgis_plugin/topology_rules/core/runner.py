@@ -42,12 +42,14 @@ def run(
     feedback: QgsProcessingFeedback | None = None,
     timeout: float | None = None,
     lines: Lines | None = None,
+    out: Lines | None = None,
 ) -> Completed:
     """Runs the command without a shell, stopping it if the feedback cancels
     or the timeout in seconds passes.
 
     The lines, if given, get each line of the error output as soon as the
-    tool says it; those they take are not in the output that is returned.
+    tool says it, and `out` each line of the output; those they take are not
+    in what is returned.
     """
     flags = 0
     if sys.platform == 'win32':
@@ -90,8 +92,8 @@ def run(
                 )
             ) from None
 
-    if lines is not None:
-        return follow(process, lines, check)
+    if lines is not None or out is not None:
+        return follow(process, (out, lines), check)
     while True:
         try:
             stdout, stderr = process.communicate(timeout=POLL_SECONDS)
@@ -103,80 +105,99 @@ def run(
 
 def follow(
     process: subprocess.Popen[str],
-    lines: Lines,
+    takers: tuple[Lines | None, Lines | None],
     check: c.Callable[[c.Callable[[], None]], None],
 ) -> Completed:
-    """Waits for the process, giving the lines each line of its error output
-    as it comes. A thread reads each pipe, so that neither fills up while
-    the other is read."""
-    found: queue.Queue[str | None] = queue.Queue()
-    out: list[str] = []
+    """Waits for the process, giving the takers each line of its output and
+    of its error output as it comes. A thread reads each pipe, so that
+    neither fills up while the other is read.
 
-    def read_out() -> None:
+    However the wait ends, what is left of the process is stopped and
+    reaped.
+    """
+    pipes = (not_none(process.stdout), not_none(process.stderr))
+    found: queue.Queue[tuple[int, str | None]] = queue.Queue()
+
+    def read(source: int) -> None:
         try:
-            out.append(not_none(process.stdout).read())
+            for line in pipes[source]:
+                found.put((source, line))
         except (OSError, ValueError):
             pass
         finally:
-            found.put(None)
-
-    def read_err() -> None:
-        try:
-            for line in not_none(process.stderr):
-                found.put(line)
-        except (OSError, ValueError):
-            pass
-        finally:
-            found.put(None)
+            found.put((source, None))
 
     readers = [
-        threading.Thread(target=read, name='topology-checker-pipe')
-        for read in (read_out, read_err)
+        threading.Thread(
+            target=read,
+            args=(source,),
+            name='topology-checker-pipe',
+            daemon=True,
+        )
+        for source in range(len(pipes))
     ]
     for reader in readers:
-        reader.daemon = True
         reader.start()
-    kept: list[str] = []
+    kept: tuple[list[str], list[str]] = ([], [])
     ends = 0
-    while ends < len(readers) or process.poll() is None:
-        try:
-            line = found.get(timeout=POLL_SECONDS)
-        except queue.Empty:
-            line = ''
-        if line is None:
-            ends += 1
-        elif line and not lines(line.rstrip('\r\n')):
-            kept.append(line)
-        check(lambda: stop_followed(process, readers))
-    for pipe in (process.stdout, process.stderr):
-        if pipe is not None:
-            with contextlib.suppress(OSError, ValueError):
-                pipe.close()
-    return Completed(process.returncode, ''.join(out), ''.join(kept))
+    stopped = False
+
+    def stopping() -> None:
+        nonlocal stopped
+        stopped = True
+        stop_followed(process, readers)
+
+    try:
+        while ends < len(readers) or process.poll() is None:
+            try:
+                source, line = found.get(timeout=POLL_SECONDS)
+            except queue.Empty:
+                source, line = 0, ''
+            if line is None:
+                ends += 1
+            elif line:
+                take = takers[source]
+                if take is None or not take(line.rstrip('\r\n')):
+                    kept[source].append(line)
+            check(stopping)
+    finally:
+        if not stopped and (
+            process.poll() is None or any(r.is_alive() for r in readers)
+        ):
+            stop_followed(process, readers)
+        for reader, pipe in zip(readers, pipes, strict=True):
+            # A pipe that is still read is held by what outlived the tree,
+            # and closing it would wait for the read
+            if not reader.is_alive():
+                with contextlib.suppress(OSError, ValueError):
+                    pipe.close()
+    return Completed(process.returncode, ''.join(kept[0]), ''.join(kept[1]))
 
 
 def execute(
     command: list[str],
     feedback: QgsProcessingFeedback,
     lines: Lines | None = None,
+    out: Lines | None = None,
 ) -> Completed:
     """Runs the command, showing it and what the tool says in the log. With
-    lines, what the tool says is shown as it comes, but for the lines that
-    they take."""
+    lines or out, what the tool says on its error output is shown as it
+    comes, but for the lines that they take, and `out` gets each line of
+    the output."""
     feedback.pushCommandInfo(' '.join(command))
-    if lines is None:
+    if lines is None and out is None:
         completed = run(command, feedback)
         for line in completed.stderr.splitlines():
             feedback.pushInfo(line)
         return completed
 
     def told(line: str) -> bool:
-        if lines(line):
+        if lines is not None and lines(line):
             return True
         feedback.pushInfo(line)
         return False
 
-    return run(command, feedback, lines=told)
+    return run(command, feedback, lines=told, out=out)
 
 
 def error_message(completed: Completed) -> str:
@@ -242,5 +263,7 @@ def kill(process: subprocess.Popen[str]) -> None:
         with contextlib.suppress(OSError):
             process.kill()
     else:
-        with contextlib.suppress(ProcessLookupError):
+        # A group whose last process has ended but is not reaped yet is not
+        # there to be killed, which macOS tells as a lack of permission
+        with contextlib.suppress(ProcessLookupError, PermissionError):
             os.killpg(process.pid, signal.SIGKILL)

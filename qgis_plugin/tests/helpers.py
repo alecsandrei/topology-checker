@@ -10,6 +10,7 @@ from __future__ import annotations
 import collections.abc as c
 import dataclasses
 import faulthandler
+import functools
 import json
 import os
 import re
@@ -303,6 +304,22 @@ REAL_PATH = str(Path(REAL).absolute()) if REAL else None
 def real_executable() -> str | None:
     """The tool named by TOPOLOGY_CHECKER, or the one on the PATH."""
     return REAL_PATH
+
+
+@functools.cache
+def real_streams() -> bool:
+    """Whether the real tool says the report of each rule as soon as the
+    rule is done, which a tool before 0.3 does not."""
+    if REAL_PATH is None:
+        return True
+    shown = subprocess.run(
+        [REAL_PATH, 'validate', '--help'],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    return '--stream' in shown.stdout
 
 
 # Set to 1 where the tests must run with the Python package, as in CI where

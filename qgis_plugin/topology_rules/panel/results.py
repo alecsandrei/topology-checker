@@ -192,11 +192,6 @@ class ResultsPanel(QWidget):
         self.crs = crs
         self.placeholder.setText(tr('No errors yet.'))
 
-    def waiting(self) -> None:
-        """The run tells which rules found errors, and the errors only when
-        it ends."""
-        self.placeholder.setText(tr('The errors show when the run ends.'))
-
     def end(self) -> None:
         self.placeholder.setText(idle_text())
 

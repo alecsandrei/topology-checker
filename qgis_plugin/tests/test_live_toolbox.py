@@ -26,7 +26,7 @@ from qgis.core import (
 from topology_rules.algorithms.check import COUNTS
 from topology_rules.algorithms.rule import COUNT
 from topology_rules.algorithms.sinks import SINKS
-from topology_rules.core import checks, engine, package
+from topology_rules.core import engine
 from topology_rules.core.binary import Rule
 from topology_rules.core.checks import Job
 from topology_rules.core.engine import Engine
@@ -56,8 +56,7 @@ from .live import (
     let_end,
     let_lines,
     replaying_executable,
-    run_validate_untold,
-    validate_untold,
+    untold,
 )
 from .test_engines_agree import BOWTIE, CHAIN, SHIFTED, SQUARE
 from .test_live_engines import file_rows
@@ -219,12 +218,6 @@ def run_with(
     return Ran(results, ok, context, feedback.textLog())
 
 
-def untold(patched: pytest.MonkeyPatch) -> None:
-    """The engines as they ran before they told of each rule."""
-    patched.setattr(package, 'validate', validate_untold)
-    patched.setattr(checks, 'run_validate', run_validate_untold)
-
-
 # The rules of the toolbox
 
 
@@ -327,9 +320,9 @@ def test_runs_at_the_same_time_keep_to_their_own_rules(tmp_path: Path):
 @dataclasses.dataclass
 class Holding:
     """The runs of the rules that the test lets go on rule by rule: with the
-    package each report waits at a gate, and the writing of the errors
-    waits; the executable waits before each line of progress, and before it
-    ends."""
+    package each report waits at a gate; the executable waits before the
+    line of each rule, and before it ends. The writing of the errors
+    waits."""
 
     engine: Engine
     gates: Gates
@@ -350,10 +343,10 @@ class Holding:
     def let_all(self) -> None:
         if self.package:
             self.gates[self.run].let_all()
-            self.writing.go.set()
         else:
             let_all_lines(self.folder)
             let_end(self.folder)
+        self.writing.go.set()
 
     def complete(self, name: str, parameters: dict[str, t.Any]) -> Ran:
         """Runs to the end, and holds the next run."""
@@ -470,9 +463,8 @@ def test_a_canceled_run_of_the_rules_returns_the_rules_that_are_done(
     holding: Holding, tmp_path: Path, done: int
 ):
     """The task fails, as a canceled task does, so that Processing loads
-    nothing. The package returns the errors of the rules that are done,
-    numbered as a whole run numbers them; the executable is stopped before
-    it writes any."""
+    nothing. It returns the errors of the rules that are done, numbered as a
+    whole run numbers them."""
     parameters, cases = four_rules(tmp_path)
     reference, counts, lines = reference_of(
         holding, parameters, cases, tmp_path
@@ -485,7 +477,7 @@ def test_a_canceled_run_of_the_rules_returns_the_rules_that_are_done(
     ran = started.ran()
     assert not ran.ok
     assert ruled(ran.log) == lines[:done]
-    if not holding.package or done == 0:
+    if done == 0:
         assert ran.results == {}
         return
     assert json.loads(ran.results[COUNTS]) == counts[:done]

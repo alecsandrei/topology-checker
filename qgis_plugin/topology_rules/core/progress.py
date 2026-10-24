@@ -34,19 +34,19 @@ class Found:
 
     family: str
     geometry: QgsGeometry
-    values: c.Sequence[object]
+    values: tuple[object, ...]
 
 
 @dataclasses.dataclass(frozen=True)
 class Checked:
-    """A rule that is done: its place in the run, how many errors it found
-    and, where the engine has them already, the errors. The layers tell
-    which layer of the project each name in the errors stands for."""
+    """A rule that is done: its place in the run, how many errors it found,
+    and the errors. The layers tell which layer of the project each name in
+    the errors stands for."""
 
     index: int
     total: int
     count: int
-    errors: tuple[Found, ...] | None = None
+    errors: tuple[Found, ...]
     layers: c.Mapping[str, str] = dataclasses.field(default_factory=dict)
 
 

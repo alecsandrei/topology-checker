@@ -1,6 +1,6 @@
 """What a run tells as it goes, with each engine: the stage it is at, and
-each rule as soon as it is done, with its errors where the engine has them.
-A run that tells all this writes the same errors as one that did not."""
+each rule as soon as it is done, with its errors. A run that tells all this
+writes the same errors as one that did not."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 from qgis.core import QgsGeometry, QgsProcessingFeedback
 
-from topology_rules.core import checks, commands, engine, package
+from topology_rules.core import engine
 from topology_rules.core.binary import Rule
 from topology_rules.core.checks import Job
 from topology_rules.core.engine import Package, Tool
@@ -21,7 +21,7 @@ from topology_rules.core.layers import Input
 from topology_rules.core.progress import Checked, Stage, counted, label
 from topology_rules.exceptions import RunError
 
-from .helpers import line_layer, point_layer, polygon_layer
+from .helpers import line_layer, point_layer, polygon_layer, real_streams
 from .live import (
     Recorder,
     expected_stages,
@@ -29,8 +29,7 @@ from .live import (
     found_rows,
     hold_reports,
     run_told,
-    run_validate_untold,
-    validate_untold,
+    untold,
 )
 from .test_engines_agree import (
     BOWTIE,
@@ -194,16 +193,25 @@ def last_attempt(recorder: Recorder) -> list[object]:
     return events[starts[-1] :]
 
 
-def told_in_order(recorder: Recorder, total: int, executable: bool) -> None:
+def streams(tool: Tool) -> bool:
+    """Whether the engine tells of each rule as soon as it is done."""
+    return isinstance(tool, Package) or real_streams()
+
+
+def told_in_order(
+    recorder: Recorder, total: int, streams: bool, refused: bool = False
+) -> None:
     """A run reads, then checks the rules one after the other, telling of
     each when it is done and which comes next, then writes the errors."""
     events = last_attempt(recorder)
-    stages = expected_stages(total, executable)
-    expected: list[object] = [stages[0], stages[1]]
+    stages = expected_stages(total, streams, refused)
+    # What the run says before the first rule is done
+    head = len(stages) - total
+    expected: list[object] = list(stages[:head])
     done = [e for e in events if isinstance(e, Checked)]
     assert [d.index for d in done] == list(range(total))
     for index in range(total):
-        expected += [done[index], stages[index + 2]]
+        expected += [done[index], stages[head + index]]
     assert events == expected
 
 
@@ -245,19 +253,14 @@ def test_each_rule_is_told_as_soon_as_it_is_done(
 ):
     jobs = jobs_of(tool, SHAPES[shape]())
     told = run_told(tool, jobs, tmp_path / 'run')
-    executable = not isinstance(tool, Package)
-    told_in_order(told.feedback, len(jobs), executable)
+    told_in_order(told.feedback, len(jobs), streams(tool))
     done = told.feedback.checks()[-len(jobs) :]
     assert [d.count for d in done] == told.outcome.counts
     assert {d.total for d in done} == {len(jobs)}
     for d in done:
         assert dict(d.layers) == told.outcome.layers
-    if executable:
-        # The errors are in the file once the tool is done with all rules
-        assert all(d.errors is None for d in done)
-    else:
-        assert all(d.errors is not None for d in done)
-        assert found_rows(done) == file_rows(told.output)
+    # The rows that the rules told of are those of the file, in its order
+    assert found_rows(done) == file_rows(told.output)
     # The log has a line for each rule, in the order of the rules
     assert rule_lines(told.feedback.textLog(), jobs) == [
         f'{label(job)}: {counted(count)}'
@@ -274,9 +277,9 @@ def test_the_errors_of_a_rule_are_in_the_order_of_their_layers(
     told = run_told(package, jobs, tmp_path / 'run')
     order = ['point', 'line', 'polygon']
     for done in told.feedback.checks():
-        kinds = [order.index(found.family) for found in done.errors or ()]
+        kinds = [order.index(found.family) for found in done.errors]
         assert kinds == sorted(kinds)
-        for found in done.errors or ():
+        for found in done.errors:
             assert QgsGeometry(found.geometry).isMultipart()
 
 
@@ -286,8 +289,8 @@ def test_a_rule_is_told_with_the_names_of_its_layers(
     jobs = jobs_of(package, two_layers())
     told = run_told(package, jobs, tmp_path / 'run')
     first = told.feedback.checks()[0]
-    names = {found.values[3] for found in first.errors or ()} | {
-        found.values[6] for found in first.errors or ()
+    names = {found.values[3] for found in first.errors} | {
+        found.values[6] for found in first.errors
     }
     assert names <= {'roads', 'rivers', None}
     assert set(first.layers) == {'roads', 'rivers', 'parcels', 'wells'}
@@ -303,8 +306,9 @@ def test_the_executable_is_asked_to_tell_of_each_rule(
     validate = [
         line for line in log.read_text().splitlines() if 'validate' in line
     ]
-    assert len(validate) == 1
-    assert '--progress' in validate[0].split()
+    # A tool that does not know the flag is asked again without it
+    assert len(validate) == (1 if real_streams() else 2)
+    assert '--stream' in validate[0].split()
     assert len(told.feedback.checks()) == len(jobs)
 
 
@@ -336,26 +340,18 @@ def test_a_told_run_writes_what_a_run_did_before(
     jobs = jobs_of(tool, SHAPES[shape]())
     told = run_told(tool, jobs, tmp_path / 'told')
     with monkeypatch.context() as patched:
-        patched.setattr(package, 'validate', validate_untold)
-        patched.setattr(checks, 'run_validate', run_validate_untold)
+        untold(patched)
         before = run_told(
             tool,
             jobs,
             tmp_path / 'before',
             feedback=t.cast(t.Any, QgsProcessingFeedback()),
         )
-    first = (
-        tables(told.output, told.outcome.ids) if told.output.exists() else None
-    )
-    second = (
-        tables(before.output, before.outcome.ids)
-        if before.output.exists()
-        else None
-    )
+    first = tables(told.output, {}) if told.output.exists() else None
+    second = tables(before.output, {}) if before.output.exists() else None
     same_tables(first, second)
     assert file_rows(told.output) == file_rows(before.output)
     assert told.outcome.counts == before.outcome.counts
-    assert told.outcome.ids == before.outcome.ids
     assert told.outcome.layers == before.outcome.layers
     assert [(i.alias, i.fid, i.reason) for i in told.outcome.invalid] == [
         (i.alias, i.fid, i.reason) for i in before.outcome.invalid
@@ -411,14 +407,3 @@ def test_the_package_failing_after_some_rules_tells_of_those(
     assert [d.index for d in feedback.checks()] == list(range(after))
     assert len(rule_lines(feedback.textLog(), jobs)) == after
     assert (Stage.WRITING, None, len(jobs)) not in feedback.stages()
-
-
-def test_progress_lines_of_another_run_are_not_told():
-    """A line that counts rules otherwise than the run does says nothing of
-    this run."""
-    told: list[tuple[int, int, int]] = []
-    lines = commands.follower(lambda *found: told.append(found))
-    assert lines('checked rule 2/3 (line/must-not-overlap): 4 errors')
-    assert not lines('checked rule 0/3 (line/must-not-overlap): 4 errors')
-    assert not lines('checked rule 4/3 (line/must-not-overlap): 4 errors')
-    assert told == [(1, 3, 4)]

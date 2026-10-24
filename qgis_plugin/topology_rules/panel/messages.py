@@ -28,9 +28,8 @@ MARK = 'topology_rules/failure'
 
 
 Staged = tuple[Stage, int | None, int]
-# A rule that is done, with its errors as the tree shows them if the engine
-# has them already
-Done = tuple[Checked, list[Row] | None]
+# A rule that is done, with its errors as the tree shows them
+Done = tuple[Checked, list[Row]]
 
 
 class RunFeedback(Progress):
@@ -53,12 +52,7 @@ class RunFeedback(Progress):
 
     def checked(self, done: Checked) -> None:
         # The rows are made here, so that the panel only has to show them
-        rows = (
-            None
-            if done.errors is None
-            else stamp(found_rows(done, self.names), done.layers)
-        )
-        found: Done = (done, rows)
+        found: Done = (done, stamp(found_rows(done, self.names), done.layers))
         self.rule_done.emit(found)
 
     def reportError(self, error: str | None, fatalError: bool = False) -> None:

@@ -23,10 +23,11 @@ from qgis.core import (
     QgsVectorLayer,
 )
 
-from topology_rules.core import engine
-from topology_rules.core.checks import Job, Outcome, run_jobs, source_id
+from topology_rules.core import checks, commands, engine, runner
+from topology_rules.core.checks import Job, Outcome, run_jobs
 from topology_rules.core.engine import Package
 from topology_rules.core.layers import Input
+from topology_rules.core.report import IdMap, Report, source_id
 from topology_rules.exceptions import RunError
 
 from .helpers import (
@@ -73,17 +74,21 @@ class Written:
     outcome: Outcome
     tables: dict[str, Table] | None
     warnings: list[str]
+    # What the executable writes itself from the same definition, with the
+    # ids of the source features
+    reference: dict[str, Table] | None = None
 
 
-def wkt(blob: bytes) -> str:
-    """The geometry of a GeoPackage, as text."""
+def wkt(blob: bytes) -> tuple[str, str]:
+    """The geometry of a GeoPackage, as text, and as WKB to the last bit of
+    each coordinate."""
     envelope = [0, 32, 48, 48, 64][(blob[3] >> 1) & 7]
     geometry = QgsGeometry()
     geometry.fromWkb(blob[8 + envelope :])
-    return geometry.asWkt(6)
+    return geometry.asWkt(6), bytes(geometry.asWkb()).hex()
 
 
-def tables(path: Path, ids: dict[str, tuple[int, ...]]) -> dict[str, Table]:
+def tables(path: Path, ids: IdMap) -> dict[str, Table]:
     """The layers of errors in the GeoPackage, with the ids of the source
     features, as the plugin shows them."""
     found: dict[str, Table] = {}
@@ -121,12 +126,51 @@ def tables(path: Path, ids: dict[str, tuple[int, ...]]) -> dict[str, Table]:
     return found
 
 
+References = list[tuple[Path, IdMap]]
+
+
+def recording(monkeypatch: pytest.MonkeyPatch, references: References) -> None:
+    """Has the executable also write the errors of each run of the plugin
+    itself, to a GeoPackage next to the definition, with the ids of the
+    source features of the run."""
+    made: list[IdMap] = []
+
+    class Recorded(Report):
+        def __init__(self, gathered: t.Any, ids: IdMap) -> None:
+            super().__init__(gathered, ids)
+            made.append(ids)
+
+    def run_validate(
+        executable: str,
+        config: str,
+        tolerance: float | None,
+        *args: t.Any,
+        **kwargs: t.Any,
+    ) -> runner.Completed:
+        completed = commands.run_validate(
+            executable, config, tolerance, *args, **kwargs
+        )
+        path = Path(config).with_name('reference.gpkg')
+        command = commands.definition_command(
+            executable, config, tolerance, str(path)
+        )
+        if runner.run(command).exit_code in (0, 1):
+            references.append((path, made[-1]))
+        return completed
+
+    monkeypatch.setattr(checks, 'Report', Recorded)
+    monkeypatch.setattr(checks, 'run_validate', run_validate)
+
+
 def run(
     tool: engine.Tool,
     jobs: list[Job],
     folder: Path,
     tolerance: float | None,
+    referenced: bool = False,
 ) -> Written:
+    """What a run of the jobs gave. With the executable, if referenced, also
+    what the executable writes itself from the same definition."""
     folder.mkdir()
     work = folder / 'work'
     work.mkdir()
@@ -134,9 +178,13 @@ def run(
     context = QgsProcessingContext()
     context.setProject(QgsProject.instance())
     feedback = QgsProcessingFeedback()
-    outcome = run_jobs(
-        jobs, tool, tolerance, str(output), work, context, feedback
-    )
+    references: References = []
+    with pytest.MonkeyPatch.context() as patch:
+        if referenced and isinstance(tool, str):
+            recording(patch, references)
+        outcome = run_jobs(
+            jobs, tool, tolerance, str(output), work, context, feedback
+        )
     warnings = sorted(
         {
             line
@@ -144,10 +192,15 @@ def run(
             if line.startswith('warning: ')
         }
     )
+    reference = None
+    if references:
+        path, ids = references[-1]
+        reference = tables(path, ids) if path.exists() else None
     return Written(
         outcome,
-        tables(output, outcome.ids) if output.exists() else None,
+        tables(output, {}) if output.exists() else None,
         warnings,
+        reference,
     )
 
 
@@ -180,8 +233,10 @@ Agree = c.Callable[..., Written]
 
 @pytest.fixture
 def agree(executable: str, package: Package, tmp_path: Path) -> Agree:
-    """Runs jobs with both engines, checks that they agree, and returns what
-    the package did."""
+    """Runs jobs with both engines, checks that they agree with each other
+    and with what the executable writes itself, and returns what the package
+    did. Without the same SRS, the executable's own file need only have a
+    CRS of the same organization."""
     rules = {rule.name: rule for rule in engine.rules(package)}
     runs = iter(range(1000))
 
@@ -193,12 +248,17 @@ def agree(executable: str, package: Package, tmp_path: Path) -> Agree:
         made = [Job(rules[name], *inputs) for name, *inputs in jobs]
         number = next(runs)
         by_executable = run(
-            executable, made, tmp_path / f'executable{number}', tolerance
+            executable,
+            made,
+            tmp_path / f'executable{number}',
+            tolerance,
+            referenced=True,
         )
         by_package = run(
             package, made, tmp_path / f'package{number}', tolerance
         )
-        same_tables(by_package.tables, by_executable.tables, same_srs)
+        same_tables(by_executable.reference, by_executable.tables, same_srs)
+        same_tables(by_package.tables, by_executable.tables)
         assert by_package.warnings == by_executable.warnings
         first, second = by_package.outcome, by_executable.outcome
         assert first.counts == second.counts

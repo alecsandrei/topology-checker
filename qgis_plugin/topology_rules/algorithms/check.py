@@ -24,7 +24,7 @@ from qgis.core import (
 
 from .._typing import Parameters
 from ..core import engine, folders
-from ..core.checks import Job, renumber_errors, run_jobs
+from ..core.checks import Job, run_jobs
 from ..core.invalid import append_invalid
 from ..core.layers import Input, require_kind
 from ..utils import (
@@ -237,7 +237,6 @@ class CheckRulesAlgorithm(Planned):
                     context,
                     feedback,
                 )
-            renumber_errors(output, outcome.ids)
             append_invalid(output, outcome.invalid, outcome.crs, context)
         total = sum(outcome.counts) + len(outcome.invalid)
         if len(outcome.counts) < len(plan.jobs):

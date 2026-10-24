@@ -26,12 +26,12 @@ from qgis.core import (
 from qgis.PyQt.QtCore import QModelIndex, Qt
 from qgis.PyQt.QtGui import QStandardItem
 
-from topology_rules.core import binary, checks, engine, package
+from topology_rules.core import binary, engine, package
 from topology_rules.core.engine import Engine
 from topology_rules.core.progress import Checked, Stage
 from topology_rules.exceptions import ExecutableError
 from topology_rules.panel import controller, messages
-from topology_rules.panel.controller import canceled_text, rule_label
+from topology_rules.panel.controller import canceled_text, summary
 from topology_rules.panel.dock import Dock
 from topology_rules.panel.marks import ENTRY
 from topology_rules.panel.results import seen
@@ -62,8 +62,7 @@ from .live import (
     let_end,
     let_lines,
     replaying_executable,
-    run_validate_untold,
-    validate_untold,
+    untold,
 )
 from .test_engines_agree import BOWTIE, CHAIN, SCATTERED, SHIFTED, SQUARE
 
@@ -88,7 +87,7 @@ def no_executable() -> Path:
 class Held:
     """The runs of an engine, which the test lets go on rule by rule: with
     the package each report waits at a gate, and the executable waits
-    before each line of progress, and before it ends."""
+    before the line of each rule, and before it ends."""
 
     engine: Engine
     gates: Gates
@@ -112,10 +111,10 @@ class Held:
         """Lets the run go to its end."""
         if self.package:
             self.gates[self.run].let_all()
-            self.writing.go.set()
         else:
             let_all_lines(self.folder)
             let_end(self.folder)
+        self.writing.go.set()
 
     def next_run(self) -> None:
         """Holds the next run from the start."""
@@ -365,18 +364,16 @@ def without_map(view: Seen) -> Seen:
 
 def checking(dock: Dock, index: int, total: int = RULES) -> str:
     """What the panel says while the run checks the rule at the index."""
-    label = rule_label(dock.entries[index])
+    title = dock.entries[index].title
     if total == 1:
-        return f'Checking {label}…'
-    return f'Checking {label} ({index + 1} of {total})…'
+        return f'Checking {title}'
+    return f'Checking {title} ({index + 1} of {total})'
 
 
-def stage_after(dock: Dock, held: Held, done: int, total: int = RULES) -> str:
+def stage_after(dock: Dock, done: int, total: int = RULES) -> str:
     """What the panel says once a number of rules are done."""
     if done == total:
         return 'Writing errors…'
-    if not held.package and done == 0:
-        return 'Checking 1 rule…' if total == 1 else f'Checking {total} rules…'
     return checking(dock, done, total)
 
 
@@ -397,7 +394,7 @@ def at(
     is at the next, or writes the errors."""
     wait_for(lambda: len(run.done) >= done)
     assert sorted(run.done) == list(range(done))
-    eventually(dock.stage.full, stage_after(dock, held, done, total))
+    eventually(dock.stage.full, stage_after(dock, done, total))
     if held.package and done == total:
         wait_for(held.at_end)
 
@@ -432,17 +429,8 @@ def test_each_rule_shows_its_count_and_errors_as_soon_as_it_is_done(
         assert now.tab == expected.tab
         # No layer of errors until the run ends
         assert now.map == []
-        if held.package:
-            assert now.tree == expected.tree
-        else:
-            # The executable gives the errors with its file only
-            assert now.tree == []
-            placeholder = dock.results.placeholder.text()
-            assert placeholder == (
-                'The errors show when the run ends.'
-                if done
-                else 'No errors yet.'
-            )
+        assert now.tree == expected.tree
+        assert dock.results.placeholder.text() == 'No errors yet.'
         # The run does not take the user to the errors
         assert dock.tabs.currentIndex() == 0
         assert dock.run_button.text() == 'Cancel'
@@ -472,11 +460,9 @@ def test_the_progress_goes_with_the_rules_after_the_reading(
     reading.go.set()
     for done in range(RULES + 1):
         at(dock, held, run, done)
-        if held.package or done:
-            eventually(lambda: bar_range(dock), (0, RULES, done))
-        else:
-            # The executable says which rule it checks once one is done
-            assert bar_range(dock)[:2] == (0, 0)
+        # The rules that are done, as the stage says
+        eventually(lambda: bar_range(dock), (0, RULES, done))
+        assert not dock.progress.isTextVisible()
         held.let(done + 1)
     held.let_all()
     wait_for(lambda: dock.task is None)
@@ -491,8 +477,7 @@ def test_a_run_of_one_rule_says_the_rule_without_a_number(
     add(dock, DANGLES, roads())
     run = held.start(dock)
     wait_for(lambda: dock.stage.full() != 'Reading layers…')
-    expected = checking(dock, 0, 1) if held.package else 'Checking 1 rule…'
-    eventually(dock.stage.full, expected)
+    eventually(dock.stage.full, checking(dock, 0, 1))
     held.let(1)
     wait_for(lambda: len(run.done) == 1)
     eventually(dock.stage.full, 'Writing errors…')
@@ -521,7 +506,7 @@ def test_the_stage_fits_a_narrow_panel(held: Held, panel: Dock):
     assert label.toolTip() == full
     assert label.text() != full
     assert label.text().startswith('Checking ')
-    assert label.text().endswith(' (2 of 2)…')
+    assert label.text().endswith(' (2 of 2)')
     room = label.contentsRect().width()
     assert label.fontMetrics().horizontalAdvance(label.text()) <= room
     # Wide again, the whole text shows
@@ -539,6 +524,8 @@ def test_the_stage_fits_a_narrow_panel(held: Held, panel: Dock):
 def test_canceling_keeps_the_rules_that_are_done(
     held: Held, panel: Dock, bar: t.Any, done: int
 ):
+    """As a run of those rules shows them, on the map too. Once all the
+    rules are done, the run is whole."""
     dock = panel
     add_rules(dock)
     reference = held.complete(dock)
@@ -550,20 +537,16 @@ def test_canceling_keeps_the_rules_that_are_done(
     bar.calls.clear()
     held.cancel(dock)
     wait_for(lambda: dock.task is None)
-    expected = reference.first(done)
-    now = seen_now(dock)
-    assert now.counts == expected.counts
-    found = sum(int(count) for count in reference.counts[:done])
-    if held.package:
-        # As a run of those rules shows them, on the map too
-        assert now == expected
-    else:
-        # The executable is stopped before it writes the errors
-        assert pid is not None
+    if pid is not None:
         assert not process_alive(pid)
-        assert now == Seen(expected.counts, [], 'Errors', [])
-    assert last_message(bar) == canceled_text(done, RULES, found)
-    assert dock.tabs.currentIndex() == 0
+    assert seen_now(dock) == reference.first(done)
+    found = sum(int(count) for count in reference.counts[:done])
+    if done == RULES:
+        assert last_message(bar) == summary(found, RULES, 0, [])
+        assert dock.tabs.currentIndex() == ERRORS_TAB
+    else:
+        assert last_message(bar) == canceled_text(done, RULES, found)
+        assert dock.tabs.currentIndex() == 0
     assert dock.stage.isHidden()
     assert dock.run_button.text() == f'Run {RULES} rules'
 
@@ -728,7 +711,7 @@ def crashing_tool(
 
 @EXECUTABLE_ONLY
 @pytest.mark.parametrize('after', range(RULES))
-def test_a_tool_that_crashes_keeps_the_counts_of_the_rules_that_are_done(
+def test_a_tool_that_crashes_keeps_what_it_showed(
     held: Held,
     panel: Dock,
     bar: t.Any,
@@ -745,14 +728,14 @@ def test_a_tool_that_crashes_keeps_the_counts_of_the_rules_that_are_done(
     held.let_all()
     wait_for(lambda: dock.task is None)
     expected = reference.first(after)
-    assert seen_now(dock) == Seen(expected.counts, [], 'Errors', [])
+    assert seen_now(dock) == dataclasses.replace(expected, map=[])
     assert 'the tool broke' in message_text(bar)
 
 
 @pytest.mark.skipif(sys.platform == 'win32', reason='a signal of POSIX')
 @EXECUTABLE_ONLY
 @pytest.mark.parametrize('after', [0, 2])
-def test_a_tool_that_is_killed_keeps_the_counts_of_the_rules_that_are_done(
+def test_a_tool_that_is_killed_keeps_what_it_showed(
     held: Held,
     panel: Dock,
     bar: t.Any,
@@ -769,7 +752,7 @@ def test_a_tool_that_is_killed_keeps_the_counts_of_the_rules_that_are_done(
     held.let_all()
     wait_for(lambda: dock.task is None)
     expected = reference.first(after)
-    assert seen_now(dock) == Seen(expected.counts, [], 'Errors', [])
+    assert seen_now(dock) == dataclasses.replace(expected, map=[])
     # As before: the code the tool ended with, the number of the signal
     assert message_text(bar).strip() == 'Exited with code -9'
 
@@ -781,8 +764,8 @@ def stale_events(run: controller.Run) -> None:
     """What an old run could still tell: a rule that is done, and the
     stage after it."""
     total = len(run.entries)
-    done = Checked(total - 1, total, 99, None, {})
-    run.feedback.rule_done.emit((done, None))
+    done = Checked(total - 1, total, 99, (), {})
+    run.feedback.rule_done.emit((done, []))
     run.feedback.stage_changed.emit((Stage.CHECKING, total - 1, total))
     run.feedback.stage_changed.emit((Stage.READING, None, 0))
     for _ in range(5):
@@ -898,12 +881,11 @@ def test_closing_and_opening_the_panel_during_a_run(held: Held, panel: Dock):
     QgsApplication.processEvents()
     assert dock.task is not None
     assert not dock.stage.isHidden()
-    assert dock.stage.full() == stage_after(dock, held, 2)
+    assert dock.stage.full() == stage_after(dock, 2)
     now = seen_now(dock)
     expected = reference.first(2)
     assert now.counts == expected.counts
-    if held.package:
-        assert now.tree == expected.tree
+    assert now.tree == expected.tree
     held.let_all()
     wait_for(lambda: dock.task is None)
     assert seen_now(dock) == reference
@@ -950,10 +932,9 @@ def first_error(dock: Dock, key: str = 'e0') -> QModelIndex:
 
 
 def test_an_error_of_a_rule_that_is_done_works_during_the_run(
-    held_package: Held, package_panel: Dock, qgis_iface: t.Any
+    held: Held, panel: Dock, qgis_iface: t.Any
 ):
-    dock = package_panel
-    held = held_package
+    dock = panel
     lines, _ = add_rules(dock)
     reference = held.complete(dock)
     canvas = not_none(qgis_iface.mapCanvas())
@@ -1044,12 +1025,11 @@ KEPT = Qt.ItemDataRole.UserRole + 77
 
 
 def test_the_end_of_a_run_keeps_the_tree_as_the_user_left_it(
-    held_package: Held, package_panel: Dock
+    held: Held, panel: Dock
 ):
     """Open groups, the current error, its selection and the scroll stay,
     and the groups that were shown are not built again."""
-    dock = package_panel
-    held = held_package
+    dock = panel
     scattered = project_layer(line_layer(*SCATTERED, name='scattered'))
     add(dock, DANGLES, scattered)
     add(dock, INTERSECTS, scattered)
@@ -1114,12 +1094,11 @@ def test_the_end_of_a_run_keeps_the_tree_as_the_user_left_it(
 
 
 def test_a_rule_of_thousands_of_errors_does_not_hold_up_the_panel(
-    held_package: Held, package_panel: Dock, monkeypatch: pytest.MonkeyPatch
+    held: Held, panel: Dock, monkeypatch: pytest.MonkeyPatch
 ):
     """Its errors are made ready in the thread of the run, and the panel
     only shows them."""
-    dock = package_panel
-    held = held_package
+    dock = panel
     spikes = 2500
     layer = QgsVectorLayer('LineString?crs=EPSG:32633', 'spikes', 'memory')
     features: list[QgsFeature] = []
@@ -1248,8 +1227,7 @@ def test_a_run_ends_as_runs_did_before_they_told_of_each_rule(
     click_run(dock)
     told = shown_now(dock, bar)
     with monkeypatch.context() as patched:
-        patched.setattr(package, 'validate', validate_untold)
-        patched.setattr(checks, 'run_validate', run_validate_untold)
+        untold(patched)
         bar.calls.clear()
         dock.tabs.setCurrentIndex(0)
         click_run(dock)

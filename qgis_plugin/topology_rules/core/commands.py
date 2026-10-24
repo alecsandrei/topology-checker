@@ -4,7 +4,6 @@ import collections.abc as c
 import dataclasses
 import json
 import os
-import re
 import typing as t
 from pathlib import Path
 
@@ -106,58 +105,32 @@ def validate_command(
     executable: str,
     config: str,
     tolerance: float | None,
-    output: str,
-    summary: bool = False,
-    progress: bool = False,
+    stream: bool = True,
 ) -> list[str]:
-    """The command of a run. With a summary the report leaves out the
-    violations, which are in the output file, and only counts them. With
-    progress the tool says when each rule is done."""
+    """The command of a run, whose report is on the output. With stream the
+    tool says the report of each rule as soon as the rule is done."""
     command = [executable, '--json', 'validate', config]
-    if summary:
-        command.append('--summary')
-    if progress:
-        command.append('--progress')
+    if stream:
+        command.append('--stream')
+    if tolerance is not None:
+        command += ['--tolerance', repr(tolerance)]
+    return command
+
+
+def definition_command(
+    executable: str, config: str, tolerance: float | None, output: str
+) -> list[str]:
+    """The command of a run that writes the errors to the output file, and
+    only counts them in the report."""
+    command = [executable, '--json', 'validate', config, '--summary']
     if tolerance is not None:
         command += ['--tolerance', repr(tolerance)]
     return [*command, '-o', output, '--overwrite']
 
 
-# The executables that do not know --summary, which older versions lack
-WITHOUT_SUMMARY: set[str] = set()
-# The executables that do not know --progress, by path and time of change, so
+# The executables that do not know --stream, by path and time of change, so
 # that one that is replaced is asked again
-WITHOUT_PROGRESS: set[tuple[str, int]] = set()
-# What the tool says with --progress when a rule is done
-PROGRESS = re.compile(r'checked rule (\d+)/(\d+) \((.*)\): (\d+) errors?')
-
-# A rule that is done: its index, the number of rules, its errors
-Done = c.Callable[[int, int, int], None]
-
-
-def progress_of(line: str) -> tuple[int, int, int] | None:
-    """The index of the rule that a line of --progress says is done, the
-    number of rules and the errors of the rule."""
-    match = PROGRESS.fullmatch(line.strip())
-    if match is None:
-        return None
-    number, total, count = (int(match[i]) for i in (1, 2, 4))
-    if not 1 <= number <= total:
-        return None
-    return number - 1, total, count
-
-
-def follower(done: Done) -> Lines:
-    """Takes the lines of --progress out of what the tool says, and tells
-    `done` of the rule each one is about."""
-
-    def lines(line: str) -> bool:
-        found = progress_of(line)
-        if found is not None:
-            done(*found)
-        return found is not None
-
-    return lines
+WITHOUT_STREAM: set[tuple[str, int]] = set()
 
 
 def modified(executable: str) -> int:
@@ -167,44 +140,55 @@ def modified(executable: str) -> int:
         return 0
 
 
+def streams(executable: str) -> bool:
+    """Whether the executable is not known to say its report at the end
+    only."""
+    return (executable, modified(executable)) not in WITHOUT_STREAM
+
+
 def run_validate(
     executable: str,
     config: str,
     tolerance: float | None,
-    output: str,
     feedback: QgsProcessingFeedback,
-    done: Done | None = None,
+    out: Lines,
+    older: c.Callable[[], None] | None = None,
 ) -> Completed:
-    """Runs the rules of a definition and returns the report, asking for no
-    list of the violations where the executable can leave it out.
+    """Runs the rules of a definition, giving `out` each line of the report
+    as soon as the executable says it.
 
-    Done, if given, is told of each rule as soon as it is done, where the
-    executable can say so. An executable that refuses a flag is asked
-    without it, and not with it again.
+    An executable that does not know --stream is asked again without it, and
+    says the whole report at the end; it is not asked with the flag again,
+    and `older` hears of it.
     """
-    lines = None if done is None else follower(done)
     version = (executable, modified(executable))
-    summary = executable not in WITHOUT_SUMMARY
-    progress = lines is not None and version not in WITHOUT_PROGRESS
+    stream = version not in WITHOUT_STREAM
     while True:
+        taken = False
+
+        def read(line: str) -> bool:
+            nonlocal taken
+            took = out(line)
+            taken = taken or took
+            return took
+
         completed = execute(
-            validate_command(
-                executable, config, tolerance, output, summary, progress
-            ),
+            validate_command(executable, config, tolerance, stream),
             feedback,
-            lines if progress else None,
+            out=read,
         )
-        said = completed.stderr + completed.stdout
-        if completed.exit_code != ExitCode.ERROR.value:
+        refused = (
+            stream
+            and not taken
+            and completed.exit_code == ExitCode.ERROR.value
+            and '--stream' in completed.stderr + completed.stdout
+        )
+        if not refused:
             return completed
-        if summary and '--summary' in said:
-            WITHOUT_SUMMARY.add(executable)
-            summary = False
-        elif progress and '--progress' in said:
-            WITHOUT_PROGRESS.add(version)
-            progress = False
-        else:
-            return completed
+        WITHOUT_STREAM.add(version)
+        stream = False
+        if older is not None:
+            older()
 
 
 def utility_command(

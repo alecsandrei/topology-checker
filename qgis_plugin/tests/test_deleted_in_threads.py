@@ -35,10 +35,11 @@ from qgis.PyQt import sip
 from qgis.PyQt.QtCore import QCoreApplication
 
 from topology_rules.core import package
-from topology_rules.core.checks import renumber_errors
+from topology_rules.core.errors import Errors, write_errors
 from topology_rules.core.inputs import chosen, prepare
 from topology_rules.core.invalid import Invalid, append_invalid, error_fields
 from topology_rules.core.layers import Input
+from topology_rules.core.progress import Found
 
 from .helpers import saved_layer
 from .test_sources import CHAIN, FAR, fail_to_open, rewrites_open_files
@@ -192,13 +193,22 @@ def origin_ids(path: str | Path, kind: str) -> list[int]:
     return sorted(error['origin_fid'] for error in errors.getFeatures())
 
 
-def test_renumbering_the_errors(tmp_path: Path, worker: Worker):
-    first = tmp_path / 'errors.gpkg'
-    worker.source = errors_file(first, 'point', 'MULTIPOINT((0 0))')
+def test_writing_the_errors(tmp_path: Path, worker: Worker):
+    worker.source = errors_file(
+        tmp_path / 'errors.gpkg', 'point', 'MULTIPOINT((0 0))'
+    )
     for index in range(ROUNDS):
-        path = shutil.copy(first, tmp_path / f'errors{index}.gpkg')
+        path = tmp_path / f'errors{index}.gpkg'
+        values = (0, 'rule', 'dangle', 'lines', 7, 0, None, None, None)
+        found = Found('point', QgsGeometry.fromWkt('POINT(0 0)'), values)
         worker.after(
-            functools.partial(renumber_errors, str(path), {'lines': (7,)})
+            functools.partial(
+                write_errors,
+                str(path),
+                Errors({'point': [found]}, [1], []),
+                QgsCoordinateReferenceSystem('EPSG:3857'),
+                QgsProcessingContext(),
+            )
         )
         assert origin_ids(path, 'point') == [7]
     assert worker.deleted() == 0

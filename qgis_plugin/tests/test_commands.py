@@ -12,6 +12,7 @@ from topology_rules.core.binary import Rule
 from topology_rules.core.commands import (
     Check,
     count_errors,
+    definition_command,
     rule_counts,
     utility_command,
     validate_command,
@@ -26,18 +27,37 @@ COVERED = Rule('point/must-be-covered-by-lines', 'x', 'point', 'line')
 
 
 def test_validate_command():
-    assert validate_command('/bin/tc', 'c.toml', None, 'o.gpkg') == [
+    assert validate_command('/bin/tc', 'c.toml', None) == [
         '/bin/tc',
         '--json',
         'validate',
         'c.toml',
+        '--stream',
+    ]
+    assert validate_command('/bin/tc', 'c.toml', 0.5)[5:7] == [
+        '--tolerance',
+        '0.5',
+    ]
+    assert validate_command('/bin/tc', 'c.toml', None, stream=False) == [
+        '/bin/tc',
+        '--json',
+        'validate',
+        'c.toml',
+    ]
+
+
+def test_definition_command_writes_the_errors():
+    assert definition_command('/bin/tc', 'c.toml', 0.5, 'o.gpkg') == [
+        '/bin/tc',
+        '--json',
+        'validate',
+        'c.toml',
+        '--summary',
+        '--tolerance',
+        '0.5',
         '-o',
         'o.gpkg',
         '--overwrite',
-    ]
-    assert validate_command('/bin/tc', 'c.toml', 0.5, 'o.gpkg')[4:6] == [
-        '--tolerance',
-        '0.5',
     ]
 
 

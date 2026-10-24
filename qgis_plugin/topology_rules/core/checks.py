@@ -9,39 +9,30 @@ from pathlib import Path
 
 from qgis.core import (
     QgsCoordinateReferenceSystem,
-    QgsFeature,
     QgsProcessingContext,
     QgsProcessingFeedback,
 )
 
+from ..enums import ExitCode
 from ..exceptions import RunError
 from ..utils import tr
 from .binary import Rule
-from .commands import (
-    ERROR_LAYERS,
-    Check,
-    rule_counts,
-    run_validate,
-    write_config,
-)
+from .commands import Check, run_validate, streams, write_config
 from .engine import Package, Tool, describe
+from .errors import Gathered, write_errors
 from .inputs import Prepared, prepare
 from .invalid import REJECTED, Invalid, Rejected, parse_failure
-from .layers import Input, private_layer
-from .progress import Checked, Stage, checked, log_rule, staged
+from .layers import Dataset, Input
+from .progress import Stage, staged
+from .report import IdMap, Report, source_id
+from .runner import error_message
 
-# The columns of an error that name a feature, and the layer it is in
-ID_COLUMNS = (
-    ('origin_layer', 'origin_fid'),
-    ('destination_layer', 'destination_fid'),
-)
 # What the tool says when it cannot read a geometry or its envelope in a file
 # (crates/io), without saying which feature
 UNREADABLE = re.compile(r'WKB|GeoPackage envelope|non-finite')
 # How often a run is repeated without the features that the tool rejects
 MAX_ATTEMPTS = 25
 
-IdMap = dict[str, tuple[int, ...]]
 # The features to leave out of each input, and why
 Skips = dict[object, dict[int, str]]
 
@@ -57,16 +48,15 @@ class Job:
 
 @dataclasses.dataclass(frozen=True)
 class Outcome:
-    """The errors of each job, in the order of the jobs.
+    """The errors of each job that is done, in the order of the jobs: fewer
+    than the jobs when the run was canceled.
 
-    The ids tell, for each layer that was exported, the id of the source
-    feature that the n-th feature of the export came from. The layers tell
-    which layer of the project each name in the errors stands for. The
-    invalid features are those that were left out of the run.
+    The layers tell which layer of the project each name in the errors
+    stands for. The invalid features are those that were left out of the
+    run.
     """
 
     counts: list[int]
-    ids: IdMap
     layers: dict[str, str]
     invalid: list[Invalid]
     crs: QgsCoordinateReferenceSystem
@@ -201,12 +191,16 @@ def run_once(
     made: dict[object, tuple[object, Prepared]],
 ) -> Outcome:
     """Runs the jobs once with the executable, from the layers' own files
-    and from exports. The log and the feedback hear of each rule as soon as
-    the executable says it is done."""
+    and from exports, and writes the errors to the GeoPackage at the output
+    as the package does. The log and the feedback hear of each rule as soon
+    as the executable says it is done.
+
+    A canceled run ends with the errors of the rules that are done. When
+    none is, it raises.
+    """
     staged(feedback, Stage.READING)
     target = jobs[0].layer.source.sourceCrs()
     prepared: dict[object, Prepared] = {}
-    names: dict[object, str] = {}
     inputs: dict[object, Input] = {}
 
     def get(item: Input) -> Prepared:
@@ -230,7 +224,6 @@ def run_once(
                     item.key not in exported,
                 )
                 made[item.key] = (how, prepared[item.key])
-            names[item.key] = item.name
             inputs[item.key] = item
         return prepared[item.key]
 
@@ -249,41 +242,61 @@ def run_once(
         for key, item in prepared.items()
         if (layer_id := inputs[key].layer_id) is not None
     }
-
-    def done(index: int, total: int, count: int) -> None:
-        if total == len(jobs):
-            log_rule(feedback, jobs, index, count)
-            checked(feedback, Checked(index, total, count, None, layers))
-
-    # Which rule runs is not known until the first is done
-    staged(feedback, Stage.CHECKING, None, len(jobs))
-    completed = run_validate(
-        executable, str(config), tolerance, output, feedback, done
+    ids: IdMap = {
+        aliases[item.dataset]: item.ids
+        for item in prepared.values()
+        if item.ids is not None
+    }
+    gathered = Gathered(jobs, layers, feedback)
+    report = Report(gathered, ids)
+    # Which rule runs is not known when the executable says it at the end
+    staged(
+        feedback,
+        Stage.CHECKING,
+        0 if streams(executable) else None,
+        len(jobs),
     )
     try:
-        counts = rule_counts(completed)
-    except RunError as error:
-        failure = parse_failure(str(error))
-        for key, item in prepared.items():
-            if failure is not None and aliases[item.dataset] == failure[0]:
-                fid = source_id(
-                    {aliases[item.dataset]: item.ids or ()}
-                    if item.ids is not None
-                    else {},
-                    failure[0],
-                    failure[1],
+        completed = run_validate(
+            executable,
+            str(config),
+            tolerance,
+            feedback,
+            report.line,
+            lambda: staged(feedback, Stage.CHECKING, None, len(jobs)),
+        )
+    except RunError:
+        if not (feedback.isCanceled() and gathered.counts):
+            raise
+    else:
+        if completed.exit_code not in (
+            ExitCode.VALID.value,
+            ExitCode.VIOLATIONS.value,
+        ):
+            # The report on the output, or the start of it, is not the error
+            raise rejected(
+                RunError(
+                    error_message(dataclasses.replace(completed, stdout=''))
+                ),
+                prepared,
+                aliases,
+                inputs,
+            )
+        if not report.complete:
+            raise RunError(
+                tr('Could not read the report: {report}').format(
+                    report=repr(completed.stdout[:200])
                 )
-                rejected = Rejected(
-                    names[key], int(t.cast(int, fid)), failure[2], key
-                )
-                rejected.as_is = item.ids is None
-                # A number outside the export names no feature of the layer
-                if item.ids is not None and not 1 <= failure[1] <= len(
-                    item.ids
-                ):
-                    rejected.skippable = False
-                raise rejected from error
-        raise
+            )
+    errors = gathered.errors(report.warnings or ())
+    # The errors have no CRS where an input has none, as the tool reads it
+    crs = (
+        target
+        if all(item.source.sourceCrs().isValid() for item in inputs.values())
+        else QgsCoordinateReferenceSystem()
+    )
+    if errors.rows:
+        write_errors(output, errors, crs, context)
     invalid = [
         Invalid(
             aliases[item.dataset],
@@ -294,62 +307,37 @@ def run_once(
         for item in prepared.values()
         for skipped in item.skipped
     ]
-
-    return Outcome(
-        counts,
-        {
-            aliases[item.dataset]: item.ids
-            for item in prepared.values()
-            if item.ids is not None
-        },
-        layers,
-        invalid,
-        target,
-    )
+    return Outcome(errors.counts, layers, invalid, target)
 
 
-def source_id(ids: IdMap, layer: object, fid: object) -> object:
-    """The id of the source feature that an error names in a layer."""
-    table = ids.get(str(layer))
-    if table is None or not isinstance(fid, int):
-        return fid
-    return table[fid - 1] if 1 <= fid <= len(table) else fid
-
-
-def renumber_errors(path: str, ids: IdMap) -> None:
-    """Gives the errors of a GeoPackage the ids of the source features."""
-    if not ids:
-        return
-    for name in ERROR_LAYERS:
-        layer = private_layer(f'{path}|layername={name}', name)
-        if not layer.isValid():
+def rejected(
+    error: RunError,
+    prepared: c.Mapping[object, Prepared],
+    aliases: c.Mapping[Dataset, str],
+    inputs: c.Mapping[object, Input],
+) -> RunError:
+    """The feature that the tool rejected, named by its source id, if the
+    error is about one; else the error."""
+    failure = parse_failure(str(error))
+    if failure is None:
+        return error
+    alias, fid, reason = failure
+    if alias is None:
+        return error
+    for key, item in prepared.items():
+        if aliases[item.dataset] != alias:
             continue
-        fields = layer.fields()
-        # The new and the old values of each feature that changes
-        changes: dict[int, tuple[dict[int, object], dict[int, object]]] = {}
-        for feature in t.cast('c.Iterable[QgsFeature]', layer.getFeatures()):
-            new: dict[int, object] = {}
-            old: dict[int, object] = {}
-            for layer_column, id_column in ID_COLUMNS:
-                if fields.indexOf(id_column) < 0:
-                    continue
-                before = feature[id_column]
-                after = source_id(ids, feature[layer_column], before)
-                if isinstance(before, int) and after != before:
-                    new[fields.indexOf(id_column)] = after
-                    old[fields.indexOf(id_column)] = before
-            if new:
-                changes[feature.id()] = (new, old)
-        if changes and not (
-            layer.startEditing()
-            and all(
-                layer.changeAttributeValues(fid, values, previous)
-                for fid, (values, previous) in changes.items()
-            )
-            and layer.commitChanges()
-        ):
-            raise RunError(
-                tr('Could not write the feature ids to {path}').format(
-                    path=path
-                )
-            )
+        table = {} if item.ids is None else {alias: item.ids}
+        found = Rejected(
+            inputs[key].name,
+            int(t.cast(int, source_id(table, alias, fid))),
+            reason,
+            key,
+        )
+        found.as_is = item.ids is None
+        # A number outside the export names no feature of the layer
+        if item.ids is not None and not 1 <= fid <= len(item.ids):
+            found.skippable = False
+        found.__cause__ = error
+        return found
+    return error
