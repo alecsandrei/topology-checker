@@ -79,13 +79,13 @@ impl Search for Index {
         &self,
         _: &Workers,
         tolerance: f64,
-        _: &'static str,
+        step: &'static str,
         _: impl Fn(usize) -> bool + Sync,
         visit: impl Fn(usize, usize, &mut Vec<R>) + Sync,
     ) -> Vec<R> {
         let mut out = Vec::new();
-        for (a, b) in pairs(self, self, tolerance, true) {
-            crate::cancel::check();
+        for (k, (a, b)) in pairs(self, self, tolerance, true).enumerate() {
+            crate::cancel::every(k, step);
             visit(a, b, &mut out);
         }
         out
@@ -98,10 +98,6 @@ const LEAF: usize = 6;
 const FANOUT: usize = 16;
 /// Search frames: enough levels for any `usize` length.
 const DEPTH: usize = 18;
-/// Comparisons between cancellation checks while ordering.
-const CHECK: usize = 1 << 14;
-/// Items and pairs between cancellation checks while pairing.
-const PAIR_CHECK: usize = 256;
 
 /// A box and its item. It has the size of an R-tree rectangle with data, so
 /// ordering takes the same steps.
@@ -185,11 +181,13 @@ impl Packed {
         &self.entries
     }
     /// Item IDs in search order, if they all fit.
-    pub(crate) fn order(&self) -> Option<Vec<u32>> {
-        self.entries
-            .iter()
-            .map(|e| u32::try_from(e.id).ok())
-            .collect()
+    pub(crate) fn order(&self, step: &'static str) -> Option<Vec<u32>> {
+        let mut order = Vec::with_capacity(self.entries.len());
+        for (k, e) in self.entries.iter().enumerate() {
+            crate::cancel::every(k, step);
+            order.push(u32::try_from(e.id).ok()?);
+        }
+        Some(order)
     }
     /// Entries whose box intersects `bounds`, in search order.
     pub(crate) fn locate(&self, bounds: AABB<[f64; 2]>) -> Locate<'_> {
@@ -224,9 +222,7 @@ impl Search for Packed {
             let mut out = Vec::new();
             let mut work = 0_usize;
             let mut tick = || {
-                if work.is_multiple_of(PAIR_CHECK) {
-                    crate::cancel::checkpoint(step);
-                }
+                crate::cancel::every(work, step);
                 work += 1;
             };
             for item in &self.entries[range] {
@@ -245,6 +241,7 @@ impl Search for Packed {
         });
         let mut out = Vec::with_capacity(found.iter().map(Vec::len).sum());
         for part in found {
+            crate::cancel::checkpoint(step);
             out.extend(part);
         }
         out
@@ -331,10 +328,8 @@ fn clusters_per_axis(len: usize) -> usize {
 }
 fn select(entries: &mut [Entry], index: usize, axis: usize, count: &mut usize) {
     entries.select_nth_unstable_by(index, |l, r| {
+        crate::cancel::every(*count, "index");
         *count += 1;
-        if count.is_multiple_of(CHECK) {
-            crate::cancel::checkpoint("index");
-        }
         l.min[axis]
             .partial_cmp(&r.min[axis])
             .expect("finite coordinates")
@@ -532,14 +527,13 @@ mod tests {
 
     #[test]
     fn ordering_and_pairing_stop_when_cancelled() {
-        use crate::cancel::{self, CancellationToken, hooks};
+        use crate::cancel::{self, hooks};
         let entries = boxes(1 << 15, 9)
             .into_iter()
             .map(|(i, r)| Entry::new(i, r))
             .collect::<Vec<_>>();
         for (step, visit) in [("index", 0), ("index", 5), ("pairs", 0), ("pairs", 40)] {
-            let token = CancellationToken::default();
-            hooks::watch(&token, Some((step, visit)));
+            let token = hooks::watched(Some((step, visit)));
             let result = std::panic::catch_unwind(|| {
                 cancel::scope(Some(token.clone()), || {
                     let workers = Workers::forced(4, 64, || Workers::new(0));
@@ -547,7 +541,7 @@ mod tests {
                     collect_pairs(&packed, &workers, 0.5)
                 })
             });
-            let record = hooks::unwatch(&token);
+            let record = hooks::record(&token);
             assert!(result.expect_err("cancelled").is::<cancel::Cancelled>());
             // Each other thread passes at most one more checkpoint.
             let visits = record.visits[step];

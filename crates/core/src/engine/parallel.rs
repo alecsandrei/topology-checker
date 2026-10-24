@@ -21,6 +21,8 @@ use std::{
 const INLINE: usize = 1 << 14;
 /// Smallest task, in units.
 const GRAIN: usize = 4096;
+/// Most buckets of a parallel sort, so bucket numbers fit in `u16`.
+const BUCKETS: usize = 1 << 16;
 /// Tasks per thread, so uneven tasks still share the work.
 const TASKS: usize = 8;
 
@@ -30,7 +32,7 @@ thread_local! {
 }
 
 /// Threads for one construction step.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct Workers {
     threads: usize,
     grain: usize,
@@ -188,9 +190,7 @@ impl Workers {
         }
         self.each(slices, |(start, slice)| {
             for (k, slot) in slice.iter_mut().enumerate() {
-                if k % GRAIN == 0 {
-                    cancel::check();
-                }
+                cancel::every(k, "fill");
                 *slot = value(start + k);
             }
         });
@@ -208,7 +208,7 @@ impl Workers {
             return;
         }
         // Buckets bounded by evenly spaced samples, sorted on their own.
-        let buckets = self.threads * TASKS;
+        let buckets = (self.threads * TASKS).min(BUCKETS);
         let mut samples = v
             .iter()
             .step_by((v.len() / (buckets * 16)).max(1))
@@ -226,17 +226,17 @@ impl Workers {
                 .iter()
                 .enumerate()
                 .map(|(k, x)| {
-                    if k % GRAIN == 0 {
-                        cancel::checkpoint(step);
-                    }
+                    cancel::every(k, step);
                     let bucket = bounds.partition_point(|b| compare(b, x) == Ordering::Less);
                     counts[bucket] += 1;
-                    bucket
+                    u16::try_from(bucket).expect("bucket number")
                 })
                 .collect::<Vec<_>>();
             (ids, counts)
         });
-        let mut out = v.clone();
+        // Safe code needs an initialised destination; a copy is cheaper than
+        // anything else that fills it.
+        let mut out = copied(v, step);
         // Regions by bucket, then task, so each task fills its own regions.
         let mut regions = (0..ranges.len())
             .map(|_| Vec::with_capacity(buckets))
@@ -254,8 +254,11 @@ impl Workers {
         self.each(
             regions.into_iter().enumerate().collect(),
             |(task, mut regions)| {
+                // Moving elements runs at copying speed: one check per task.
+                cancel::checkpoint(step);
                 let mut cursor = vec![0; buckets];
                 for (x, &bucket) in source[ranges[task].clone()].iter().zip(&classes[task].0) {
+                    let bucket = usize::from(bucket);
                     regions[bucket][cursor[bucket]] = *x;
                     cursor[bucket] += 1;
                 }
@@ -282,14 +285,30 @@ fn keep(slot: &mut Option<Box<dyn Any + Send>>, payload: Box<dyn Any + Send>) {
         *slot = Some(payload);
     }
 }
+/// `len` copies of `value`, checking for cancellation as it goes.
+pub(crate) fn repeated<T: Clone>(value: T, len: usize, step: &'static str) -> Vec<T> {
+    let mut out = Vec::with_capacity(len);
+    while out.len() < len {
+        cancel::checkpoint(step);
+        out.resize((out.len() + cancel::COPY).min(len), value.clone());
+    }
+    out
+}
+/// A copy of `v`, checking for cancellation as it goes.
+pub(crate) fn copied<T: Clone>(v: &[T], step: &'static str) -> Vec<T> {
+    let mut out = Vec::with_capacity(v.len());
+    for chunk in v.chunks(cancel::COPY) {
+        cancel::checkpoint(step);
+        out.extend_from_slice(chunk);
+    }
+    out
+}
 /// Sort unstably on this thread, checking for cancellation as it goes.
 pub(crate) fn sort<T>(v: &mut [T], step: &'static str, compare: impl Fn(&T, &T) -> Ordering) {
     let mut comparisons = 0_usize;
     v.sort_unstable_by(|a, b| {
+        cancel::every(comparisons, step);
         comparisons += 1;
-        if comparisons.is_multiple_of(4 * GRAIN) {
-            cancel::checkpoint(step);
-        }
         compare(a, b)
     });
 }
@@ -320,34 +339,97 @@ mod tests {
             workers.fill(&mut filled, |i| i + 1);
             assert_eq!(filled, (1..=1000).collect::<Vec<_>>());
         }
+        for len in [0, 1, cancel::COPY, cancel::COPY + 1] {
+            let ascending = (0..len).collect::<Vec<_>>();
+            assert_eq!(copied(&ascending, "copied"), ascending);
+            assert_eq!(repeated(3, len, "repeated"), vec![3; len]);
+        }
         v.clear();
         Workers::forced(4, 1, || Workers::new(0)).sort(&mut v, "sort", u64::cmp);
         assert!(v.is_empty());
+    }
+
+    /// The payload `run` fails with, on a token for its tasks.
+    fn failure(token: &cancel::CancellationToken, run: impl FnOnce()) -> Box<dyn Any + Send> {
+        panic::catch_unwind(AssertUnwindSafe(|| {
+            cancel::scope(Some(token.clone()), run);
+        }))
+        .expect_err("failure")
     }
 
     #[test]
     fn failures_reach_the_caller_and_bugs_win_over_cancellation() {
         let workers = Workers::forced(4, 1, || Workers::new(0));
         let token = cancel::CancellationToken::default();
-        let result = panic::catch_unwind(|| {
-            cancel::scope(Some(token.clone()), || {
-                workers.run(64, |i| {
-                    if i == 3 {
-                        token.cancel();
-                    }
-                    if i == 40 {
-                        panic::resume_unwind(Box::new("bug"));
-                    }
-                    cancel::check();
-                })
-            })
+        let payload = failure(&token, || {
+            workers.run(64, |i| {
+                if i == 3 {
+                    token.cancel();
+                }
+                cancel::check();
+            });
         });
-        let payload = result.expect_err("failure");
-        assert!(payload.is::<&str>() || payload.is::<cancel::Cancelled>());
+        assert!(payload.is::<cancel::Cancelled>());
+        // Both tasks run at once, so both fail, whichever thread takes which.
+        let token = cancel::CancellationToken::default();
+        let both = std::sync::Barrier::new(2);
+        let payload = failure(&token, || {
+            workers.run(2, |i| {
+                both.wait();
+                if i == 0 {
+                    token.cancel();
+                    cancel::check();
+                }
+                panic::resume_unwind(Box::new("bug"));
+            });
+        });
+        assert_eq!(payload.downcast_ref::<&str>(), Some(&"bug"));
         let mut slot = None;
         keep(&mut slot, Box::new(cancel::Cancelled));
         keep(&mut slot, Box::new("bug"));
         keep(&mut slot, Box::new(cancel::Cancelled));
-        assert!(slot.expect("payload").is::<&str>());
+        assert_eq!(slot.expect("payload").downcast_ref::<&str>(), Some(&"bug"));
+    }
+
+    #[test]
+    fn small_steps_run_on_the_calling_thread() {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .expect("pool");
+        for (work, threads) in [(0, 1), (1000, 1), (INLINE - 1, 1), (INLINE, 4)] {
+            let token = cancel::hooks::watched(None);
+            let workers = pool.install(|| Workers::new(work));
+            assert_eq!(workers.threads(), threads, "{work}");
+            cancel::scope(Some(token.clone()), || workers.chunks(work, |r| r.len()));
+            let record = cancel::hooks::record(&token);
+            assert_eq!(record.workers, threads - 1, "{work}");
+        }
+    }
+
+    #[test]
+    fn long_steps_stop_at_their_checkpoints() {
+        let v = (0..1_u64 << 16)
+            .map(|i| i.wrapping_mul(0x9e37_79b9_7f4a_7c15))
+            .collect::<Vec<_>>();
+        for threads in [1, 4] {
+            let workers = Workers::forced(threads, 64, || Workers::new(0));
+            let steps: [(&str, &dyn Fn()); 5] = [
+                ("fill", &|| workers.fill(&mut vec![0; v.len()], |i| v[i])),
+                ("sort", &|| workers.sort(&mut v.clone(), "sort", u64::cmp)),
+                ("serial", &|| sort(&mut v.clone(), "serial", u64::cmp)),
+                ("repeated", &|| drop(repeated(1, 1 << 20, "repeated"))),
+                ("copied", &|| drop(copied(&v, "copied"))),
+            ];
+            for (step, run) in steps {
+                let token = cancel::hooks::watched(Some((step, 0)));
+                assert!(failure(&token, run).is::<cancel::Cancelled>(), "{step}");
+                let record = cancel::hooks::record(&token);
+                assert_eq!(record.live, 0);
+                // Each other thread passes at most one more checkpoint.
+                let visits = record.visits[step];
+                assert!(visits <= threads, "{step} on {threads} threads: {visits}");
+            }
+        }
     }
 }

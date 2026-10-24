@@ -161,8 +161,6 @@ pub(crate) fn order(a: &Coord, b: &Coord) -> Ordering {
 fn identical(a: Coord, b: Coord) -> bool {
     a.x.to_bits() == b.x.to_bits() && a.y.to_bits() == b.y.to_bits()
 }
-/// Points between cancellation checks.
-const SWEEP_CHECK: usize = 1 << 16;
 impl Sweep {
     pub(crate) fn new(tolerance: f64) -> Self {
         Self {
@@ -218,9 +216,7 @@ impl Sweep {
         // Earlier representatives in the columns within reach.
         let mut window = 0..0;
         for (k, item) in items.iter().enumerate() {
-            if k % SWEEP_CHECK == 0 {
-                crate::cancel::checkpoint(step);
-            }
+            crate::cancel::every(k, step);
             let p = point(item);
             debug_assert!(previous.is_none_or(|(q, _)| order(&q, &p).is_le()));
             if let Some((q, id)) = previous
@@ -326,24 +322,33 @@ impl Sweep {
         if last {
             return;
         }
-        self.earlier = merge(std::mem::take(&mut self.earlier), found, |a, b| {
+        self.earlier = merge(std::mem::take(&mut self.earlier), found, step, |a, b| {
             order(&a.0, &b.0)
         });
-        made.sort_unstable();
-        self.cells = merge(std::mem::take(&mut self.cells), made, Ord::cmp);
+        super::parallel::sort(&mut made, step, Ord::cmp);
+        self.cells = merge(std::mem::take(&mut self.cells), made, step, Ord::cmp);
     }
 }
 /// Merge two sorted lists.
-fn merge<T>(a: Vec<T>, b: Vec<T>, compare: impl Fn(&T, &T) -> Ordering) -> Vec<T> {
+fn merge<T>(
+    a: Vec<T>,
+    b: Vec<T>,
+    step: &'static str,
+    compare: impl Fn(&T, &T) -> Ordering,
+) -> Vec<T> {
     if a.is_empty() {
         return b;
     }
     let mut out = Vec::with_capacity(a.len() + b.len());
     let mut b = b.into_iter().peekable();
     for x in a {
-        while let Some(y) = b.next_if(|y| compare(y, &x).is_lt()) {
+        while let Some(y) = b.next_if(|y| {
+            crate::cancel::every(out.len(), step);
+            compare(y, &x).is_lt()
+        }) {
             out.push(y);
         }
+        crate::cancel::every(out.len(), step);
         out.push(x);
     }
     out.extend(b);

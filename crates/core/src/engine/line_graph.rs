@@ -1,8 +1,9 @@
 use crate::cache::Cache;
 use crate::{
     Error, FeatureRef, LayerId, Topology,
+    cancel::{checkpoint, every},
     engine::{
-        cluster::{Sweep, bits, distance},
+        cluster::{Sweep, distance},
         index::{self, Entry, Packed, Search},
         parallel::{self, Workers},
         storage::Shared,
@@ -368,11 +369,8 @@ pub(crate) struct LineGraph {
     /// Sources in the search order of their index, to index them again
     /// without ordering, if their IDs fit.
     order: Option<Vec<u32>>,
-    /// Built the old way, and matched the old way too.
-    #[cfg(test)]
-    reference: bool,
 }
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct Matched {
     pub sources: [usize; 2],
     pub spans: [[f64; 2]; 2],
@@ -380,7 +378,7 @@ pub(crate) struct Matched {
     pub overlap: bool,
 }
 /// Original incidences at one actual source contact, before node clustering.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) struct Contact {
     pub parts: [usize; 2],
     pub interior: [bool; 2],
@@ -510,10 +508,10 @@ pub(crate) fn collapsed(line: &LineString, tolerance: f64) -> bool {
     if bounds.width() > tolerance || bounds.height() > tolerance {
         return false;
     }
-    line.0
-        .iter()
-        .enumerate()
-        .all(|(i, &p)| line.0[i + 1..].iter().all(|&q| distance(p, q) <= tolerance))
+    line.0.iter().enumerate().all(|(i, &p)| {
+        checkpoint("collapsed");
+        line.0[i + 1..].iter().all(|&q| distance(p, q) <= tolerance)
+    })
 }
 /// One visit of a part's node path, with the first and last original points
 /// it covers, their segment indices, and the edge arriving at it.
@@ -551,6 +549,7 @@ fn free_end(
     let chord = |point: Coord, k: usize| {
         let chord = Line::new(point, end);
         (k + 1..n).all(|i| {
+            every(i - k - 1, "returns.chord");
             let p = vertex(i);
             distance(p, projection(chord, p).1) <= tolerance
         })
@@ -559,11 +558,13 @@ fn free_end(
     // twice the tolerance after a nearby segment is a genuine return.
     let mut near = n - 1;
     while near > 0 && distance(vertex(near - 1), end) <= 2. * tolerance {
+        every(n - 1 - near, "returns.near");
         near -= 1;
     }
     n - near <= END_VERTICES
         && points.into_iter().all(|(point, k)| chord(point, k))
         && (0..n - 1).all(|k| {
+            every(k, "returns.segments");
             let (_, p) = projection(Line::new(vertex(k), vertex(k + 1)), end);
             distance(p, end) > tolerance || (k + 1 >= near && chord(p, k))
         })
@@ -581,22 +582,23 @@ fn kept_visits(path: &[Visit], coords: &[Coord], tolerance: f64) -> [usize; 2] {
         return bounds;
     }
     let m = coords.len();
-    if let Some(j) = path[1..n - 1]
-        .iter()
-        .position(|v| v.node == path[n - 1].node)
-        && free_end(
-            |i| coords[i],
-            m,
-            [path[j + 1].first, path[j + 1].last],
-            tolerance,
-        )
-    {
+    if let Some(j) = path[1..n - 1].iter().enumerate().position(|(k, v)| {
+        every(k, "returns.last");
+        v.node == path[n - 1].node
+    }) && free_end(
+        |i| coords[i],
+        m,
+        [path[j + 1].first, path[j + 1].last],
+        tolerance,
+    ) {
         bounds[1] = j + 1;
     }
     // From the start, points on segment `k` lie on reversed segment `m - 2 - k`.
     let reversed = |(point, k): (Coord, usize)| (point, m - 2 - k);
-    if let Some(i) = path[1..n - 1].iter().rposition(|v| v.node == path[0].node)
-        && i + 1 < bounds[1]
+    if let Some(i) = path[1..n - 1].iter().enumerate().rposition(|(k, v)| {
+        every(k, "returns.first");
+        v.node == path[0].node
+    }) && i + 1 < bounds[1]
         && free_end(
             |i| coords[m - 1 - i],
             m,
@@ -632,12 +634,14 @@ fn trim_returns(
     for trim in &trims {
         let nodes = &parts[trim.part].nodes;
         for range in removed(trim, nodes.len()) {
-            for &node in &nodes[range] {
+            for (k, &node) in nodes[range].iter().enumerate() {
+                every(k, "trim.removed");
                 ends.entry(node).or_default();
             }
         }
     }
     for (id, part) in parts.iter().enumerate() {
+        every(id, "trim.ends");
         if part.is_closed {
             continue;
         }
@@ -654,11 +658,15 @@ fn trim_returns(
     }
     let mut dropped = Vec::<usize>::new();
     for trim in trims {
+        checkpoint("trim.parts");
         let nodes = &parts[trim.part].nodes;
         let n = nodes.len();
         let [mut start, mut end] = removed(&trim, n);
         let [first, last] = [nodes[0], nodes[n - 1]];
-        let own = |i: &usize| ends[&nodes[*i]].iter().all(|&p| p == trim.part);
+        let own = |i: &usize| {
+            checkpoint("trim.own");
+            ends[&nodes[*i]].iter().all(|&p| p == trim.part)
+        };
         let tied = |end: bool, at: usize| {
             ties.get(&(trim.part, end))
                 .is_some_and(|nodes| nodes.iter().any(|&node| node != at))
@@ -677,10 +685,11 @@ fn trim_returns(
             parts[trim.part].nodes = nodes[bounds[0]..=bounds[1]].to_vec();
         }
     }
-    dropped.sort_unstable();
+    parallel::sort(&mut dropped, "trim.dropped", Ord::cmp);
     let mut next = dropped.into_iter().peekable();
     let mut index = 0;
     raw_edges.retain(|_| {
+        every(index, "trim.edges");
         let keep = next.next_if_eq(&index).is_none();
         index += 1;
         keep
@@ -689,8 +698,6 @@ fn trim_returns(
 fn coordinate_order(a: &Coord, b: &Coord) -> std::cmp::Ordering {
     a.x.total_cmp(&b.x).then(a.y.total_cmp(&b.y))
 }
-/// Items between cancellation checks in construction loops.
-const CHECK: usize = 256;
 /// An open part's end, with its segment and its vertex number.
 struct End {
     point: Coord,
@@ -779,7 +786,7 @@ impl LineGraph {
             self.parts
                 .iter()
                 .map(|p| {
-                    crate::cancel::check();
+                    checkpoint("directions");
                     #[cfg(test)]
                     MATCHING_WORK.with(|n| n.set(n.get() + p.original.0.len()));
                     p.original
@@ -804,7 +811,7 @@ impl LineGraph {
         let ids = self.match_features.get_or_init(|| {
             let mut features = BTreeMap::<_, Vec<_>>::new();
             for (id, m) in self.matches().iter().enumerate() {
-                crate::cancel::check();
+                every(id, "matches.features");
                 if !m.overlap {
                     continue;
                 }
@@ -855,10 +862,6 @@ impl LineGraph {
     }
     pub fn matches(&self) -> &[Matched] {
         self.matches.get_or_init(|| {
-            #[cfg(test)]
-            if self.reference {
-                return self.reference_matches();
-            }
             let workers = Workers::new(self.sources.len());
             let tree = self.source_index(&workers);
             let found = tree.pairs(
@@ -884,7 +887,8 @@ impl LineGraph {
                 self.retain_sustained_matches(&tree, &workers, &mut result, &evidence);
             }
             drop(evidence);
-            parallel::sort(&mut result, "matches.sort", |a, b| {
+            // Each pair of sources is matched once.
+            workers.sort(&mut result, "matches.sort", |a, b| {
                 a.sources.cmp(&b.sources)
             });
             result
@@ -892,9 +896,9 @@ impl LineGraph {
     }
     /// The index of construction again, in its search order when known.
     fn source_index(&self, workers: &Workers) -> Packed {
-        crate::cancel::checkpoint("matches.index");
+        checkpoint("matches.index");
         let entry = |i: usize| Entry::new(i, self.source(i).bounding_rect());
-        let mut entries = vec![Entry::default(); self.sources.len()];
+        let mut entries = parallel::repeated(Entry::default(), self.sources.len(), "matches.index");
         match &self.order {
             Some(order) => {
                 workers.fill(&mut entries, |k| entry(order[k] as usize));
@@ -918,7 +922,7 @@ impl LineGraph {
     ) {
         let mut groups = BTreeMap::<_, Vec<_>>::new();
         for (i, m) in matches.iter().enumerate() {
-            crate::cancel::check();
+            checkpoint("retain.groups");
             #[cfg(test)]
             JUNCTION_SUPPORT_WORK.with(|n| n.set(n.get() + 1));
             let parts = m.sources.map(|s| self.segment(s).part);
@@ -937,7 +941,7 @@ impl LineGraph {
             return;
         }
         for (i, m) in matches.iter().enumerate() {
-            crate::cancel::check();
+            checkpoint("retain.ids");
             let parts = m.sources.map(|s| self.segment(s).part);
             if !self.consecutive(m.sources[0], m.sources[1])
                 && let Some(ids) = groups.get_mut(&parts)
@@ -958,7 +962,7 @@ impl LineGraph {
                 let mut bounds = super::certified::Interval(0., 0.);
                 positions[part].push(total);
                 for line in self.original(part).lines() {
-                    crate::cancel::check();
+                    checkpoint("retain.positions");
                     #[cfg(test)]
                     JUNCTION_SUPPORT_WORK.with(|n| n.set(n.get() + 1));
                     total += distance(line.start, line.end);
@@ -1081,9 +1085,7 @@ impl LineGraph {
         let mut junctions = BTreeMap::<_, Vec<[f64; 2]>>::new();
         let mut meetings = BTreeMap::<_, Vec<Meeting>>::new();
         for (k, found) in found.into_iter().enumerate() {
-            if k % CHECK == 0 {
-                crate::cancel::check();
-            }
+            every(k, "retain.found");
             match found {
                 Found::Meeting(parts, meeting) => meetings.entry(parts).or_default().push(meeting),
                 Found::Junction(parts, junction) => {
@@ -1092,8 +1094,10 @@ impl LineGraph {
             }
         }
         // Several segment pairs report the same meeting point.
+        // Meetings found so far have no end, so those that compare equal are the same.
         for list in meetings.values_mut() {
-            list.sort_by(|a, b| {
+            checkpoint("retain.meetings");
+            parallel::sort(list, "retain.meetings.sort", |a, b| {
                 (a.positions[0].total_cmp(&b.positions[0]))
                     .then(a.positions[1].total_cmp(&b.positions[1]))
             });
@@ -1109,21 +1113,21 @@ impl LineGraph {
             i
         }
         for (parts, ids) in groups {
-            crate::cancel::check();
+            checkpoint("retain.runs");
             let mut parent = (0..ids.len()).collect::<Vec<_>>();
             for (side, &part) in parts.iter().enumerate() {
                 let mut spans = ids
                     .iter()
                     .enumerate()
                     .map(|(local, &id)| {
-                        crate::cancel::check();
+                        checkpoint("retain.spans");
                         let source = matches[id].sources[side];
                         let start = self.segment(source).start as f64;
                         let span = evidence[id].support[side];
                         (start + span[0], start + span[1], local)
                     })
                     .collect::<Vec<_>>();
-                spans.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
+                parallel::sort(&mut spans, "retain.spans.sort", |a, b| a.0.total_cmp(&b.0));
                 if self.parts[part].is_closed {
                     let first = spans.first().expect("support");
                     let last = spans
@@ -1139,7 +1143,7 @@ impl LineGraph {
                 }
                 let mut previous: Option<(f64, usize)> = None;
                 for (lo, hi, id) in spans {
-                    crate::cancel::check();
+                    checkpoint("retain.spans.join");
                     if let Some((end, before)) = previous
                         && lo <= end
                     {
@@ -1154,28 +1158,37 @@ impl LineGraph {
             }
             let mut components = BTreeMap::<_, Vec<_>>::new();
             for (local, &id) in ids.iter().enumerate() {
-                crate::cancel::check();
+                checkpoint("retain.components");
                 components
                     .entry(root(&mut parent, local))
                     .or_default()
                     .push(id);
             }
             let contacts = junctions.entry(parts).or_default();
-            contacts.sort_unstable_by(|a, b| a[0].total_cmp(&b[0]).then(a[1].total_cmp(&b[1])));
+            parallel::sort(contacts, "retain.junctions.sort", |a, b| {
+                a[0].total_cmp(&b[0]).then(a[1].total_cmp(&b[1]))
+            });
             contacts.dedup();
-            let contact_index = index::build(contacts.iter().enumerate().map(|(i, p)| {
-                let c = Coord { x: p[0], y: p[1] };
-                (i, geo::Rect::new(c, c))
-            }));
+            let entries = contacts
+                .iter()
+                .enumerate()
+                .map(|(i, p)| {
+                    every(i, "retain.junctions");
+                    let c = Coord { x: p[0], y: p[1] };
+                    Entry::new(i, geo::Rect::new(c, c))
+                })
+                .collect::<Vec<_>>();
+            // Only whether a contact is found counts, not the order of the search.
+            let contact_index = Packed::bulk(entries, &Workers::new(contacts.len()));
             let mut ends_met = false;
             for component in components.into_values() {
-                crate::cancel::check();
+                checkpoint("retain.support");
                 let spans = [0, 1].map(|side| {
                     super::matching::union(
                         component
                             .iter()
                             .map(|&id| {
-                                crate::cancel::check();
+                                checkpoint("retain.support.spans");
                                 #[cfg(test)]
                                 JUNCTION_SUPPORT_WORK.with(|n| n.set(n.get() + 1));
                                 let source = matches[id].sources[side];
@@ -1260,12 +1273,10 @@ impl LineGraph {
                                 b.x = total;
                             }
                             confined = contact_index
-                                .locate_in_envelope_intersecting(&index::envelope(geo::Rect::new(
-                                    a, b,
-                                )))
+                                .locate(index::envelope(geo::Rect::new(a, b)))
                                 .any(|item| {
-                                    crate::cancel::check();
-                                    let mut p = contacts[item.data][other];
+                                    checkpoint("retain.confined");
+                                    let mut p = contacts[item.id][other];
                                     if self.parts[parts[other]].is_closed && p < bounds[other][0] {
                                         p += total;
                                     }
@@ -1337,13 +1348,13 @@ impl LineGraph {
         };
         let mut groups = BTreeMap::<_, Vec<_>>::new();
         for (i, m) in matches.iter().enumerate() {
-            crate::cancel::check();
+            checkpoint("support.groups");
             if rejected[i] && !explained[i] {
                 groups.entry(key(m)).or_default();
             }
         }
         for (i, m) in matches.iter().enumerate() {
-            crate::cancel::check();
+            checkpoint("support.ids");
             if !explained[i]
                 && let Some(ids) = groups.get_mut(&key(m))
             {
@@ -1358,11 +1369,14 @@ impl LineGraph {
             i
         }
         for ids in groups.into_values() {
-            crate::cancel::check();
+            checkpoint("support.each");
             let participants = ids
                 .iter()
                 .flat_map(|&id| matches[id].sources)
-                .map(|source| self.segment(source).part)
+                .map(|source| {
+                    checkpoint("support.participants");
+                    self.segment(source).part
+                })
                 .collect::<std::collections::BTreeSet<_>>();
             // Two parts cannot acquire additional multipart support. In particular,
             // sparse independent feature pairs need no passage-role allocations.
@@ -1380,6 +1394,7 @@ impl LineGraph {
                 let mut run_parent = (0..2 * ids.len()).collect::<Vec<_>>();
                 let mut runs = BTreeMap::<_, Vec<_>>::new();
                 for (local, &id) in ids.iter().enumerate() {
+                    checkpoint("support.runs");
                     for side in 0..2 {
                         let source = self.segment(matches[id].sources[side]);
                         let span = evidence[id].support[side];
@@ -1391,7 +1406,7 @@ impl LineGraph {
                     }
                 }
                 for (part, mut spans) in runs {
-                    spans.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
+                    parallel::sort(&mut spans, "support.runs.sort", |a, b| a.0.total_cmp(&b.0));
                     if self.parts[part].is_closed {
                         let first = spans.first().expect("support");
                         let last = spans
@@ -1406,7 +1421,7 @@ impl LineGraph {
                     }
                     let mut previous: Option<(f64, usize)> = None;
                     for (lo, hi, local) in spans {
-                        crate::cancel::check();
+                        checkpoint("support.runs.join");
                         if let Some((end, before)) = previous
                             && lo <= end
                         {
@@ -1422,6 +1437,7 @@ impl LineGraph {
                 let mut run_ids = BTreeMap::new();
                 let mut passages = BTreeMap::new();
                 for (local, &id) in ids.iter().enumerate() {
+                    checkpoint("support.passages");
                     for side in 0..2 {
                         let run = root(&mut run_parent, 2 * local + side);
                         let next = run_ids.len();
@@ -1443,6 +1459,7 @@ impl LineGraph {
                 }
                 let mut support = BTreeMap::<_, BTreeMap<_, Vec<_>>>::new();
                 for &id in &ids {
+                    checkpoint("support.evidence");
                     if !rejected[id] {
                         continue;
                     }
@@ -1461,6 +1478,7 @@ impl LineGraph {
                         let length = sources
                             .into_iter()
                             .map(|(source, spans)| {
+                                checkpoint("support.lengths");
                                 let line = self.source(source);
                                 super::matching::union(spans)
                                     .iter()
@@ -1497,7 +1515,7 @@ impl LineGraph {
                     pair
                 };
                 let mut ordered = ids.clone();
-                ordered.sort_unstable_by(|&a, &b| {
+                parallel::sort(&mut ordered, "support.order", |&a, &b| {
                     (!rejected[a])
                         .cmp(&(!rejected[b]))
                         .then(score(b).total_cmp(&score(a)))
@@ -1513,7 +1531,7 @@ impl LineGraph {
                         })
                 });
                 for id in ordered {
-                    crate::cancel::check();
+                    checkpoint("support.roles");
                     let parts = [passages[&(id, 0)], passages[&(id, 1)]];
                     let (a, pa) = passage(&passage_parent, &parity, parts[0]);
                     let (b, pb) = passage(&passage_parent, &parity, parts[1]);
@@ -1536,6 +1554,7 @@ impl LineGraph {
                     }
                 }
                 for &id in &ids {
+                    checkpoint("support.roles.assign");
                     for side in 0..2 {
                         let (_, role) = passage(&passage_parent, &parity, passages[&(id, side)]);
                         roles.insert((id, side), usize::from(role));
@@ -1548,7 +1567,7 @@ impl LineGraph {
                 let mut nodes = BTreeMap::new();
                 for side in 0..2 {
                     for (local, &id) in ids.iter().enumerate() {
-                        crate::cancel::check();
+                        checkpoint("connected.spans");
                         if ignored.contains(&id) {
                             continue;
                         }
@@ -1577,7 +1596,7 @@ impl LineGraph {
                     }
                 }
                 for ((role, part), mut spans) in spans {
-                    spans.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
+                    parallel::sort(&mut spans, "connected.sort", |a, b| a.0.total_cmp(&b.0));
                     if self.parts[part].is_closed {
                         let first = spans.first().expect("support");
                         let last = spans
@@ -1592,7 +1611,7 @@ impl LineGraph {
                     }
                     let mut previous: Option<(f64, usize)> = None;
                     for (lo, hi, id) in spans {
-                        crate::cancel::check();
+                        checkpoint("connected.join");
                         if let Some((end, before)) = previous
                             && lo <= end
                         {
@@ -1607,7 +1626,7 @@ impl LineGraph {
                 }
                 let mut components = BTreeMap::<_, Vec<_>>::new();
                 for (local, &id) in ids.iter().enumerate() {
-                    crate::cancel::check();
+                    checkpoint("connected.components");
                     if ignored.contains(&id) {
                         continue;
                     }
@@ -1620,7 +1639,7 @@ impl LineGraph {
             };
             let mut pending = connected(&ids);
             while let Some(component) = pending.pop() {
-                crate::cancel::check();
+                checkpoint("sustained.pending");
                 if !component.iter().any(|&id| rejected[id]) {
                     continue;
                 }
@@ -1632,14 +1651,14 @@ impl LineGraph {
                     continue;
                 }
 
-                crate::cancel::check();
+                checkpoint("sustained.component");
                 let mut multipart = false;
                 let sustained = [0, 1].iter().all(|&side| {
                     use super::certified::Interval;
                     let mut by_source = BTreeMap::<_, Vec<_>>::new();
                     let mut parts = std::collections::BTreeSet::new();
                     for &id in &component {
-                        crate::cancel::check();
+                        checkpoint("sustained.sources");
                         for original_side in 0..2 {
                             let source = matches[id].sources[original_side];
                             let part = self.segment(source).part;
@@ -1663,7 +1682,7 @@ impl LineGraph {
                     // unequally segmented parts contribute their geometric union.
                     let mut physical = BTreeMap::<_, Vec<_>>::new();
                     for (source, spans) in by_source {
-                        crate::cancel::check();
+                        checkpoint("sustained.lengths");
                         let line = self.source(source);
                         let x = Interval(line.end.x, line.end.x)
                             .sub(Interval(line.start.x, line.start.x));
@@ -1712,10 +1731,11 @@ impl LineGraph {
                     }
                     let mut total = Interval(0., 0.);
                     for ((vertical, slope, _), mut spans) in physical {
-                        crate::cancel::check();
-                        spans.sort_unstable_by(|a, b| a[0].cmp(&b[0]));
+                        checkpoint("sustained.lines");
+                        parallel::sort(&mut spans, "sustained.sort", |a, b| a[0].cmp(&b[0]));
                         let mut merged: Vec<[BigRational; 2]> = Vec::new();
                         for span in spans {
+                            checkpoint("sustained.merge");
                             if let Some(last) = merged.last_mut()
                                 && span[0] <= last[1]
                             {
@@ -1736,6 +1756,7 @@ impl LineGraph {
                                 .sqrt()
                         };
                         for span in merged {
+                            checkpoint("sustained.widths");
                             let Some(width) =
                                 (&span[1] - &span[0]).to_f64().filter(|v| v.is_finite())
                             else {
@@ -1758,6 +1779,7 @@ impl LineGraph {
                 });
                 if multipart && sustained {
                     for id in component {
+                        checkpoint("sustained.restore");
                         rejected[id] = false;
                     }
                 }
@@ -1878,6 +1900,7 @@ impl LineGraph {
         let relevant = meetings
             .iter()
             .filter(|m| {
+                checkpoint("zones.relevant");
                 (0..2).all(|side| {
                     spans[side]
                         .iter()
@@ -1982,6 +2005,7 @@ impl LineGraph {
             let remainder = spans[side]
                 .iter()
                 .map(|&span| {
+                    checkpoint("zones.explained");
                     let covered = zones
                         .iter()
                         .flat_map(|zone| {
@@ -2004,6 +2028,7 @@ impl LineGraph {
             let p = &positions[part];
             let mut zones = Vec::new();
             for (index, meeting) in relevant.iter().enumerate() {
+                checkpoint("zones.meetings");
                 // No zone reaches further than `reach` from its meeting point, so
                 // stop once the zones still possible cannot explain the run.
                 let possible = zones
@@ -2208,7 +2233,7 @@ impl LineGraph {
             .get_or_init(|| {
                 let mut features = BTreeMap::<_, Vec<_>>::new();
                 for (&node, contacts) in &self.contacts {
-                    crate::cancel::check();
+                    checkpoint("contacts.features");
                     for contact in contacts {
                         for part in contact.parts {
                             let nodes = features
@@ -2227,10 +2252,6 @@ impl LineGraph {
             .unwrap_or(&[])
     }
     pub fn build(t: &Topology, layers: &[(LayerId, InputMode)]) -> Result<Self, Error> {
-        #[cfg(test)]
-        if reference::active() {
-            return Self::reference_build(t, layers);
-        }
         let tolerance = t.tolerance();
         let mut parts = Vec::new();
         let mut segments = Vec::new();
@@ -2252,7 +2273,7 @@ impl LineGraph {
                     ),
                 };
             for (reference, geometry) in lines {
-                crate::cancel::checkpoint("parts");
+                checkpoint("parts");
                 if mode == InputMode::Linework && collapsed(geometry, tolerance) {
                     continue;
                 }
@@ -2265,7 +2286,7 @@ impl LineGraph {
                 parts.push(GraphPart {
                     // Graphs belong to one topology, so parts carry final layer IDs.
                     reference: reference.at(layer),
-                    nodes: Vec::with_capacity(coords.len()),
+                    nodes: Vec::new(),
                     is_closed: closed,
                     original: geometry.clone(),
                 });
@@ -2292,33 +2313,43 @@ impl LineGraph {
             }
         }
         starts.push(segments.len());
+        let workers = Workers::new(segments.len());
         // A point is on a feature's boundary when an odd number of its open parts end
         // there (the OGC mod-2 rule), counted on original feature coordinates. Closed
         // parts and passages add nothing; nearby clustered endpoints stay separate.
-        let mut endpoint_counts = HashMap::<_, usize>::new();
-        // The same ends by feature and coordinate, to find those beside a contact.
-        let mut feature_ends = Vec::with_capacity(ends.len());
-        for end in &ends {
-            let point = end.point;
+        // Ends are kept by feature and coordinate, once each with their number, to
+        // count them and to find those beside a contact. Adding zero makes negative
+        // zeros positive, so equal ends are identical and the order agrees with the
+        // comparisons of the search.
+        let positive = |p: Coord| Coord {
+            x: p.x + 0.,
+            y: p.y + 0.,
+        };
+        let blank = ((LayerId(0), 0), Coord { x: 0., y: 0. });
+        let mut feature_ends = parallel::repeated(blank, ends.len(), "ends");
+        workers.fill(&mut feature_ends, |i| {
+            let end = &ends[i];
             let feature = parts[segments[end.source].part].reference.feature();
-            *endpoint_counts
-                .entry((feature, bits(point.x), bits(point.y)))
-                .or_default() += 1;
-            // Adding zero makes negative zeros positive, so the order agrees with the
-            // comparisons of the search.
-            let end = Coord {
-                x: point.x + 0.,
-                y: point.y + 0.,
-            };
-            feature_ends.push((feature, end));
-        }
-        parallel::sort(&mut feature_ends, "parts", |a, b| {
-            a.0.cmp(&b.0).then(coordinate_order(&a.1, &b.1))
+            (feature, positive(end.point))
         });
-        feature_ends.dedup();
-        let workers = Workers::new(segments.len());
-        crate::cancel::checkpoint("index");
-        let mut entries = vec![Entry::default(); segments.len()];
+        let by_feature = |a: &(FeatureKey, Coord), b: &(FeatureKey, Coord)| {
+            a.0.cmp(&b.0).then(coordinate_order(&a.1, &b.1))
+        };
+        workers.sort(&mut feature_ends, "ends.sort", by_feature);
+        let mut end_counts = Vec::new();
+        for i in 0..feature_ends.len() {
+            every(i, "ends");
+            let kept = end_counts.len();
+            if kept > 0 && feature_ends[kept - 1] == feature_ends[i] {
+                end_counts[kept - 1] += 1;
+            } else {
+                feature_ends[kept] = feature_ends[i];
+                end_counts.push(1_usize);
+            }
+        }
+        feature_ends.truncate(end_counts.len());
+        checkpoint("index");
+        let mut entries = parallel::repeated(Entry::default(), segments.len(), "index");
         workers.fill(&mut entries, |i| {
             Entry::new(i, segments[i].line(&parts).bounding_rect())
         });
@@ -2340,8 +2371,9 @@ impl LineGraph {
                 let feature = p.reference.feature();
                 let point = points[side];
                 let count = |end: Coord| {
-                    let key = (feature, bits(end.x), bits(end.y));
-                    endpoint_counts.get(&key).copied()
+                    let key = (feature, positive(end));
+                    let found = feature_ends.binary_search_by(|e| by_feature(e, &key));
+                    found.ok().map(|i| end_counts[i])
                 };
                 let nearest = || {
                     let own = [p.original.0[0], *p.original.0.last().expect("source")]
@@ -2398,9 +2430,7 @@ impl LineGraph {
                 let line = s.line(&parts);
                 let at = i + s.part;
                 for candidate in tree.locate(index::expanded(line.bounding_rect(), reach)) {
-                    if work.is_multiple_of(CHECK) {
-                        crate::cancel::checkpoint("pairs");
-                    }
+                    every(work, "pairs");
                     work += 1;
                     let j = candidate.id;
                     if j <= i {
@@ -2481,9 +2511,7 @@ impl LineGraph {
                     let part = segments[end.source].part;
                     let (mut own, mut others) = (false, Vec::new());
                     for i in candidates {
-                        if work.is_multiple_of(CHECK) {
-                            crate::cancel::checkpoint("crack");
-                        }
+                        every(work, "crack");
                         work += 1;
                         let line = segments[i].line(&parts);
                         let (_, projected) = projection(line, end.point);
@@ -2516,7 +2544,7 @@ impl LineGraph {
         let mut cracked = Vec::new();
         let mut ties = Vec::new();
         for found in paired.into_iter().chain(cracking) {
-            crate::cancel::check();
+            checkpoint("gather.contacts");
             let base = vertices + cut_points.len();
             let origin = move |at: At| match at {
                 At::Vertex(v) => v,
@@ -2535,34 +2563,31 @@ impl LineGraph {
         }
         // Endpoint parity is construction evidence, not retained graph storage.
         // Release it before allocating noded edges and incidences.
-        drop(endpoint_counts);
+        drop(end_counts);
         drop(feature_ends);
-        let order = tree.order();
+        let order = tree.order("order");
         drop(tree);
         // All contact coordinates are discovered against source segments first.
         // Canonical insertion makes clustering independent of FIDs and path direction.
         let mut sweep = Sweep::new(tolerance);
         let endpoints = ends.into_iter().map(|end| end.point).collect::<Vec<_>>();
         for mut batch in [endpoints, cracked] {
-            parallel::sort(&mut batch, "cluster", coordinate_order);
+            // Points that compare equal are identical.
+            workers.sort(&mut batch, "cluster.ends", coordinate_order);
             batch.dedup();
-            sweep.batch(&batch, |&p| p, false, "cluster", |_, _| {});
+            sweep.batch(&batch, |&p| p, false, "cluster.batch", |_, _| {});
         }
         let mut points = Vec::with_capacity(vertices + cut_points.len());
-        for (origin, &p) in parts.iter().flat_map(|part| &part.original.0).enumerate() {
-            if origin.is_multiple_of(1 << 16) {
-                crate::cancel::checkpoint("cluster");
-            }
+        let all = parts
+            .iter()
+            .flat_map(|part| &part.original.0)
+            .chain(&cut_points);
+        for (origin, &p) in all.enumerate() {
+            every(origin, "cluster.points");
             points.push((p, origin));
         }
-        debug_assert_eq!(points.len(), vertices);
-        points.extend(
-            cut_points
-                .iter()
-                .enumerate()
-                .map(|(c, &p)| (p, vertices + c)),
-        );
-        workers.sort(&mut points, "cluster", |a, b| {
+        debug_assert_eq!(points.len(), vertices + cut_points.len());
+        workers.sort(&mut points, "cluster.sort", |a, b| {
             coordinate_order(&a.0, &b.0).then(a.1.cmp(&b.1))
         });
         let mut node_of = vec![0; points.len()];
@@ -2570,7 +2595,11 @@ impl LineGraph {
         drop(points);
         let ties = ties
             .into_iter()
-            .map(|(end, at)| (end, at.into_iter().map(|o| node_of[o]).collect::<Vec<_>>()))
+            .enumerate()
+            .map(|(k, (end, at))| {
+                every(k, "ties");
+                (end, at.into_iter().map(|o| node_of[o]).collect::<Vec<_>>())
+            })
             .collect::<HashMap<_, _>>();
         // Cuts of each segment, in discovery order.
         let mut by_source = cut_sources
@@ -2578,7 +2607,7 @@ impl LineGraph {
             .enumerate()
             .map(|(c, source)| (source, c))
             .collect::<Vec<_>>();
-        workers.sort(&mut by_source, "sort", Ord::cmp);
+        workers.sort(&mut by_source, "cuts", Ord::cmp);
         // Each task nodes a run of whole parts.
         let mut runs = Vec::new();
         let mut rest = &mut parts[..];
@@ -2599,9 +2628,7 @@ impl LineGraph {
                 let id = first + k;
                 let coords = &part.original.0;
                 for source in starts[id]..starts[id + 1] {
-                    if work.is_multiple_of(CHECK) {
-                        crate::cancel::checkpoint("noding");
-                    }
+                    every(work, "noding");
                     work += 1;
                     let start = source - starts[id];
                     let vertex = source + id;
@@ -2675,6 +2702,7 @@ impl LineGraph {
         let mut raw_edges = Vec::with_capacity(segments.len());
         let mut trims = Vec::new();
         for (edges, run) in noded {
+            checkpoint("gather.edges");
             let base = raw_edges.len();
             trims.extend(run.into_iter().map(|mut trim| {
                 trim.edges.iter_mut().flatten().for_each(|e| *e += base);
@@ -2685,24 +2713,32 @@ impl LineGraph {
         if !trims.is_empty() {
             trim_returns(&mut parts, &mut raw_edges, trims, &ties);
         }
-        let mut contacts = BTreeMap::<_, Vec<_>>::new();
-        for (k, (origin, contact)) in original_contacts.into_iter().enumerate() {
-            if k.is_multiple_of(CHECK) {
-                crate::cancel::checkpoint("contacts");
-            }
-            contacts.entry(node_of[origin]).or_default().push(contact);
-        }
+        // Contacts by node, each node's in the order found.
+        let mut keys = parallel::repeated((0, 0), original_contacts.len(), "contacts");
+        workers.fill(&mut keys, |k| (node_of[original_contacts[k].0], k));
         drop(node_of);
+        workers.sort(&mut keys, "contacts.sort", Ord::cmp);
+        let mut grouped = Vec::<(usize, Vec<Contact>)>::new();
+        for (i, &(node, k)) in keys.iter().enumerate() {
+            every(i, "contacts");
+            let contact = original_contacts[k].1;
+            match grouped.last_mut() {
+                Some((last, list)) if *last == node => list.push(contact),
+                _ => grouped.push((node, vec![contact])),
+            }
+        }
+        drop(keys);
+        drop(original_contacts);
+        // In key order already, so the map is built in one pass.
+        let contacts = grouped.into_iter().collect::<BTreeMap<_, _>>();
         let coords = sweep.finish();
-        workers.sort(&mut raw_edges, "edges", |a, b| {
+        workers.sort(&mut raw_edges, "edges.sort", |a, b| {
             (a.0, a.1.part, a.1.source).cmp(&(b.0, b.1.part, b.1.source))
         });
         let mut uses = Vec::with_capacity(raw_edges.len());
         let mut groups = 0;
         for i in 0..raw_edges.len() {
-            if i.is_multiple_of(CHECK) {
-                crate::cancel::checkpoint("edges");
-            }
+            every(i, "edges");
             let (nodes, usage) = raw_edges[i];
             let start = uses.len();
             uses.push(usage);
@@ -2725,29 +2761,30 @@ impl LineGraph {
         raw_edges.truncate(groups);
         let edges = raw_edges
             .into_iter()
-            .map(|(nodes, range)| Edge {
-                nodes,
-                uses: range.part..range.source,
+            .enumerate()
+            .map(|(k, (nodes, range))| {
+                every(k, "edges");
+                Edge {
+                    nodes,
+                    uses: range.part..range.source,
+                }
             })
             .collect::<Vec<_>>();
         let mut offsets = vec![0; coords.len() + 1];
         for (k, edge) in edges.iter().enumerate() {
-            if k.is_multiple_of(CHECK) {
-                crate::cancel::checkpoint("edges");
-            }
+            every(k, "edges.count");
             for node in edge.nodes {
                 offsets[node + 1] += edge.uses.len();
             }
         }
         for i in 1..offsets.len() {
+            every(i - 1, "edges.offsets");
             offsets[i] += offsets[i - 1];
         }
-        let mut cursor = offsets[..coords.len()].to_vec();
-        let mut values = vec![Incident { part: 0 }; uses.len() * 2];
+        let mut cursor = parallel::copied(&offsets[..coords.len()], "edges.offsets");
+        let mut values = parallel::repeated(Incident { part: 0 }, uses.len() * 2, "edges.incident");
         for (k, edge) in edges.iter().enumerate() {
-            if k.is_multiple_of(CHECK) {
-                crate::cancel::checkpoint("edges");
-            }
+            every(k, "edges.incident");
             for usage in &uses[edge.uses.clone()] {
                 for node in edge.nodes {
                     values[cursor[node]] = Incident { part: usage.part };
@@ -2770,8 +2807,6 @@ impl LineGraph {
             incident,
             contacts,
             order,
-            #[cfg(test)]
-            reference: false,
         })
     }
 }

@@ -1,614 +1,58 @@
-//! The construction and matching the faster ones replaced, kept to check that
-//! they give the same graphs and violations.
+//! The construction the faster one replaced, kept to check that they give the
+//! same graphs.
 use super::*;
-use crate::{
-    CancellationToken,
-    engine::{cluster::Cluster, index},
-};
-use std::sync::{
-    Mutex, PoisonError,
-    atomic::{AtomicUsize, Ordering},
-};
+use crate::engine::cluster::{Cluster, bits};
 
-/// Requests whose graphs are built the old way.
-static TOKENS: Mutex<Vec<CancellationToken>> = Mutex::new(Vec::new());
-static COUNT: AtomicUsize = AtomicUsize::new(0);
-/// Whether graphs built now serve a request registered with [`Old::new`].
-pub(super) fn active() -> bool {
-    if COUNT.load(Ordering::Acquire) == 0 {
-        return false;
-    }
-    let Some(token) = crate::cancel::current() else {
-        return false;
-    };
-    TOKENS
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .iter()
-        .any(|t| t.same(&token))
-}
-/// Graphs of validations under a token are built the old way while this lives.
-pub(super) struct Old(CancellationToken);
-impl Old {
-    pub(super) fn new(token: &CancellationToken) -> Self {
-        TOKENS
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .push(token.clone());
-        COUNT.fetch_add(1, Ordering::Release);
-        Self(token.clone())
-    }
-}
-impl Drop for Old {
-    fn drop(&mut self) {
-        let mut tokens = TOKENS.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some(i) = tokens.iter().position(|t| t.same(&self.0)) {
-            tokens.swap_remove(i);
-            COUNT.fetch_sub(1, Ordering::Release);
-        }
-    }
-}
-
-fn trim_returns(
-    parts: &mut [GraphPart],
-    raw_edges: &mut Vec<([usize; 2], EdgeUse)>,
-    trims: Vec<Trim>,
-    ties: &HashMap<(usize, bool), Vec<Coord>>,
-    node: impl Fn(Coord) -> Option<usize>,
-) {
-    // Removed visits before the kept start and after the kept end, without
-    // the end visits themselves.
-    let removed = |trim: &Trim, n: usize| {
-        [
-            1..trim.bounds[0].max(1),
-            (trim.bounds[1] + 1).min(n - 1)..n - 1,
-        ]
-    };
-    // Parts ending at a removed node.
-    let mut ends = HashMap::<usize, Vec<usize>>::new();
-    for trim in &trims {
-        let nodes = &parts[trim.part].nodes;
-        for range in removed(trim, nodes.len()) {
-            for &node in &nodes[range] {
-                ends.entry(node).or_default();
-            }
-        }
-    }
-    for (id, part) in parts.iter().enumerate() {
-        if part.is_closed {
-            continue;
-        }
-        for node in [part.nodes.first(), part.nodes.last()]
-            .into_iter()
-            .flatten()
-        {
-            if let Some(ends) = ends.get_mut(node)
-                && !ends.contains(&id)
-            {
-                ends.push(id);
-            }
-        }
-    }
-    let mut dropped = Vec::<usize>::new();
-    for trim in trims {
-        let nodes = &parts[trim.part].nodes;
-        let n = nodes.len();
-        let [mut start, mut end] = removed(&trim, n);
-        let [first, last] = [nodes[0], nodes[n - 1]];
-        let own = |i: &usize| ends[&nodes[*i]].iter().all(|&p| p == trim.part);
-        let tied = |end: bool, at: usize| {
-            ties.get(&(trim.part, end))
-                .is_some_and(|points| points.iter().any(|&p| node(p) != Some(at)))
-        };
-        let mut bounds = [0, n - 1];
-        if !tied(true, last) && end.all(|i| nodes[i] == last || (nodes[i] != first && own(&i))) {
-            bounds[1] = trim.bounds[1];
-            dropped.extend(trim.edges[bounds[1] + 1..].iter().flatten());
-        }
-        if !tied(false, first) && start.all(|i| nodes[i] == first || (nodes[i] != last && own(&i)))
-        {
-            bounds[0] = trim.bounds[0];
-            dropped.extend(trim.edges[1..=bounds[0]].iter().flatten());
-        }
-        if bounds != [0, n - 1] {
-            parts[trim.part].nodes = nodes[bounds[0]..=bounds[1]].to_vec();
-        }
-    }
-    dropped.sort_unstable();
-    let mut next = dropped.into_iter().peekable();
-    let mut index = 0;
-    raw_edges.retain(|_| {
-        let keep = next.next_if_eq(&index).is_none();
-        index += 1;
-        keep
-    });
-}
 fn add_cut(cuts: &mut HashMap<usize, Vec<Coord>>, source: usize, line: Line, point: Coord) {
     if point != line.start && point != line.end {
         cuts.entry(source).or_default().push(point);
     }
 }
-// Zero tolerance has no grouping after contact discovery. Keep a sorted index
-// into the existing coordinate array instead of retaining the coordinate hash
-// while edge storage is allocated. Node identities keep their original order.
-#[derive(Debug)]
-struct IndexedNodes {
-    coords: Vec<Coord>,
-    order: Vec<usize>,
-}
-impl IndexedNodes {
-    fn compare(a: Coord, b: Coord) -> std::cmp::Ordering {
-        a.x.partial_cmp(&b.x)
-            .expect("finite coordinate")
-            .then_with(|| a.y.partial_cmp(&b.y).expect("finite coordinate"))
-    }
-    fn new(coords: Vec<Coord>) -> Self {
-        let mut order = (0..coords.len()).collect::<Vec<_>>();
-        order.sort_unstable_by(|&a, &b| Self::compare(coords[a], coords[b]));
-        Self { coords, order }
-    }
-    fn node(&self, p: Coord) -> usize {
-        self.order[self
-            .order
-            .binary_search_by(|&id| Self::compare(self.coords[id], p))
-            .expect("all contacts discovered before edge construction")]
-    }
-}
 impl LineGraph {
-    pub(super) fn reference_matches(&self) -> Vec<Matched> {
-        let tree = index::build(
-            self.sources
-                .iter()
-                .enumerate()
-                .map(|(i, _)| (i, self.source(i).bounding_rect())),
-        );
-        let mut result = Vec::new();
-        let mut evidence = Vec::new();
-        for (a, b) in index::pairs(&tree, &tree, self.tolerance, true) {
-            crate::cancel::check();
-            if let Some(support) =
-                crate::engine::matching::evidence(self.source(a), self.source(b), self.tolerance)
-            {
-                result.push(Matched {
-                    sources: [a, b],
-                    spans: support.spans,
-                    overlap: true,
-                });
-                if self.tolerance > 0. {
-                    evidence.push(support);
-                }
-            }
-        }
-        if self.tolerance > 0. && !result.is_empty() {
-            self.reference_retain(&tree, &mut result, &evidence);
-        }
-        result.sort_unstable_by_key(|m| m.sources);
-        result
-    }
-
-    /// Filter connected original support, before output endpoint caps are used.
-    /// A point junction can cover a short passage, but cannot establish overlap.
-    fn reference_retain(
-        &self,
-        tree: &index::Index,
-        matches: &mut [Matched],
-        evidence: &[crate::engine::matching::Evidence],
-    ) {
-        let mut groups = BTreeMap::<_, Vec<_>>::new();
-        for (i, m) in matches.iter().enumerate() {
-            crate::cancel::check();
-            #[cfg(test)]
-            JUNCTION_SUPPORT_WORK.with(|n| n.set(n.get() + 1));
-            let parts = m.sources.map(|s| self.segment(s).part);
-            let short = [0, 1].iter().any(|&side| {
-                let line = self.source(m.sources[side]);
-                (evidence[i].support[side][1] - evidence[i].support[side][0])
-                    * distance(line.start, line.end)
-                    <= self.tolerance
-            });
-            // Passages of one part that meet through a loop are judged as runs too.
-            if !self.consecutive(m.sources[0], m.sources[1]) && (!evidence[i].exact || short) {
-                groups.entry(parts).or_default();
-            }
-        }
-        if groups.is_empty() {
-            return;
-        }
-        for (i, m) in matches.iter().enumerate() {
-            crate::cancel::check();
-            let parts = m.sources.map(|s| self.segment(s).part);
-            if !self.consecutive(m.sources[0], m.sources[1])
-                && let Some(ids) = groups.get_mut(&parts)
-            {
-                ids.push(i);
-            }
-        }
-        // Original traversal distances distinguish a compact bent run from a
-        // short junction approach. This temporary index is built once per part.
-        let mut positions = vec![Vec::new(); self.parts.len()];
-        let mut uncertainty = vec![0.; self.parts.len()];
-        for parts in groups.keys() {
-            for &part in parts {
-                if !positions[part].is_empty() {
-                    continue;
-                }
-                let mut total = 0.;
-                let mut bounds = crate::engine::certified::Interval(0., 0.);
-                positions[part].push(total);
-                for line in self.original(part).lines() {
-                    crate::cancel::check();
-                    #[cfg(test)]
-                    JUNCTION_SUPPORT_WORK.with(|n| n.set(n.get() + 1));
-                    total += distance(line.start, line.end);
-                    use crate::engine::certified::Interval;
-                    let x =
-                        Interval(line.end.x, line.end.x).sub(Interval(line.start.x, line.start.x));
-                    let y =
-                        Interval(line.end.y, line.end.y).sub(Interval(line.start.y, line.start.y));
-                    bounds = bounds.add(x.square().add(y.square()).sqrt());
-                    uncertainty[part] = bounds.1 - bounds.0;
-                    if !total.is_finite()
-                        || !uncertainty[part].is_finite()
-                        || uncertainty[part] >= self.tolerance
-                    {
-                        uncertainty[part] = f64::INFINITY;
-                        break;
-                    }
-                    positions[part].push(total);
-                }
-            }
-        }
-        // Uncertifiable cumulative distances cannot reject original evidence.
-        // This includes overflow and short intervals after very large prefixes.
-        groups.retain(|parts, _| parts.iter().all(|&part| uncertainty[part].is_finite()));
-        if groups.is_empty() {
-            return;
-        }
-        let along = |source: usize, parameter: f64| {
-            let segment = self.segment(source);
-            let p = &positions[segment.part];
-            p[segment.start] + parameter * (p[segment.start + 1] - p[segment.start])
-        };
-        let mut junctions = BTreeMap::<_, Vec<[f64; 2]>>::new();
-        let mut meetings = BTreeMap::<_, Vec<Meeting>>::new();
-        for (a, b) in index::pairs(tree, tree, self.tolerance, true) {
-            crate::cancel::check();
-            #[cfg(test)]
-            JUNCTION_SUPPORT_WORK.with(|n| n.set(n.get() + 1));
-            let parts = [self.segment(a).part, self.segment(b).part];
-            if !groups.contains_key(&parts) || self.consecutive(a, b) {
-                continue;
-            }
-            let lines = [self.source(a), self.source(b)];
-            let intersection = line_intersection(lines[0], lines[1]);
-            // Points where the lines meet: they intersect or touch, or come within
-            // a small fraction of the tolerance at a vertex, as a junction vertex
-            // stored with rounding differences or a small digitizing gap does.
-            let mut points = match intersection {
-                Some(LineIntersection::SinglePoint { intersection, .. }) => vec![intersection],
-                Some(LineIntersection::Collinear { intersection }) => {
-                    vec![intersection.start, intersection.end]
-                }
-                None => Vec::new(),
-            };
-            for side in 0..2 {
-                for p in [lines[side].start, lines[side].end] {
-                    if distance(p, projection(lines[1 - side], p).1) <= self.tolerance / 16. {
-                        points.push(p);
-                    }
-                }
-            }
-            for p in points {
-                meetings.entry(parts).or_default().push(Meeting {
-                    positions: [
-                        along(a, projection(lines[0], p).0),
-                        along(b, projection(lines[1], p).0),
-                    ],
-                    end: None,
-                });
-            }
-            if let Some(LineIntersection::SinglePoint {
-                intersection,
-                is_proper: false,
-            }) = intersection
-            {
-                junctions.entry(parts).or_default().push([
-                    along(a, projection(lines[0], intersection).0),
-                    along(b, projection(lines[1], intersection).0),
-                ]);
-            }
-            for side in 0..2 {
-                let part = &self.parts[parts[side]];
-                if part.is_closed {
-                    continue;
-                }
-                let source = self.segment([a, b][side]);
-                for (position, p) in [
-                    (source.start, lines[side].start),
-                    (source.start + 1, lines[side].end),
-                ] {
-                    if position != 0 && position != part.original.0.len() - 1 {
-                        continue;
-                    }
-                    let (parameter, projected) = projection(lines[1 - side], p);
-                    if distance(p, projected) <= self.tolerance {
-                        let mut contact = [0.; 2];
-                        contact[side] = positions[parts[side]][position];
-                        contact[1 - side] = along([a, b][1 - side], parameter);
-                        junctions.entry(parts).or_default().push(contact);
-                    }
-                }
-            }
-        }
-        // Several segment pairs report the same meeting point.
-        for list in meetings.values_mut() {
-            list.sort_by(|a, b| {
-                (a.positions[0].total_cmp(&b.positions[0]))
-                    .then(a.positions[1].total_cmp(&b.positions[1]))
-            });
-            list.dedup_by(|a, b| a.positions == b.positions);
-        }
-        let mut rejected = vec![false; matches.len()];
-        let mut explained = vec![false; matches.len()];
-        fn root(parent: &mut [usize], mut i: usize) -> usize {
-            while parent[i] != i {
-                parent[i] = parent[parent[i]];
-                i = parent[i];
-            }
-            i
-        }
-        for (parts, ids) in groups {
-            crate::cancel::check();
-            let mut parent = (0..ids.len()).collect::<Vec<_>>();
-            for (side, &part) in parts.iter().enumerate() {
-                let mut spans = ids
-                    .iter()
-                    .enumerate()
-                    .map(|(local, &id)| {
-                        crate::cancel::check();
-                        let source = matches[id].sources[side];
-                        let start = self.segment(source).start as f64;
-                        let span = evidence[id].support[side];
-                        (start + span[0], start + span[1], local)
-                    })
-                    .collect::<Vec<_>>();
-                spans.sort_unstable_by(|a, b| a.0.total_cmp(&b.0));
-                if self.parts[part].is_closed {
-                    let first = spans.first().expect("support");
-                    let last = spans
-                        .iter()
-                        .max_by(|a, b| a.1.total_cmp(&b.1))
-                        .expect("support");
-                    let total = (self.original(part).0.len() - 1) as f64;
-                    if first.0 == 0. && last.1 == total {
-                        let a = root(&mut parent, first.2);
-                        let b = root(&mut parent, last.2);
-                        parent[a] = b;
-                    }
-                }
-                let mut previous: Option<(f64, usize)> = None;
-                for (lo, hi, id) in spans {
-                    crate::cancel::check();
-                    if let Some((end, before)) = previous
-                        && lo <= end
-                    {
-                        let a = root(&mut parent, id);
-                        let b = root(&mut parent, before);
-                        parent[a] = b;
-                        previous = Some((end.max(hi), before));
-                    } else {
-                        previous = Some((hi, id));
-                    }
-                }
-            }
-            let mut components = BTreeMap::<_, Vec<_>>::new();
-            for (local, &id) in ids.iter().enumerate() {
-                crate::cancel::check();
-                components
-                    .entry(root(&mut parent, local))
-                    .or_default()
-                    .push(id);
-            }
-            let contacts = junctions.entry(parts).or_default();
-            contacts.sort_unstable_by(|a, b| a[0].total_cmp(&b[0]).then(a[1].total_cmp(&b[1])));
-            contacts.dedup();
-            let contact_index = index::build(contacts.iter().enumerate().map(|(i, p)| {
-                let c = Coord { x: p[0], y: p[1] };
-                (i, geo::Rect::new(c, c))
-            }));
-            let mut ends_met = false;
-            for component in components.into_values() {
-                crate::cancel::check();
-                let spans = [0, 1].map(|side| {
-                    crate::engine::matching::union(
-                        component
-                            .iter()
-                            .map(|&id| {
-                                crate::cancel::check();
-                                #[cfg(test)]
-                                JUNCTION_SUPPORT_WORK.with(|n| n.set(n.get() + 1));
-                                let source = matches[id].sources[side];
-                                evidence[id].support[side].map(|p| along(source, p))
-                            })
-                            .collect(),
-                    )
-                });
-                // A longer output on one representative cannot manufacture
-                // longitudinal support missing from the other original passage.
-                let short = [0, 1].iter().any(|&side| {
-                    spans[side].iter().map(|s| s[1] - s[0]).sum::<f64>()
-                        + 4. * uncertainty[parts[side]] * spans[side].len() as f64
-                        <= self.tolerance
-                });
-                let exact = [0, 1].iter().all(|&side| {
-                    let spans = crate::engine::matching::union(
-                        component
-                            .iter()
-                            .filter(|&&id| evidence[id].exact)
-                            .map(|&id| {
-                                evidence[id].support[side]
-                                    .map(|p| along(matches[id].sources[side], p))
-                            })
-                            .collect(),
-                    );
-                    spans.iter().map(|s| s[1] - s[0]).sum::<f64>()
-                        - 4. * uncertainty[parts[side]] * spans.len() as f64
-                        > self.tolerance
-                });
-                let bounds = [0, 1].map(|side| {
-                    let s = &spans[side];
-                    if !self.parts[parts[side]].is_closed {
-                        return [s[0][0], s.last().expect("support")[1]];
-                    }
-                    let total = *positions[parts[side]].last().expect("source");
-                    // Cut the cycle in its largest unsupported gap. A run
-                    // across the source seam then has the same bounds after rotation.
-                    let mut gap = s[0][0] + total - s.last().expect("support")[1];
-                    let mut cut = s[0][0];
-                    for pair in s.windows(2) {
-                        let candidate = pair[1][0] - pair[0][1];
-                        if candidate > gap {
-                            gap = candidate;
-                            cut = pair[1][0];
-                        }
-                    }
-                    [cut, cut + total - gap]
-                });
-                let mut confined = false;
-                if !short && !exact {
-                    for side in 0..2 {
-                        let margin = 4. * uncertainty[parts[side]];
-                        let low = bounds[side][1] - self.tolerance + margin;
-                        let high = bounds[side][0] + self.tolerance - margin;
-                        if low > high {
-                            continue;
-                        }
-                        let other = 1 - side;
-                        let total = *positions[parts[other]].last().expect("source");
-                        let side_total = *positions[parts[side]].last().expect("source");
-                        let offsets: &[f64] = if self.parts[parts[side]].is_closed {
-                            &[0., -side_total, side_total]
-                        } else {
-                            &[0.]
-                        };
-                        for &offset in offsets {
-                            let a_low = (low + offset).max(0.);
-                            let b_high = (high + offset).min(side_total);
-                            if a_low > b_high {
-                                continue;
-                            }
-                            let mut a = Coord { x: 0., y: 0. };
-                            let mut b = Coord { x: 0., y: 0. };
-                            if side == 0 {
-                                a.x = a_low;
-                                b.x = b_high;
-                                b.y = total;
-                            } else {
-                                a.y = a_low;
-                                b.y = b_high;
-                                b.x = total;
-                            }
-                            confined = contact_index
-                                .locate_in_envelope_intersecting(&index::envelope(geo::Rect::new(
-                                    a, b,
-                                )))
-                                .any(|item| {
-                                    crate::cancel::check();
-                                    let mut p = contacts[item.data][other];
-                                    if self.parts[parts[other]].is_closed && p < bounds[other][0] {
-                                        p += total;
-                                    }
-                                    // Shared support continuing on both sides of a
-                                    // junction is a run, rather than a one-sided cap.
-                                    p < bounds[other][0] - 4. * uncertainty[parts[other]]
-                                        || p > bounds[other][1] + 4. * uncertainty[parts[other]]
-                                });
-                            if confined {
-                                break;
-                            }
-                        }
-                        if confined {
-                            break;
-                        }
-                    }
-                }
-                // Lines that meet at an angle stay within tolerance near the
-                // meeting point. Only support beyond those near zones can make a
-                // run shared linework. Without a meeting point nothing changes.
-                let near = !short && !exact && {
-                    // Line ends within tolerance of the other part meet it too.
-                    if !ends_met {
-                        let ends = self.end_meetings(tree, parts, &positions);
-                        meetings.entry(parts).or_default().extend(ends);
-                        ends_met = true;
-                    }
-                    self.near_zones_explain(
-                        tree,
-                        parts,
-                        &positions,
-                        &uncertainty,
-                        &spans,
-                        &meetings[&parts],
-                    )
-                };
-                // Within one part, only a meeting point can bound a run.
-                let judged = parts[0] != parts[1] && (short || confined);
-                if judged || near {
-                    for &id in &component {
-                        rejected[id] = true;
-                        // Other parts cannot restore what a meeting point explains.
-                        explained[id] = near;
-                    }
-                }
-            }
-        }
-        self.retain_connected_part_support(matches, evidence, &mut rejected, &explained);
-        for (m, rejected) in matches.iter_mut().zip(rejected) {
-            m.overlap = !rejected;
-        }
-    }
-    pub(super) fn reference_build(
-        t: &Topology,
-        layers: &[(LayerId, InputMode)],
-    ) -> Result<Self, Error> {
+    /// The graph [`LineGraph::build`] makes, built on one thread with an
+    /// R-tree, hashed end counts and hashed clusters.
+    pub(super) fn reference(t: &Topology, layers: &[(LayerId, InputMode)]) -> Result<Self, Error> {
+        let tolerance = t.tolerance();
         let mut parts = Vec::new();
         let mut segments = Vec::new();
+        // Open part ends with their segments.
         let mut endpoints = Vec::new();
-        let mut endpoint_sources = Vec::new();
         let mut coordinates = Vec::new();
         for &(layer, mode) in layers {
             let input = t.parts(layer)?;
-            let lines: Box<dyn Iterator<Item = (crate::model::PartRef, &Shared<LineString>)> + '_> =
-                match mode {
-                    InputMode::Linework => {
-                        Box::new(input.lines.iter().map(|p| (p.reference, &p.geometry)))
-                    }
-                    InputMode::PolygonBoundary => Box::new(
-                        crate::engine::cross::boundaries(input)
-                            .iter()
-                            .map(|p| (p.reference, &p.geometry)),
-                    ),
-                };
+            let lines: Vec<(crate::model::PartRef, &Shared<LineString>)> = match mode {
+                InputMode::Linework => input
+                    .lines
+                    .iter()
+                    .map(|p| (p.reference, &p.geometry))
+                    .collect(),
+                InputMode::PolygonBoundary => crate::engine::cross::boundaries(input)
+                    .iter()
+                    .map(|p| (p.reference, &p.geometry))
+                    .collect(),
+            };
             for (reference, geometry) in lines {
-                if mode == InputMode::Linework && collapsed(geometry, t.tolerance()) {
+                if mode == InputMode::Linework && collapsed(geometry, tolerance) {
                     continue;
                 }
-                coordinates.extend_from_slice(&geometry.0);
-                let closed = geometry.0.first() == geometry.0.last();
-                let id = parts.len();
+                let coords = &geometry.0;
+                coordinates.extend_from_slice(coords);
+                let closed = coords.first() == coords.last();
+                if !closed {
+                    let last = segments.len() + coords.len() - 2;
+                    endpoints.extend([
+                        (coords[0], segments.len()),
+                        (coords[coords.len() - 1], last),
+                    ]);
+                }
+                let part = parts.len();
+                segments.extend((0..coords.len() - 1).map(|start| Segment { start, part }));
                 parts.push(GraphPart {
-                    // Graphs belong to one topology, so parts carry final layer IDs.
                     reference: reference.at(layer),
-                    nodes: Vec::with_capacity(geometry.0.len()),
+                    nodes: Vec::new(),
                     is_closed: closed,
                     original: geometry.clone(),
                 });
-                if !closed {
-                    endpoints.extend([geometry.0[0], geometry.0[geometry.0.len() - 1]]);
-                    endpoint_sources
-                        .extend([segments.len(), segments.len() + geometry.0.len() - 2]);
-                }
-                segments.extend((0..geometry.0.len() - 1).map(|start| Segment { start, part: id }));
             }
         }
         let tree = index::build(
@@ -617,26 +61,14 @@ impl LineGraph {
                 .enumerate()
                 .map(|(i, s)| (i, s.line(&parts).bounding_rect())),
         );
-        // Most source segments have no interior contact. Store only actual cuts,
-        // avoiding one empty Vec allocation header per original segment.
         let mut split = HashMap::new();
-        // A point is on a feature's boundary when an odd number of its open parts end
-        // there (the OGC mod-2 rule), counted on original feature coordinates. Closed
-        // parts and passages add nothing; nearby clustered endpoints stay separate.
         let mut endpoint_counts = HashMap::<_, usize>::new();
-        // The same ends by feature and coordinate, to find those beside a contact.
-        let mut feature_ends = Vec::with_capacity(endpoints.len());
-        for (&point, &source) in endpoints.iter().zip(&endpoint_sources) {
+        let mut feature_ends = Vec::new();
+        for &(point, source) in &endpoints {
             let feature = parts[segments[source].part].reference.feature();
             *endpoint_counts
-                .entry((
-                    feature,
-                    crate::engine::cluster::bits(point.x),
-                    crate::engine::cluster::bits(point.y),
-                ))
+                .entry((feature, bits(point.x), bits(point.y)))
                 .or_default() += 1;
-            // Adding zero makes negative zeros positive, so the order agrees with the
-            // comparisons of the search.
             let end = Coord {
                 x: point.x + 0.,
                 y: point.y + 0.,
@@ -652,33 +84,24 @@ impl LineGraph {
             if parts[a].reference.feature() == parts[b].reference.feature() {
                 return;
             }
-            // The nearest end of the whole feature decides, and an end at the contact
-            // itself is nearest. Otherwise the touched part's own ends count within
-            // tolerance; other parts' ends only where they coincide with the contact
-            // up to rounding of the coordinates the contact came from, so within twice
-            // their rounding reach.
             let [l0, l1] = sources.map(|source| segments[source].line(&parts));
             let interior = [0, 1].map(|side| {
                 let p = &parts[[a, b][side]];
                 let feature = p.reference.feature();
                 let point = points[side];
                 let count = |end: Coord| {
-                    let key = (
-                        feature,
-                        crate::engine::cluster::bits(end.x),
-                        crate::engine::cluster::bits(end.y),
-                    );
-                    endpoint_counts.get(&key).copied()
+                    endpoint_counts
+                        .get(&(feature, bits(end.x), bits(end.y)))
+                        .copied()
                 };
                 let nearest = || {
                     let own = [p.original.0[0], *p.original.0.last().expect("source")]
                         .into_iter()
-                        .filter(|&end| !p.closed() && distance(point, end) <= t.tolerance());
-                    // Rounding is the largest coordinate's, so an end only adds its own.
+                        .filter(|&end| !p.closed() && distance(point, end) <= tolerance);
                     let base = rounding(&[point, l0.start, l0.end, l1.start, l1.end]);
-                    let window = 2. * base.min(t.tolerance());
+                    let window = 2. * base.min(tolerance);
                     let others = ends_near(&feature_ends, feature, point, window).filter(|&end| {
-                        distance(point, end) <= base.max(rounding(&[end])).min(t.tolerance())
+                        distance(point, end) <= base.max(rounding(&[end])).min(tolerance)
                     });
                     own.chain(others).min_by(|a, b| {
                         distance(point, *a)
@@ -690,25 +113,16 @@ impl LineGraph {
                     .or_else(|| nearest().and_then(count))
                     .is_none_or(|count| count.is_multiple_of(2))
             });
-            // Endpoint junctions need no retained meeting evidence.
             if interior[0] || interior[1] {
-                original_contacts.push((
-                    coordinate,
-                    Contact {
-                        parts: [a, b],
-                        interior,
-                        points,
-                        sources,
-                    },
-                ));
+                let contact = Contact {
+                    parts: [a, b],
+                    interior,
+                    points,
+                    sources,
+                };
+                original_contacts.push((coordinate, contact));
             }
         };
-        // Exact intersections meet a vertex lying on another segment only where rounding
-        // leaves it on or across that segment. A vertex within rounding of a segment, and
-        // within tolerance, meets it from either side, as in data stored without that
-        // rounding. A proper intersection beside such a segment end is the same meeting,
-        // so it is recorded there: its own rounded coordinate could join another node.
-        let tolerance = t.tolerance();
         let near = |vertex: Coord, segment: Line| {
             let (_, projected) = projection(segment, vertex);
             (tolerance > 0.
@@ -716,64 +130,57 @@ impl LineGraph {
                     <= rounding(&[vertex, segment.start, segment.end]).min(tolerance))
             .then_some(projected)
         };
-        // Interior vertices, including ring seams. Part endpoints are cracked instead.
         let vertex = |s: &Segment| {
             let part = &parts[s.part];
             (s.start > 0 || part.closed()).then(|| part.original.0[s.start])
         };
         let reach = rounding(&coordinates).min(tolerance);
         for (i, s) in segments.iter().enumerate() {
-            crate::cancel::check();
             let line = s.line(&parts);
-            for item in
-                tree.locate_in_envelope_intersecting(&index::expanded(line.bounding_rect(), reach))
-            {
+            let bounds = index::expanded(line.bounding_rect(), reach);
+            for item in tree.locate_in_envelope_intersecting(&bounds) {
                 let j = item.data;
                 if j <= i {
                     continue;
                 }
                 let other = segments[j].line(&parts);
-                if let Some(g) = line_intersection(line, other) {
-                    match g {
-                        LineIntersection::SinglePoint {
-                            intersection,
-                            is_proper,
-                        } => {
-                            let point = if is_proper {
-                                proper_intersection(line, other).unwrap_or(intersection)
-                            } else {
-                                intersection
-                            };
-                            // The nearest segment end within rounding of the other segment.
-                            let beside = [line.start, line.end, other.start, other.end]
-                                .into_iter()
-                                .enumerate()
-                                .filter(|&(_, p)| is_proper && distance(p, point) <= tolerance)
-                                .filter_map(|(k, p)| {
-                                    Some(if k < 2 {
-                                        (p, [p, near(p, other)?])
-                                    } else {
-                                        (p, [near(p, line)?, p])
-                                    })
+                match line_intersection(line, other) {
+                    Some(LineIntersection::SinglePoint {
+                        intersection,
+                        is_proper,
+                    }) => {
+                        let point = if is_proper {
+                            proper_intersection(line, other).unwrap_or(intersection)
+                        } else {
+                            intersection
+                        };
+                        let beside = [line.start, line.end, other.start, other.end]
+                            .into_iter()
+                            .enumerate()
+                            .filter(|&(_, p)| is_proper && distance(p, point) <= tolerance)
+                            .filter_map(|(k, p)| {
+                                Some(if k < 2 {
+                                    (p, [p, near(p, other)?])
+                                } else {
+                                    (p, [near(p, line)?, p])
                                 })
-                                .min_by(|a, b| {
-                                    distance(a.0, point).total_cmp(&distance(b.0, point))
-                                });
-                            match beside {
-                                Some((p, points)) => contact(i, j, points, p),
-                                None => contact(i, j, [point, point], point),
-                            }
-                            add_cut(&mut split, i, line, point);
-                            add_cut(&mut split, j, other, point);
+                            })
+                            .min_by(|a, b| distance(a.0, point).total_cmp(&distance(b.0, point)));
+                        match beside {
+                            Some((p, points)) => contact(i, j, points, p),
+                            None => contact(i, j, [point, point], point),
                         }
-                        LineIntersection::Collinear { intersection } => {
-                            for p in [intersection.start, intersection.end] {
-                                contact(i, j, [p, p], p);
-                                add_cut(&mut split, i, line, p);
-                                add_cut(&mut split, j, other, p);
-                            }
+                        add_cut(&mut split, i, line, point);
+                        add_cut(&mut split, j, other, point);
+                    }
+                    Some(LineIntersection::Collinear { intersection }) => {
+                        for p in [intersection.start, intersection.end] {
+                            contact(i, j, [p, p], p);
+                            add_cut(&mut split, i, line, p);
+                            add_cut(&mut split, j, other, p);
                         }
                     }
+                    None => {}
                 }
                 if let Some(v) = vertex(s)
                     && let Some(projected) = near(v, other)
@@ -788,13 +195,11 @@ impl LineGraph {
             }
         }
         let mut cracked = Vec::new();
-        // Crack points on other parts, for line ends also near their own line.
         let mut ties = HashMap::<(usize, bool), Vec<Coord>>::new();
-        // Endpoint cracking has no effect on the immutable input geometries.
-        if t.tolerance() > 0. {
-            for (&point, &source) in endpoints.iter().zip(&endpoint_sources) {
+        if tolerance > 0. {
+            for &(point, source) in &endpoints {
                 let mut candidates = tree
-                    .locate_in_envelope_intersecting(&index::at(point, t.tolerance()))
+                    .locate_in_envelope_intersecting(&index::at(point, tolerance))
                     .map(|i| i.data)
                     .collect::<Vec<_>>();
                 candidates.sort_unstable();
@@ -803,7 +208,7 @@ impl LineGraph {
                 for i in candidates {
                     let line = segments[i].line(&parts);
                     let (_, projected) = projection(line, point);
-                    if distance(point, projected) <= t.tolerance() {
+                    if distance(point, projected) <= tolerance {
                         contact(source, i, [point, projected], point);
                         add_cut(&mut split, i, line, projected);
                         cracked.push(projected);
@@ -820,42 +225,22 @@ impl LineGraph {
                 }
             }
         }
-        // Endpoint parity is construction evidence, not retained graph storage.
-        // Release it before allocating noded edges and incidences.
-        drop(endpoint_counts);
-        drop(feature_ends);
-        drop(endpoint_sources);
         let order = tree.iter().map(|i| u32::try_from(i.data).ok()).collect();
-        drop(tree);
-        let mut cluster = Cluster::new(t.tolerance());
-        endpoints.sort_by(coordinate_order);
-        endpoints.dedup();
-        for point in endpoints {
-            cluster.insert(point);
+        let mut cluster = Cluster::new(tolerance);
+        let ends = endpoints.into_iter().map(|(point, _)| point).collect();
+        let mut points = coordinates;
+        points.extend(split.values().flatten().copied());
+        for mut points in [ends, cracked, points] {
+            points.sort_by(coordinate_order);
+            points.dedup();
+            for point in points {
+                cluster.insert(point);
+            }
         }
-        cracked.sort_by(coordinate_order);
-        cracked.dedup();
-        for point in cracked {
-            cluster.insert(point);
-        }
-        // All contact coordinates are discovered against source segments first.
-        // Canonical insertion makes clustering independent of FIDs and path direction.
-        let mut contacts = coordinates;
-        contacts.extend(split.values().flatten().copied());
-        contacts.sort_by(coordinate_order);
-        contacts.dedup();
-        for point in contacts {
-            cluster.insert(point);
-        }
-        let mut cluster = Some(cluster);
-        let indexed = (t.tolerance() == 0.)
-            .then(|| IndexedNodes::new(cluster.take().expect("cluster").finish()));
-        let mut raw_edges: Vec<([usize; 2], EdgeUse)> = Vec::with_capacity(segments.len());
-        // Segments of one part are consecutive, so one path is built at a time.
+        let mut raw_edges = Vec::new();
         let mut path: Vec<Visit> = Vec::new();
         let mut trims = Vec::new();
         for (source, s) in segments.iter().enumerate() {
-            crate::cancel::check();
             let line = s.line(&parts);
             let mut cuts = split.remove(&source).unwrap_or_default();
             cuts.extend([line.start, line.end]);
@@ -863,11 +248,7 @@ impl LineGraph {
             cuts.dedup();
             let mut previous = None;
             for point in cuts {
-                let node = if let Some(indexed) = &indexed {
-                    indexed.node(point)
-                } else {
-                    cluster.as_mut().expect("tolerance cluster").insert(point)
-                };
+                let node = cluster.insert(point);
                 let at = (point, s.start);
                 if previous == Some(node) {
                     if let Some(visit) = path.last_mut() {
@@ -876,13 +257,11 @@ impl LineGraph {
                     continue;
                 }
                 let edge = previous.map(|p: usize| {
-                    (
-                        [p.min(node), p.max(node)],
-                        EdgeUse {
-                            part: s.part,
-                            source,
-                        },
-                    )
+                    let usage = EdgeUse {
+                        part: s.part,
+                        source,
+                    };
+                    ([p.min(node), p.max(node)], usage)
                 });
                 previous = Some(node);
                 match path.last_mut() {
@@ -902,10 +281,10 @@ impl LineGraph {
                 continue;
             }
             let part = &mut parts[s.part];
-            let bounds = if part.is_closed || t.tolerance() == 0. {
+            let bounds = if part.is_closed || tolerance == 0. {
                 [0, path.len() - 1]
             } else {
-                kept_visits(&path, &part.original.0, t.tolerance())
+                kept_visits(&path, &part.original.0, tolerance)
             };
             part.nodes.extend(path.iter().map(|v| v.node));
             if bounds == [0, path.len() - 1] {
@@ -929,86 +308,46 @@ impl LineGraph {
             path.clear();
         }
         if !trims.is_empty() {
-            let cluster = cluster.as_ref().expect("tolerance cluster");
-            trim_returns(&mut parts, &mut raw_edges, trims, &ties, |p| cluster.get(p));
+            let ties: HashMap<_, Vec<usize>> = ties
+                .into_iter()
+                .map(|(end, points)| {
+                    let nodes = points.iter().map(|&p| cluster.get(p).expect("crack point"));
+                    (end, nodes.collect())
+                })
+                .collect();
+            trim_returns(&mut parts, &mut raw_edges, trims, &ties);
         }
         let mut contacts = BTreeMap::<_, Vec<_>>::new();
         for (coordinate, contact) in original_contacts {
-            crate::cancel::check();
-            let node = if let Some(indexed) = &indexed {
-                indexed.node(coordinate)
-            } else {
-                cluster
-                    .as_mut()
-                    .expect("tolerance cluster")
-                    .insert(coordinate)
-            };
+            let node = cluster.insert(coordinate);
             contacts.entry(node).or_default().push(contact);
         }
-        let coords = if let Some(indexed) = indexed {
-            indexed.coords
-        } else {
-            cluster.expect("tolerance cluster").finish()
-        };
+        let coords = cluster.finish();
+        // Each node lists the parts of its edges in the order of their nodes,
+        // parts and sources.
         raw_edges.sort_unstable_by_key(|e| (e.0, e.1.part, e.1.source));
-        let mut uses = Vec::with_capacity(raw_edges.len());
-        let mut groups = 0;
-        for i in 0..raw_edges.len() {
-            crate::cancel::check();
-            let (nodes, usage) = raw_edges[i];
-            let start = uses.len();
-            uses.push(usage);
-            // Compact group ranges in the original entries. The final collect
-            // can reuse this allocation because source and target have the same
-            // size and alignment; no second full edge array is needed.
-            if groups == 0 || raw_edges[groups - 1].0 != nodes {
-                raw_edges[groups] = (
-                    nodes,
-                    EdgeUse {
-                        part: start,
-                        source: start + 1,
-                    },
-                );
-                groups += 1;
-            } else {
-                raw_edges[groups - 1].1.source = start + 1;
+        let mut lists = vec![Vec::new(); coords.len()];
+        for (nodes, usage) in raw_edges {
+            for node in nodes {
+                lists[node].push(Incident { part: usage.part });
             }
         }
-        raw_edges.truncate(groups);
-        let edges = raw_edges
-            .into_iter()
-            .map(|(nodes, range)| Edge {
-                nodes,
-                uses: range.part..range.source,
-            })
-            .collect::<Vec<_>>();
-        let mut offsets = vec![0; coords.len() + 1];
-        for edge in &edges {
-            for node in edge.nodes {
-                offsets[node + 1] += edge.uses.len();
-            }
-        }
-        for i in 1..offsets.len() {
-            offsets[i] += offsets[i - 1];
-        }
-        let mut cursor = offsets[..coords.len()].to_vec();
-        let mut values = vec![Incident { part: 0 }; uses.len() * 2];
-        for edge in &edges {
-            for usage in &uses[edge.uses.clone()] {
-                for node in edge.nodes {
-                    values[cursor[node]] = Incident { part: usage.part };
-                    cursor[node] += 1;
-                }
-            }
-        }
-        let incident = Incidences { offsets, values };
-        Ok(Self {
+        let offsets = std::iter::once(0)
+            .chain(lists.iter().scan(0, |n, list| {
+                *n += list.len();
+                Some(*n)
+            }))
+            .collect();
+        let incident = Incidences {
+            offsets,
+            values: lists.into_iter().flatten().collect(),
+        };
+        let graph = Self {
             matches: Cache::new(),
-            #[cfg(test)]
             match_pairs: Cache::new(),
             match_features: Cache::new(),
             canonical_directions: Cache::new(),
-            tolerance: t.tolerance(),
+            tolerance,
             contact_nodes: Cache::new(),
             coords,
             sources: segments,
@@ -1016,17 +355,42 @@ impl LineGraph {
             incident,
             contacts,
             order,
-            reference: true,
-        })
+        };
+        graph.matches.get_or_init(|| graph.reference_matches());
+        Ok(graph)
+    }
+    /// The matches [`LineGraph::matches`] finds, found on one thread with an
+    /// R-tree.
+    fn reference_matches(&self) -> Vec<Matched> {
+        let tree =
+            index::build((0..self.sources.len()).map(|i| (i, self.source(i).bounding_rect())));
+        let (mut result, evidence): (Vec<_>, Vec<_>) =
+            index::pairs(&tree, &tree, self.tolerance, true)
+                .filter_map(|(a, b)| {
+                    let support = crate::engine::matching::evidence(
+                        self.source(a),
+                        self.source(b),
+                        self.tolerance,
+                    )?;
+                    let matched = Matched {
+                        sources: [a, b],
+                        spans: support.spans,
+                        overlap: true,
+                    };
+                    Some((matched, support))
+                })
+                .unzip();
+        if self.tolerance > 0. && !result.is_empty() {
+            self.retain_sustained_matches(&tree, &Workers::new(0), &mut result, &evidence);
+        }
+        result.sort_unstable_by_key(|m| m.sources);
+        result
     }
 }
 
 mod tests {
     use super::*;
-    use crate::{
-        Layer, Rule, SinkError,
-        cancel::{self, hooks},
-    };
+    use crate::{CancellationToken, Layer, Rule, SinkError, cancel::hooks};
     use geo::{Geometry, MapCoords, MultiLineString, Polygon};
     use std::sync::Arc;
 
@@ -1320,11 +684,8 @@ mod tests {
         out.push(format!("{summary:?}"));
         Ok(out)
     }
-    fn reference_report(case: &Case) -> Vec<String> {
-        let token = CancellationToken::default();
-        let _old = Old::new(&token);
-        report(&topology(case).0, token).expect("report")
-    }
+    /// Everything of a graph that rules read, other than what they derive
+    /// from it.
     fn text(g: &LineGraph) -> String {
         let parts = g
             .parts
@@ -1341,36 +702,62 @@ mod tests {
             g.matches()
         )
     }
-    fn graph(case: &Case, inputs: usize, old: bool) -> String {
+    /// Texts of the graphs that rules on a case use: of its lines with the
+    /// other lines or with the polygon boundaries for `inputs` 1 and 2; for 0
+    /// of its lines, then of each line feature alone at the case's tolerance
+    /// and at zero.
+    fn graphs(case: &Case, inputs: usize, reference: bool) -> Vec<String> {
+        let build = |t: &Topology, layers: Vec<(LayerId, InputMode)>| {
+            if reference {
+                text(&LineGraph::reference(t, &layers).expect("graph"))
+            } else {
+                text(&t.graph_inputs(layers).expect("graph"))
+            }
+        };
         let (t, [a, b, p]) = topology(case);
-        let inputs = match inputs {
+        let layers = match inputs {
             0 => vec![(a, InputMode::Linework)],
             1 => vec![(a, InputMode::Linework), (b, InputMode::Linework)],
             _ => vec![(a, InputMode::Linework), (p, InputMode::PolygonBoundary)],
         };
-        let token = CancellationToken::default();
-        let _old = old.then(|| Old::new(&token));
-        let g = cancel::scope(Some(token), || t.graph_inputs(inputs)).expect("graph");
-        assert_eq!(g.reference, old);
-        text(&g)
+        let mut out = vec![build(&t, layers)];
+        if inputs > 0 {
+            return out;
+        }
+        for (fid, geometry) in case.layers[0].features() {
+            for tolerance in [case.tolerance, 0.] {
+                let mut alone = Topology::new(tolerance).expect("tolerance");
+                let layer =
+                    alone.add_layer(Layer::from_features("self", [(fid, geometry.clone())]));
+                out.push(build(&alone, vec![(layer, InputMode::Linework)]));
+            }
+        }
+        out
+    }
+    fn assert_same(found: &[String], expected: &[String], case: &str) {
+        assert_eq!(found.len(), expected.len(), "{case}");
+        for (k, (found, expected)) in found.iter().zip(expected).enumerate() {
+            assert_eq!(found, expected, "{case}, graph {k}");
+        }
     }
     /// Thread counts and task sizes, forced whatever the input size.
     const SPLITS: [(usize, usize); 4] = [(2, 1), (3, 2), (4, 7), (8, 64)];
 
     /// Compare graphs of seeded cases with those built the reference way,
-    /// split into tasks for even seeds.
+    /// split into tasks for even seeds. Rules read nothing else of their
+    /// inputs, so equal graphs give equal violations.
     fn compare_graphs(seeds: std::ops::Range<u64>) {
         for seed in seeds {
             let case = case(seed, 4 + seed as usize % 24);
             let inputs = seed as usize % 3;
-            let expected = graph(&case, inputs, true);
+            let expected = graphs(&case, inputs, true);
             let (threads, grain) = SPLITS[seed as usize / 2 % SPLITS.len()];
             let found = if seed % 2 == 1 {
-                graph(&case, inputs, false)
+                graphs(&case, inputs, false)
             } else {
-                Workers::forced(threads, grain, || graph(&case, inputs, false))
+                Workers::forced(threads, grain, || graphs(&case, inputs, false))
             };
-            assert_eq!(found, expected, "case {seed}");
+            assert_same(&found, &expected, &format!("case {seed}"));
         }
     }
     #[test]
@@ -1382,28 +769,24 @@ mod tests {
         compare_graphs(700..1400);
     }
 
-    /// Compare violations of seeded cases with those found on graphs built
-    /// the reference way, split into tasks for even seeds.
+    /// Compare violations of seeded cases split into tasks with those found
+    /// on the calling thread.
     fn compare_violations(seeds: std::ops::Range<u64>) {
         for seed in seeds {
             let case = case(seed + 10_000, 4 + seed as usize % 20);
-            let expected = reference_report(&case);
-            let (threads, grain) = SPLITS[seed as usize / 2 % SPLITS.len()];
             let run = || report(&topology(&case).0, CancellationToken::default());
-            let found = if seed % 2 == 1 {
-                run()
-            } else {
-                Workers::forced(threads, grain, run)
-            };
-            assert_eq!(found.expect("report"), expected, "case {seed}");
+            let expected = run().expect("report");
+            let (threads, grain) = SPLITS[seed as usize % SPLITS.len()];
+            let found = Workers::forced(threads, grain, run).expect("report");
+            assert_eq!(found, expected, "case {seed}");
         }
     }
     #[test]
-    fn violations_equal_those_found_the_reference_way() {
+    fn splitting_into_tasks_changes_no_violations() {
         compare_violations(0..200);
     }
     #[test]
-    fn violations_of_more_cases_equal_those_found_the_reference_way() {
+    fn splitting_more_cases_into_tasks_changes_no_violations() {
         compare_violations(200..400);
     }
 
@@ -1480,75 +863,92 @@ mod tests {
             let (t, [a, ..]) = topology(&case);
             let segments = t.graph(vec![a]).expect("graph").sources.len();
             assert!(segments >= 1 << 14, "{segments} segments");
-            let expected = (graph(&case, 1, true), reference_report(&case));
-            for threads in [1, 2, 4, 0] {
+            let pool = |threads| {
+                rayon::ThreadPoolBuilder::new()
+                    .num_threads(threads)
+                    .build()
+                    .expect("pool")
+            };
+            let run = || report(&topology(&case).0, CancellationToken::default());
+            let expected = (
+                graphs(&case, 1, true),
+                pool(1).install(run).expect("report"),
+            );
+            for threads in [2, 4, 0] {
                 let run = || {
-                    let token = CancellationToken::default();
-                    hooks::watch(&token, None);
+                    let token = hooks::watched(None);
                     let report = report(&topology(&case).0, token.clone());
-                    let split = hooks::unwatch(&token).workers > 0;
-                    assert_eq!(split, rayon::current_num_threads() > 1, "{threads}");
-                    (graph(&case, 1, false), report.expect("report"))
+                    assert!(hooks::record(&token).workers > 0, "{threads}");
+                    (graphs(&case, 1, false), report.expect("report"))
                 };
                 let found = if threads == 0 {
                     run()
                 } else {
-                    let pool = rayon::ThreadPoolBuilder::new()
-                        .num_threads(threads)
-                        .build()
-                        .expect("pool");
-                    pool.install(run)
+                    pool(threads).install(run)
                 };
-                assert!(found == expected, "case {seed} in a pool of {threads}");
+                let name = format!("case {seed} in a pool of {threads}");
+                assert_same(&found.0, &expected.0, &name);
+                assert!(found.1 == expected.1, "{name}");
             }
         }
     }
-
-    /// Steps that construction and matching pass on a case with near matches.
-    const STEPS: [&str; 11] = [
-        "parts",
-        "index",
-        "pairs",
-        "crack",
-        "cluster",
-        "noding",
-        "contacts",
-        "edges",
-        "matches.index",
-        "matches.pairs",
-        "matches.retain",
-    ];
-    fn cancellation_case() -> Case {
-        let mut case = case(17, 60);
-        case.tolerance = 0.3;
-        case
+    #[test]
+    fn small_inputs_are_handled_on_the_calling_thread() {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .expect("pool");
+        for seed in 0..20 {
+            let case = case(seed, 28);
+            let token = hooks::watched(None);
+            pool.install(|| report(&topology(&case).0, token.clone()))
+                .expect("report");
+            assert_eq!(hooks::record(&token).workers, 0, "case {seed}");
+        }
     }
+
+    /// A case that passes every checkpoint of construction and matching.
+    fn cancellation_case() -> Case {
+        case(2, 40)
+    }
+    /// The checkpoints it passes.
+    const STEPS: &str = "\
+        cluster cluster.batch cluster.ends cluster.points cluster.sort collapsed \
+        connected.components connected.join connected.sort connected.spans contacts \
+        contacts.features contacts.sort crack cuts directions edges edges.count edges.incident \
+        edges.offsets edges.sort ends ends.sort fill gather.contacts gather.edges index \
+        matches.features matches.index matches.pairs matches.retain matches.sort noding order \
+        pairs parts retain.components retain.confined retain.found retain.groups retain.ids \
+        retain.junctions retain.junctions.sort retain.meetings retain.meetings.sort \
+        retain.positions retain.runs retain.spans retain.spans.join retain.spans.sort \
+        retain.support retain.support.spans returns.chord returns.first returns.last \
+        returns.near returns.segments support.each support.evidence support.groups support.ids \
+        support.lengths support.order support.participants support.passages support.roles \
+        support.roles.assign support.runs support.runs.join support.runs.sort \
+        sustained.component sustained.lengths sustained.lines sustained.merge sustained.pending \
+        sustained.restore sustained.sort sustained.sources sustained.widths ties trim.dropped \
+        trim.edges trim.ends trim.own trim.parts trim.removed zones.explained zones.meetings \
+        zones.relevant";
 
     #[test]
     fn cancelling_at_any_step_stops_every_thread_and_keeps_the_topology_usable() {
         let case = cancellation_case();
-        let expected = reference_report(&case);
         let (threads, grain) = (4, 16);
-        let token = CancellationToken::default();
-        hooks::watch(&token, None);
-        let (t, _) = topology(&case);
-        let found = Workers::forced(threads, grain, || report(&t, token.clone()));
-        let visits = hooks::unwatch(&token).visits;
+        let run = |t: &Topology, token| Workers::forced(threads, grain, || report(t, token));
+        let expected = report(&topology(&case).0, CancellationToken::default()).expect("report");
+        let token = hooks::watched(None);
+        let found = run(&topology(&case).0, token.clone());
         assert_eq!(found.expect("report"), expected);
-        for step in STEPS {
-            assert!(
-                visits.get(step).is_some_and(|&n| n > 0),
-                "{step}: {visits:?}"
-            );
-        }
+        let visits = hooks::record(&token).visits;
+        let steps = visits.keys().copied().collect::<Vec<_>>();
+        assert_eq!(steps, STEPS.split_whitespace().collect::<Vec<_>>());
         let mut r = Random::new(99);
         for (&step, &count) in &visits {
             for visit in [0, r.below(count), count - 1] {
                 let (t, _) = topology(&case);
-                let token = CancellationToken::default();
-                hooks::watch(&token, Some((step, visit)));
-                let result = Workers::forced(threads, grain, || report(&t, token.clone()));
-                let record = hooks::unwatch(&token);
+                let token = hooks::watched(Some((step, visit)));
+                let result = run(&t, token.clone());
+                let record = hooks::record(&token);
                 assert!(
                     matches!(result, Err(SinkError::Core(Error::Cancelled))),
                     "{step} {visit}: {result:?}"
@@ -1560,9 +960,7 @@ mod tests {
                     after > visit && after <= visit + threads,
                     "{step} {visit}: {after}"
                 );
-                let again = Workers::forced(threads, grain, || {
-                    report(&t, CancellationToken::default()).expect("report")
-                });
+                let again = run(&t, CancellationToken::default()).expect("report");
                 assert_eq!(again, expected, "{step} {visit}");
             }
         }
@@ -1571,11 +969,10 @@ mod tests {
     #[test]
     fn cancelling_one_of_two_validations_leaves_the_other_whole() {
         let case = cancellation_case();
-        let expected = reference_report(&case);
+        let expected = report(&topology(&case).0, CancellationToken::default()).expect("report");
         for (step, wait) in [("noding", "index"), ("matches.pairs", "matches.index")] {
             let (t, _) = topology(&case);
-            let cancelled = CancellationToken::default();
-            hooks::watch(&cancelled, Some((step, 0)));
+            let cancelled = hooks::watched(Some((step, 0)));
             let (first, second) = std::thread::scope(|scope| {
                 let first =
                     scope.spawn(|| Workers::forced(4, 16, || report(&t, cancelled.clone())));
@@ -1587,13 +984,75 @@ mod tests {
                     .spawn(|| Workers::forced(4, 16, || report(&t, CancellationToken::default())));
                 (first.join().expect("first"), second.join().expect("second"))
             });
-            let record = hooks::unwatch(&cancelled);
             assert!(
                 matches!(first, Err(SinkError::Core(Error::Cancelled))),
                 "{step}: {first:?}"
             );
-            assert_eq!(record.live, 0, "{step}");
+            assert_eq!(hooks::record(&cancelled).live, 0, "{step}");
             assert_eq!(second.expect("report"), expected, "{step}");
+        }
+    }
+
+    /// Lines of one segment on a grid, some meeting at their ends and some
+    /// overlapping.
+    fn tiny_lines(count: usize) -> Topology {
+        let features = (0..count)
+            .map(|k| {
+                let (x, y) = ((k % 200) as f64, (k / 200) as f64);
+                let (dx, dy) = [(1., 0.), (0., 0.5), (0.5, 0.5), (2., 0.)][k % 4];
+                let line = LineString(vec![
+                    Coord { x, y },
+                    Coord {
+                        x: x + dx,
+                        y: y + dy,
+                    },
+                ]);
+                (k as i64, Geometry::from(line))
+            })
+            .collect::<Vec<_>>();
+        let mut t = Topology::new(0.001).expect("tolerance");
+        let a = t.add_layer(Layer::from_features("tiny", features));
+        t.add_rule(Rule::LineMustNotHaveDangles, a, None)
+            .expect("rule");
+        t.add_rule(Rule::LineMustNotOverlap, a, None).expect("rule");
+        t
+    }
+    #[test]
+    fn many_tiny_parts_are_cancelled_in_every_step() {
+        let count = 20_000;
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .expect("pool");
+        let token = hooks::watched(None);
+        pool.install(|| report(&tiny_lines(count), token.clone()))
+            .expect("report");
+        let record = hooks::record(&token);
+        assert!(record.workers > 0);
+        // Loops over all parts, ends, points, segments and edges check as they go.
+        for step in ["parts", "directions"] {
+            assert!(record.visits[step] >= count, "{step}: {:?}", record.visits);
+        }
+        for step in [
+            "ends",
+            "cluster.points",
+            "pairs",
+            "noding",
+            "edges",
+            "edges.count",
+        ] {
+            let least = count / crate::cancel::CHECK;
+            assert!(record.visits[step] >= least, "{step}: {:?}", record.visits);
+        }
+        for (&step, &visits) in &record.visits {
+            let t = tiny_lines(count);
+            let token = hooks::watched(Some((step, visits / 2)));
+            let result = pool.install(|| report(&t, token.clone()));
+            assert!(
+                matches!(result, Err(SinkError::Core(Error::Cancelled))),
+                "{step}: {result:?}"
+            );
+            assert_eq!(hooks::record(&token).live, 0, "{step}");
         }
     }
 }
