@@ -57,6 +57,34 @@ def pytest_configure(config: pytest.Config) -> None:
     isolate_network_cache(Path(folder) / 'cache')
 
 
+# Whether the fixtures of a test were all set up
+SET_UP = pytest.StashKey[bool]()
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(
+    item: pytest.Item, call: pytest.CallInfo[None]
+) -> c.Generator[None, t.Any, None]:
+    outcome = yield
+    if call.when == 'setup':
+        item.stash[SET_UP] = outcome.get_result().passed
+
+
+@pytest.hookimpl(hookwrapper=True, tryfirst=True)
+def pytest_runtest_teardown(item: pytest.Item) -> c.Generator[None, None, None]:
+    """Keeps pytest-qgis from asking again for the fixtures of a test that
+    skipped or failed in its set-up.
+
+    Before the teardown, pytest-qgis asks for each fixture with 'layer' in
+    its name. One that skipped or failed raises again there, the test is not
+    torn down, and each later test errors. One that was not reached is set
+    up, which may run a check.
+    """
+    if isinstance(item, pytest.Function) and not item.stash.get(SET_UP, True):
+        item.funcargs.pop('request', None)
+    yield
+
+
 # The size of the text of a user interface, in pixels: 9 points at 96 dpi,
 # which is what QGIS has on Windows, Linux and macOS
 UI_TEXT_PIXELS = 12

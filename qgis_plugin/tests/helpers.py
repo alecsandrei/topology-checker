@@ -294,14 +294,15 @@ def gated_executable(
     return script_executable(directory, body, name)
 
 
-# As a path from here, as some tests run the tool from another folder
-NAMED = os.environ.get('TOPOLOGY_CHECKER')
-NAMED_PATH = str(Path(NAMED).absolute()) if NAMED else None
+# As a path from here, as some tests run the tool from another folder. It is
+# looked up once: `which` fails in a test that fakes Windows
+REAL = os.environ.get('TOPOLOGY_CHECKER') or shutil.which('topology-checker')
+REAL_PATH = str(Path(REAL).absolute()) if REAL else None
 
 
 def real_executable() -> str | None:
     """The tool named by TOPOLOGY_CHECKER, or the one on the PATH."""
-    return NAMED_PATH or shutil.which('topology-checker')
+    return REAL_PATH
 
 
 # Set to 1 where the tests must run with the Python package, as in CI where
