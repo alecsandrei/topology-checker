@@ -9,13 +9,20 @@ here.
 
 Each report names its rule and layers, which have to be those of the next
 rule of the run: a run whose report is of other rules, or of more, fails.
+So does a run with a line of the report that cannot be read: no line after
+it is read.
+
+Each error is made small as soon as it is parsed, so that a rule of many
+errors takes a fraction of the memory of its parsed line.
 """
 
 from __future__ import annotations
 
 import collections.abc as c
 import json
+import re
 import struct
+import sys
 import typing as t
 
 from ..exceptions import RunError
@@ -34,7 +41,7 @@ MULTI_POINT, MULTI_LINE_STRING, MULTI_POLYGON, COLLECTION = 4, 5, 6, 7
 # The start of each geometry: little-endian, and its type
 HEADERS = {kind: struct.pack('<BI', 1, kind) for kind in range(1, 8)}
 # What a report that cannot be read raises
-UNREADABLE = (
+MALFORMED = (
     KeyError,
     TypeError,
     ValueError,
@@ -45,7 +52,26 @@ UNREADABLE = (
     struct.error,
 )
 
+# The start of a line of the report, which a line that is not of it does
+# not have: the report of a rule, or the last line
+REPORT_LINE = re.compile(r'\s*\{\s*"(?:spec|tolerance)"')
+# How much of a line of the report that cannot be read the log shows
+SHOWN_CHARS = 200
+
 Coord = t.Mapping[str, float]
+# A feature that an error names: the number of its layer, its id and part
+Reference = tuple[int, int, 'int | None']
+
+
+class Parsed(t.NamedTuple):
+    """An error of the report as it is parsed: the strings of its rule and
+    kind are shared with the other errors, and its geometry is WKB."""
+
+    rule: str
+    error_type: str
+    origin: Reference | None
+    destination: Reference | None
+    wkb: bytes
 
 
 def source_id(ids: IdMap, layer: object, fid: object) -> object:
@@ -75,7 +101,7 @@ def collection(
     return items
 
 
-def write(geometry: object, out: bytearray) -> None:
+def put_geometry(geometry: object, out: bytearray) -> None:
     """Writes the WKB of a geometry as geo-types has it in JSON, such as
     {"Point": {"x": 1.0, "y": 2.0}}. A line, a rectangle and a triangle are
     the line string and the polygons that they stand for."""
@@ -102,7 +128,7 @@ def write(geometry: object, out: bytearray) -> None:
             polygon([part['exterior'], *part['interiors']], out)
     elif kind == 'GeometryCollection':
         for member in collection(COLLECTION, value, out):
-            write(member, out)
+            put_geometry(member, out)
     elif kind == 'Rect':
         low, high = value['min'], value['max']
         corners = [
@@ -122,7 +148,7 @@ def write(geometry: object, out: bytearray) -> None:
 
 def wkb(geometry: object) -> bytes:
     out = bytearray()
-    write(geometry, out)
+    put_geometry(geometry, out)
     return bytes(out)
 
 
@@ -136,6 +162,33 @@ def text(value: object) -> str:
     if not isinstance(value, str):
         raise TypeError(value)
     return value
+
+
+def reference(value: t.Any) -> Reference | None:
+    """The feature that an error names, if any. An error of a whole feature
+    names no part."""
+    if value is None:
+        return None
+    part = value['part']
+    return (
+        number(value['layer']),
+        number(value['fid']),
+        None if part is None else number(part),
+    )
+
+
+def parsed(entry: dict[str, t.Any]) -> object:
+    """An object of a line as it is parsed: an error is made a Parsed,
+    anything else stays as it is."""
+    if 'error_type' not in entry or 'geometry' not in entry:
+        return entry
+    return Parsed(
+        sys.intern(str(entry['rule'])),
+        sys.intern(str(entry['error_type'])),
+        reference(entry['origin']),
+        reference(entry['destination']),
+        wkb(entry['geometry']),
+    )
 
 
 def shown(rule: str, layers: c.Iterable[str]) -> str:
@@ -158,6 +211,8 @@ class Report:
         self.warnings: list[str] | None = None
         # The number that the tool gives each layer, by its alias
         self.numbers: dict[str, int] = {}
+        # Whether a line of the report could not be read
+        self.broken = False
 
     @property
     def complete(self) -> bool:
@@ -167,36 +222,54 @@ class Report:
             and self.warnings is not None
         )
 
+    @property
+    def over(self) -> bool:
+        """Whether no more of the report is read: it is complete, or a line
+        of it could not be read."""
+        return self.complete or self.broken
+
     def line(self, line: str) -> bool:
-        """Reads a line of the output, and says whether it was a line of the
-        report. One that is not, such as the start of a line that was cut
-        off, says nothing of the run, nor does any line once the report is
-        complete."""
-        if self.complete:
+        """Reads a line of the output, and says whether it was read as a
+        line of the report. One that is not of the report, such as a message
+        of the tool, says nothing of the run, nor does any line once the
+        report is over. One of the report that cannot be read breaks it."""
+        if self.over:
             return False
         try:
-            value = json.loads(line)
-        except (ValueError, RecursionError):
+            value = json.loads(line, object_hook=parsed)
+        except MALFORMED as error:
+            if REPORT_LINE.match(line):
+                self.unreadable(line, error)
             return False
         if not isinstance(value, dict):
             return False
         entry = t.cast('dict[str, object]', value)
         if 'spec' in entry:
-            return self.rule(entry)
+            return self.rule(entry, line)
         if 'tolerance' not in entry:
             return False
-        # An older executable has the rules in the report
+        # An older executable has the rules in the report, which are all
+        # done: the stage does not go through them
         rules = entry.get('rules', [])
-        if not isinstance(rules, list):
+        warnings = entry.get('warnings', [])
+        if not isinstance(rules, list) or not isinstance(warnings, list):
+            self.unreadable(line, TypeError())
             return False
-        read = all(self.rule(rule) for rule in t.cast('list[object]', rules))
-        return self.summary(entry) and read
+        rules = t.cast('list[object]', rules)
+        for position, rule in enumerate(rules):
+            if not self.rule(rule, line, position < len(rules) - 1):
+                return False
+        self.warnings = [str(w) for w in t.cast('list[object]', warnings)]
+        return True
 
-    def rule(self, value: object) -> bool:
+    def rule(self, value: object, line: str, more: bool = False) -> bool:
         """Reads the report of the next rule, which is gathered once all of
-        it is read. One that cannot be read is not gathered. One of another
-        rule or other layers than the next rule, or past the last, fails
-        the run, which keeps the rules before it."""
+        it is read, with more saying that the rule after it is done too.
+        One that cannot be read breaks the report. One of another rule or
+        other layers than the next rule, or past the last, fails the run,
+        which keeps the rules before it.
+
+        A run that is canceled stops at once, without the rule."""
         violation = self.violation
         try:
             entry = t.cast('dict[str, t.Any]', value)
@@ -209,26 +282,52 @@ class Report:
             numbers = self.expect(text(spec['rule']), layers)
             aliases = {index: name for name, index in layers}
             count = sum(number(n) for n in entry['counts'].values())
+            errors = entry['errors']
+            if not isinstance(errors, list):
+                raise TypeError(errors)
+            errors = t.cast('list[object]', errors)
+            # Each parsed error goes as soon as it is a row, from the first
+            errors.reverse()
             found: list[Found] = []
-            for error in entry['errors']:
-                # The run stops at once, without this rule
+            while errors:
                 if self.gathered.feedback.isCanceled():
                     return False
+                error = errors.pop()
+                if not isinstance(error, Parsed):
+                    raise TypeError(error)
                 values = (
                     violation,
-                    str(error['rule']),
-                    str(error['error_type']),
-                    *self.feature(error['origin'], aliases),
-                    *self.feature(error['destination'], aliases),
+                    error.rule,
+                    error.error_type,
+                    *self.feature(error.origin, aliases),
+                    *self.feature(error.destination, aliases),
                 )
-                found += found_in(from_wkb(wkb(error['geometry'])), values)
+                found += found_in(from_wkb(error.wkb), values)
                 violation += 1
-        except UNREADABLE:
+        except MALFORMED as error:
+            self.unreadable(line, error)
             return False
         self.violation = violation
         self.numbers = numbers
-        self.gathered.add(found, count)
+        self.gathered.add(found, count, more)
         return True
+
+    def unreadable(self, line: str, error: BaseException) -> None:
+        """Tells the log of a line of the report that cannot be read, after
+        which no line is read."""
+        self.broken = True
+        start = line.strip()
+        if len(start) > SHOWN_CHARS:
+            start = start[:SHOWN_CHARS] + '…'
+        self.gathered.feedback.pushInfo(
+            tr(
+                'The report of rule {number} cannot be read ({error}): {line}'
+            ).format(
+                number=len(self.gathered.counts) + 1,
+                error=type(error).__name__,
+                line=start,
+            )
+        )
 
     def expect(
         self, rule: str, layers: c.Sequence[tuple[str, int]]
@@ -265,28 +364,19 @@ class Report:
             ).format(count=len(jobs), rule=told)
         self.gathered.feedback.pushInfo(detail)
         raise RunError(
-            tr('The report of the tool is not of the rules of the run')
+            tr(
+                "The executable's report does not match the rules that "
+                'were run.'
+            )
         )
 
     def feature(
-        self, reference: t.Any, aliases: c.Mapping[int, str]
+        self, reference: Reference | None, aliases: c.Mapping[int, str]
     ) -> tuple[object, object, object]:
         """The layer, the source id and the part of a feature that an error
-        names, if any. An error of a whole feature names no part."""
+        names, if any."""
         if reference is None:
             return None, None, None
-        alias = aliases[number(reference['layer'])]
-        fid = number(reference['fid'])
-        part = reference['part']
-        return (
-            alias,
-            source_id(self.ids, alias, fid),
-            None if part is None else number(part),
-        )
-
-    def summary(self, entry: c.Mapping[str, object]) -> bool:
-        warnings = entry.get('warnings', [])
-        if not isinstance(warnings, list):
-            return False
-        self.warnings = [str(w) for w in t.cast('list[object]', warnings)]
-        return True
+        layer, fid, part = reference
+        alias = aliases[layer]
+        return alias, source_id(self.ids, alias, fid), part

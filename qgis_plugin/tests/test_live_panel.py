@@ -28,14 +28,17 @@ from qgis.PyQt.QtGui import QStandardItem
 
 from topology_rules.core import binary, engine, package
 from topology_rules.core.engine import Engine
+from topology_rules.core.errors import from_wkb
 from topology_rules.core.progress import Checked, Stage
 from topology_rules.exceptions import ExecutableError
 from topology_rules.panel import controller, messages
 from topology_rules.panel.controller import canceled_text, summary
 from topology_rules.panel.dock import Dock
+from topology_rules.panel.icons import icon
 from topology_rules.panel.marks import ENTRY
 from topology_rules.panel.results import seen
 from topology_rules.panel.rows import Row
+from topology_rules.panel.stage import filled
 from topology_rules.panel.tree import ROLE, group_key
 from topology_rules.utils import not_none
 
@@ -61,6 +64,7 @@ from .live import (
     let_all_lines,
     let_end,
     let_lines,
+    refusing_executable,
     replaying_executable,
     untold,
 )
@@ -87,7 +91,8 @@ def no_executable() -> Path:
 class Held:
     """The runs of an engine, which the test lets go on rule by rule: with
     the package each report waits at a gate, and the executable waits
-    before the line of each rule, and before it ends."""
+    before the line of each rule, and before it ends. The writing of the
+    errors of the last rule waits."""
 
     engine: Engine
     gates: Gates
@@ -139,8 +144,8 @@ class Held:
         return now
 
     def cancel(self, dock: Dock) -> None:
-        """Cancels the run, which writes the errors of the rules that are
-        done."""
+        """Cancels the run, and lets it write the errors of the last rule if
+        it was at it."""
         dock.cancel()
         self.writing.go.set()
 
@@ -150,7 +155,8 @@ class Held:
         return int(self.started.read_text())
 
     def at_end(self) -> bool:
-        """Whether the run is done with its rules and writes the errors."""
+        """Whether the run is done with its rules and writes the errors of
+        the last."""
         return self.writing.reached.is_set()
 
     def release(self) -> None:
@@ -400,12 +406,15 @@ def at(
 
 
 def running_rules(dock: Dock) -> list[str]:
-    """The rules that the list marks as the one that the run checks."""
-    return [
-        item.text(0)
-        for item in dock.rule_list.rule_items()
-        if item.font(0).bold()
-    ]
+    """The rules that the list marks as the one that the run checks: bold,
+    with the icon of a running task where the count comes."""
+    items = list(dock.rule_list.rule_items())
+    bold = [item.text(0) for item in items if item.font(0).bold()]
+    marked = [item for item in items if not item.icon(1).isNull()]
+    assert [item.text(0) for item in marked] == bold
+    running = icon('running').cacheKey()
+    assert all(item.icon(1).cacheKey() == running for item in marked)
+    return bold
 
 
 def bar_range(dock: Dock) -> tuple[int, int, int]:
@@ -530,6 +539,146 @@ def test_the_stage_fits_a_narrow_panel(held: Held, panel: Dock):
     assert label.text() == full
     held.let_all()
     wait_for(lambda: dock.task is None)
+
+
+def test_the_rule_that_runs_has_the_icon_of_a_running_task():
+    """That of QGIS, not the one of the style in its place."""
+    theme = QgsApplication.getThemeIcon('/mTaskRunning.svg')
+    assert not theme.isNull()
+    assert icon('running').cacheKey() == theme.cacheKey()
+
+
+@pytest.mark.parametrize(
+    ('template', 'expected'),
+    [
+        pytest.param(
+            'Checking {rule} ({index} of {total})',
+            ('Checking ', 'roads', ' (3 of 8)'),
+            id='english',
+        ),
+        pytest.param(
+            '({index}/{total}) {rule} prüfen',
+            ('(3/8) ', 'roads', ' prüfen'),
+            id='moved',
+        ),
+        pytest.param(
+            'Regel {index} von {total}',
+            ('Regel 3 von 8 ', 'roads', ''),
+            id='dropped',
+        ),
+        pytest.param(
+            '{rule}: {rule} ({index:>3})',
+            ('', 'roads', ': roads (  3)'),
+            id='twice',
+        ),
+        pytest.param(
+            '{rule} {count} {0}', ('', 'roads', ' {count} {0}'), id='unknown'
+        ),
+        pytest.param(
+            '{rule} ({index', ('{rule} ({index ', 'roads', ''), id='broken'
+        ),
+        pytest.param(
+            '{rule} {index:d} {total!r}', ('', 'roads', ' 3 8'), id='spec'
+        ),
+        pytest.param(
+            '{rule} {index:q}',
+            ('{rule} {index:q} ', 'roads', ''),
+            id='bad spec',
+        ),
+    ],
+)
+def test_a_stage_keeps_the_name_of_the_rule_whatever_its_template(
+    template: str, expected: tuple[str, str, str]
+):
+    """Such as a translation that moves the name, leaves it out, or cannot
+    be read. The name is what is cut short in a narrow panel."""
+    assert filled(template, 'roads', {'index': 3, 'total': 8}) == expected
+
+
+@EXECUTABLE_ONLY
+@pytest.mark.parametrize(
+    ('translated', 'expected'),
+    [
+        pytest.param('({index}/{total}) {rule} prüfen', '(1/4) {} prüfen'),
+        pytest.param('Regel {index} von {total}', 'Regel 1 von 4 {}'),
+    ],
+    ids=['moved', 'dropped'],
+)
+def test_a_translated_stage_names_the_rule(
+    held: Held,
+    panel: Dock,
+    monkeypatch: pytest.MonkeyPatch,
+    translated: str,
+    expected: str,
+):
+    dock = panel
+    add_rules(dock)
+    english = controller.tr
+
+    def tr(text: str) -> str:
+        if text == 'Checking {rule} ({index} of {total})':
+            return translated
+        return english(text)
+
+    monkeypatch.setattr(controller, 'tr', tr)
+    held.start(dock)
+    title = dock.entries[0].title
+    eventually(dock.stage.full, expected.format(title))
+    assert dock.stage.parts[1] == title
+    held.let_all()
+    wait_for(lambda: dock.task is None)
+
+
+@pytest.fixture
+def old_tool(
+    tmp_path: Path,
+    configure: c.Callable[[str | Path], None],
+    executable: str,
+) -> Path:
+    """A tool from before --stream, whose runs wait for the file that is
+    returned."""
+    folder = tmp_path / 'old'
+    folder.mkdir()
+    gate = tmp_path / 'gate'
+    configure(refusing_executable(folder, gate=gate))
+    engine.choose(Engine.EXECUTABLE)
+    return gate
+
+
+def test_a_tool_that_tells_the_rules_at_its_end_is_busy_until_then(
+    old_tool: Path, dock: Dock, monkeypatch: pytest.MonkeyPatch
+):
+    """It tells which rules it checks only when all are done: the bar is
+    busy until then, no rule is marked, and the panel then writes the errors
+    without going through the rules."""
+    dock = ready(dock)
+    add_rules(dock)
+    said: list[str] = []
+    say = dock.stage.say
+
+    def recorded(*parts: str) -> None:
+        said.append(''.join(parts))
+        say(*parts)
+
+    monkeypatch.setattr(dock.stage, 'say', recorded)
+    for run in range(2):
+        old_tool.unlink(missing_ok=True)
+        said.clear()
+        dock.run_button.click()
+        eventually(dock.stage.full, f'Checking {RULES} rules')
+        assert bar_range(dock)[:2] == (0, 0)
+        assert running_rules(dock) == []
+        assert counts_of(dock) == [''] * RULES
+        checking = said.index(f'Checking {RULES} rules')
+        old_tool.touch()
+        wait_for(lambda: dock.task is None)
+        assert said[checking:] == [f'Checking {RULES} rules', 'Writing errors…']
+        assert '' not in counts_of(dock)
+        if run:
+            # Once known, the tool is not taken to tell the first rule
+            assert [text for text in said if text.startswith('Checking')] == [
+                f'Checking {RULES} rules'
+            ]
 
 
 # Cancel
@@ -885,8 +1034,6 @@ def test_unloading_the_plugin_during_a_run(
     wait_for(lambda: len(run.done) == 1)
     pid = None if held.package else held.pid()
     bar.calls.clear()
-    # The canceled run writes the errors of the rule that is done
-    held.writing.armed = False
     del dock
     began = time.monotonic()
     plugin.unload()
@@ -993,7 +1140,7 @@ def test_an_error_of_a_rule_that_is_done_works_during_the_run(
     assert focus.highlight is not None
     assert focus.highlight.isVisible()
     assert canvas.extent().contains(
-        not_none(row.geometry).boundingBox().center()
+        from_wkb(not_none(row.wkb)).boundingBox().center()
     )
     assert dock.results.select_button.isEnabled()
     dock.results.select_button.click()
@@ -1128,6 +1275,43 @@ def test_the_end_of_a_run_keeps_the_tree_as_the_user_left_it(
     view.setCurrentIndex(current)
     assert {layer.subsetString() for layer in error_layers()} == expression
     assert tree_of(dock) == reference.tree
+
+
+def test_a_grey_error_stays_grey_in_its_group_at_the_end_of_a_run(
+    held: Held, panel: Dock
+):
+    """An error ignored during the run, and shown, is the same grey error
+    once it is in its layer, in a group that is not built again."""
+    dock = panel
+    add_rules(dock)
+    run = held.start(dock)
+    held.let(1)
+    at(dock, held, run, 1)
+    dock.results.show_ignored.setChecked(True)
+    view = dock.results_view
+    index = first_error(dock)
+    view.setCurrentIndex(index)
+    row = t.cast(Row, index.data(ROLE))
+    dock.results.ignore_action.trigger()
+    model = dock.results.model
+    group = not_none(model.item(0))
+    group.setData('kept', KEPT)
+    before = tree_of(dock)
+    assert [
+        grey
+        for _, _, kinds in before
+        for _, errors in kinds
+        for _, grey in errors
+    ].count(True) == 1
+    held.let_all()
+    wait_for(lambda: dock.task is None)
+    assert model.item(0) is group
+    assert group.data(KEPT) == 'kept'
+    assert tree_of(dock)[0] == before[0]
+    ignored = [r for r in dock.results.rows if dock.results.is_ignored(r)]
+    assert len(ignored) == 1
+    assert ignored[0].error_layer
+    assert seen(ignored[0]) == seen(row)
 
 
 def test_a_rule_of_thousands_of_errors_does_not_hold_up_the_panel(

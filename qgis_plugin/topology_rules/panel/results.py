@@ -23,6 +23,7 @@ from qgis.PyQt.QtWidgets import (
     QWidget,
 )
 
+from ..core.errors import from_wkb
 from ..core.style import Grouping, rule_grouping
 from ..utils import not_none, tr
 from .entries import project_layer
@@ -225,10 +226,13 @@ class ResultsPanel(QWidget):
         scrolled as it was, and the ignored errors stay ignored. Only a
         group that is not the same is built again."""
         final = stamp(rows, layers)
-        # What the tree shows now, grey or not
-        before = {
-            kind: [(seen(row), self.is_ignored(row)) for row in kind_rows]
-            for kind, kind_rows in self.model.kinds.items()
+        # The ids of the errors that the tree shows grey now. The rest of
+        # what it shows is in the model: no copy of every error is made
+        grey = {
+            id(row)
+            for kind_rows in self.model.kinds.values()
+            for row in kind_rows
+            if self.is_ignored(row)
         }
         self.carry_ignored(final)
         self.labels = labels
@@ -241,7 +245,7 @@ class ResultsPanel(QWidget):
             if key not in shown:
                 self.rebuild(key, [])
         for key, kinds in shown.items():
-            if not self.swap(key, kinds, before):
+            if not self.swap(key, kinds, grey):
                 self.rebuild(
                     key, [row for rows in kinds.values() for row in rows]
                 )
@@ -266,6 +270,8 @@ class ResultsPanel(QWidget):
     def carry_ignored(self, final: list[Row]) -> None:
         """Ignores the errors of the layers whose errors of the run were
         ignored, should they be told apart otherwise."""
+        if not any(map(self.is_ignored, self.rows)):
+            return
         waiting: dict[tuple[object, ...], list[Row]] = {}
         for row in self.rows:
             waiting.setdefault(seen(row), []).append(row)
@@ -282,13 +288,12 @@ class ResultsPanel(QWidget):
         self,
         key: str,
         kinds: dict[str, list[Row]],
-        before: c.Mapping[
-            tuple[str, str], list[tuple[tuple[object, ...], bool]]
-        ],
+        grey: c.Container[int],
     ) -> bool:
         """Gives the items of a group the errors read from the layers, when
-        the group shows them just as it does: nothing changes on screen.
-        False when the group is not the same."""
+        the group shows them just as it does, with the errors that were grey
+        by their ids: nothing changes on screen. False when the group is not
+        the same."""
         index = find_group(self.model, key)
         if index < 0:
             return False
@@ -300,9 +305,8 @@ class ResultsPanel(QWidget):
             )
         }
         ordered = {error: in_order(rows) for error, rows in kinds.items()}
-        if set(children) != set(ordered) or any(
-            before.get((key, error))
-            != [(seen(row), self.is_ignored(row)) for row in rows]
+        if set(children) != set(ordered) or not all(
+            self.same(self.model.kinds.get((key, error), []), rows, grey)
             for error, rows in ordered.items()
         ):
             return False
@@ -318,6 +322,16 @@ class ResultsPanel(QWidget):
         finally:
             blocker.unblock()
         return True
+
+    def same(
+        self, shown: list[Row], rows: list[Row], grey: c.Container[int]
+    ) -> bool:
+        """Whether a kind of errors that the tree shows, with those that were
+        grey, looks just as the errors that take their place."""
+        return len(shown) == len(rows) and all(
+            seen(old) == seen(new) and (id(old) in grey) == self.is_ignored(new)
+            for old, new in zip(shown, rows, strict=True)
+        )
 
     def rebuild(self, key: str, rows: list[Row]) -> None:
         """Builds a group again, as open as it was, with the same item
@@ -507,8 +521,8 @@ class ResultsPanel(QWidget):
         """Zooms to the error in its layer, or to its own geometry while it
         has no layer."""
         if not row.error_layer:
-            if row.geometry is not None:
-                self.focus.show_geometry(row.geometry, self.crs)
+            if row.wkb is not None:
+                self.focus.show_geometry(from_wkb(row.wkb), self.crs)
             return
         layer = project_layer(row.error_layer)
         if layer is not None and layer.isValid():

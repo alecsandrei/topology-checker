@@ -29,7 +29,14 @@ from topology_rules.core import package
 from topology_rules.core.checks import Job, Outcome, run_jobs
 from topology_rules.core.commands import ERROR_LAYERS, validate_command
 from topology_rules.core.engine import Tool
-from topology_rules.core.errors import Errors, Gathered, found_in, from_wkb
+from topology_rules.core.errors import (
+    FAMILIES,
+    Errors,
+    ErrorsFile,
+    Gathered,
+    found_in,
+    from_wkb,
+)
 from topology_rules.core.layers import private_layer
 from topology_rules.core.package import attributes
 from topology_rules.core.progress import Checked, Found, Progress, Stage
@@ -212,14 +219,18 @@ def hold_reading(monkeypatch: t.Any, armed: bool = True) -> Hold:
 
 
 def hold_writing(monkeypatch: t.Any, armed: bool = True) -> Hold:
-    """Holds the runs of both engines before they write the errors."""
-    from topology_rules.core import checks, package
+    """Holds the runs of both engines once they have told of their last
+    rule, before they write its errors."""
+    held_step = Hold(armed)
+    real = Gathered.write
 
-    return hold_calls(
-        monkeypatch,
-        ((package, 'write_errors'), (checks, 'write_errors')),
-        armed,
-    )
+    def write(self: Gathered, found: c.Sequence[Found]) -> None:
+        if len(self.counts) == len(self.jobs):
+            held_step.hold()
+        real(self, found)
+
+    monkeypatch.setattr(Gathered, 'write', write)
+    return held_step
 
 
 # Executables
@@ -250,7 +261,7 @@ def replaying_executable(
     It can crash before the line of a rule, or kill itself halfway through
     the line, and say lines that are not of the report: with Windows line
     ends, bytes that are not UTF-8, lines that are long or nested deep,
-    numbers of thousands of digits, and reports that cannot be read."""
+    numbers of thousands of digits, and objects that are not reports."""
     real = real_executable()
     assert real is not None, 'set TOPOLOGY_CHECKER'
     gates.mkdir(exist_ok=True)
@@ -312,8 +323,8 @@ for number, rule in enumerate(report.pop('rules')):
         say(b'x' * 100000 + b'\\n')
         say(b'[' * 100000 + b'\\n')
         say(b'9' * 5000 + b'\\n')
-        say(b'{{"spec": {{"layer": ' + b'9' * 5000 + b'}}}}\\n')
-        say(b'{{"spec": null, "errors": [1]}}\\n')
+        say(b'{{"message": "reading", "layer": ' + b'9' * 5000 + b'}}\\n')
+        say(b'{{"errors": [1], "spec": ' + b'[' * 100000 + b'\\n')
         say(b'null\\n')
     wait(str(number))
     say(line + b'\\r\\n' if {noise!r} else line + b'\\n')
@@ -385,11 +396,15 @@ def close_gates(gates: Path) -> None:
 
 
 def refusing_executable(
-    directory: Path, name: str = 'topology-checker', log: Path | None = None
+    directory: Path,
+    name: str = 'topology-checker',
+    log: Path | None = None,
+    gate: Path | None = None,
 ) -> Path:
     """A tool from before --stream: it refuses the flag as the parser of
     its arguments does, and is the real tool otherwise. With a log it writes
-    down each of its commands."""
+    down each of its commands. With a gate, a run waits for that file
+    before it checks."""
     real = real_executable()
     assert real is not None, 'set TOPOLOGY_CHECKER'
     logged = (
@@ -397,6 +412,16 @@ def refusing_executable(
         if log is None
         else f"""with open({str(log)!r}, 'a') as log:
     log.write(' '.join(sys.argv[1:]) + '\\n')
+"""
+    )
+    waits = (
+        ''
+        if gate is None
+        else f"""if 'validate' in sys.argv:
+    import time
+    deadline = time.monotonic() + {HOLD_SECONDS}
+    while not os.path.exists({str(gate)!r}) and time.monotonic() < deadline:
+        time.sleep(0.01)
 """
     )
     source = f"""#!/usr/bin/env python3
@@ -409,7 +434,7 @@ import sys
     print('', file=sys.stderr)
     print("For more information, try '--help'.", file=sys.stderr)
     sys.exit(2)
-{hand_over(real)}"""
+{waits}{hand_over(real)}"""
     return write_tool(directory / name, source)
 
 
@@ -492,17 +517,17 @@ def expected_stages(
     total: int, streams: bool = True, refused: bool = False
 ) -> list[tuple[Stage, int | None, int]]:
     """What a run of a number of rules says it does, from start to end. An
-    executable that is known not to stream says which rule it checks only
-    once all are done; one that refuses to stream is first taken to."""
-    first: list[tuple[Stage, int | None, int]] = (
-        [(Stage.CHECKING, 0, total)] if streams or refused else []
-    )
-    if not streams:
-        first.append((Stage.CHECKING, None, total))
+    executable that is known not to stream tells all rules at once at the
+    end, so the run does not go through them; one that refuses to stream is
+    first taken to."""
+    if streams:
+        checking = [(Stage.CHECKING, index, total) for index in range(total)]
+    else:
+        checking = [(Stage.CHECKING, 0, total)] if refused else []
+        checking.append((Stage.CHECKING, None, total))
     return [
         (Stage.READING, None, 0),
-        *first,
-        *((Stage.CHECKING, index, total) for index in range(1, total)),
+        *checking,
         (Stage.WRITING, None, total),
     ]
 
@@ -520,7 +545,7 @@ def found_rows(checks: c.Iterable[Checked]) -> dict[str, list[list[object]]]:
     for done in checks:
         for found in done.errors:
             rows.setdefault(found.family, []).append(
-                [wkt_of(found.geometry), *found.values]
+                [wkt_of(from_wkb(found.wkb)), *found.values]
             )
     return rows
 
@@ -539,8 +564,10 @@ def validate_untold(
     jobs: t.Sequence[Job],
     layers: t.Mapping[str, str],
     feedback: QgsProcessingFeedback,
+    file: ErrorsFile,
 ) -> Errors:
-    """How the package was run: one stream of all the errors."""
+    """How the package was run: one stream of all the errors, written once
+    all were found."""
     import topology_checker as tc
 
     names = {entry.layer: entry.name for entry in registered}
@@ -558,20 +585,11 @@ def validate_untold(
             summary = not_none(stream.summary)
     except (ValueError, tc.PrecisionError) as error:
         raise RunError(str(error)) from error
+    file.add([found for family in FAMILIES for found in rows.get(family, [])])
     return Errors(
-        rows,
         [rule.error_count for rule in summary.rules],
         list(summary.warnings),
     )
-
-
-class Untold(Gathered):
-    """The errors of the rules, of which nothing is told."""
-
-    def add(self, found: c.Sequence[Found], count: int) -> None:
-        for item in found:
-            self.rows.setdefault(item.family, []).append(item)
-        self.counts.append(count)
 
 
 def renumber_errors(path: str, ids: IdMap) -> None:
@@ -609,6 +627,18 @@ def untold_executable(monkeypatch: t.Any) -> None:
 
     tables: list[IdMap] = []
     written: list[Path] = []
+    # Whether the rules of the run found any errors
+    found: list[bool] = []
+
+    class Untold(Gathered):
+        """The errors of the rules, of which nothing is told, and which the
+        tool writes."""
+
+        def add(
+            self, rows: c.Sequence[Found], count: int, more: bool = False
+        ) -> None:
+            self.counts.append(count)
+            found.append(bool(rows))
 
     class Recorded(Report):
         def __init__(
@@ -634,14 +664,22 @@ def untold_executable(monkeypatch: t.Any) -> None:
             out(line)
         return completed
 
-    def write_errors(path: str, *_: object) -> None:
-        shutil.copyfile(written[-1], path)
-        renumber_errors(path, tables[-1])
+    real_run_once = checks.run_once
+
+    def run_once(
+        jobs: t.Any, tool: t.Any, tolerance: t.Any, output: str, *rest: t.Any
+    ) -> Outcome:
+        found.clear()
+        outcome = real_run_once(jobs, tool, tolerance, output, *rest)
+        if any(found):
+            shutil.copyfile(written[-1], output)
+            renumber_errors(output, tables[-1])
+        return outcome
 
     monkeypatch.setattr(checks, 'Gathered', Untold)
     monkeypatch.setattr(checks, 'Report', Recorded)
     monkeypatch.setattr(checks, 'run_validate', run_validate)
-    monkeypatch.setattr(checks, 'write_errors', write_errors)
+    monkeypatch.setattr(checks, 'run_once', run_once)
 
 
 def untold(monkeypatch: t.Any) -> None:

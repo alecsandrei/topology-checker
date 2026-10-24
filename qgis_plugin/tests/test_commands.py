@@ -7,11 +7,11 @@ from pathlib import Path
 
 import pytest
 import tomllib
+from qgis.core import QgsProcessingFeedback
 
 from topology_rules.core.binary import Rule
 from topology_rules.core.commands import (
     Check,
-    count_errors,
     definition_command,
     rule_counts,
     utility_command,
@@ -161,28 +161,32 @@ def report(*counts: dict[str, int]) -> str:
 
 
 def test_counts_errors_for_valid_and_invalid_data():
-    assert count_errors(Completed(0, report({}), '')) == 0
-    assert count_errors(Completed(1, report({'dangle': 2}), '')) == 2
-    assert (
-        count_errors(Completed(1, report({'dangle': 2}, {'gap': 3}), '')) == 5
-    )
+    feedback = QgsProcessingFeedback()
+    assert rule_counts(Completed(0, report({}), ''), feedback) == [0]
+    assert rule_counts(Completed(1, report({'dangle': 2}), ''), feedback) == [2]
 
 
 def test_counts_errors_of_each_rule():
     completed = Completed(1, report({'dangle': 2, 'gap': 1}, {}, {'x': 4}), '')
-    assert rule_counts(completed) == [3, 0, 4]
-    assert count_errors(completed) == 7
+    assert rule_counts(completed, QgsProcessingFeedback()) == [3, 0, 4]
 
 
 def test_exit_code_two_raises_the_json_error():
     completed = Completed(2, '', 'warning: x\n{"error": "no such layer"}\n')
     with pytest.raises(RunError, match='no such layer'):
-        count_errors(completed)
+        rule_counts(completed, QgsProcessingFeedback())
 
 
-def test_unreadable_report_raises():
-    with pytest.raises(RunError, match='Could not read'):
-        count_errors(Completed(0, 'not json', ''))
+def test_an_unreadable_report_raises_with_its_start_in_the_log():
+    """The message is short; the log has the start of the report."""
+    feedback = QgsProcessingFeedback()
+    text = '{"tolerance": 0, "rules": ' + 'x' * 1000
+    with pytest.raises(RunError) as raised:
+        rule_counts(Completed(0, text, ''), feedback)
+    assert str(raised.value) == "Could not read the executable's report."
+    log = feedback.textLog()
+    assert text[:200] + '…' in log
+    assert 'x' * 300 not in log
 
 
 def test_error_message_falls_back_to_text_and_code():

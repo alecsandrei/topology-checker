@@ -35,7 +35,7 @@ from qgis.PyQt import sip
 from qgis.PyQt.QtCore import QCoreApplication
 
 from topology_rules.core import package
-from topology_rules.core.errors import Errors, write_errors
+from topology_rules.core.errors import ErrorsFile
 from topology_rules.core.inputs import chosen, prepare
 from topology_rules.core.invalid import Invalid, append_invalid, error_fields
 from topology_rules.core.layers import Input
@@ -200,16 +200,17 @@ def test_writing_the_errors(tmp_path: Path, worker: Worker):
     for index in range(ROUNDS):
         path = tmp_path / f'errors{index}.gpkg'
         values = (0, 'rule', 'dangle', 'lines', 7, 0, None, None, None)
-        found = Found('point', QgsGeometry.fromWkt('POINT(0 0)'), values)
-        worker.after(
-            functools.partial(
-                write_errors,
+        point = QgsGeometry.fromWkt('MULTIPOINT((0 0))')
+        found = Found('point', bytes(point.asWkb()), values)
+
+        def write(path: Path = path, found: Found = found) -> None:
+            ErrorsFile(
                 str(path),
-                Errors({'point': [found]}, [1], []),
                 QgsCoordinateReferenceSystem('EPSG:3857'),
                 QgsProcessingContext(),
-            )
-        )
+            ).add([found])
+
+        worker.after(write)
         assert origin_ids(path, 'point') == [7]
     assert worker.deleted() == 0
 

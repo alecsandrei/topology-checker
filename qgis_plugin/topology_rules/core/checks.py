@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import collections.abc as c
+import contextlib
 import dataclasses
 import itertools
 import re
@@ -19,7 +20,7 @@ from ..utils import tr
 from .binary import Rule
 from .commands import Check, run_validate, streams, write_config
 from .engine import Package, Tool, describe
-from .errors import Gathered, write_errors
+from .errors import ErrorsFile, Gathered, remove_file
 from .inputs import Prepared, prepare
 from .invalid import REJECTED, Invalid, Rejected, parse_failure
 from .layers import Dataset, Input
@@ -29,7 +30,7 @@ from .runner import error_message
 
 # What the tool says when it cannot read a geometry or its envelope in a file
 # (crates/io), without saying which feature
-UNREADABLE = re.compile(r'WKB|GeoPackage envelope|non-finite')
+UNREADABLE_GEOMETRY = re.compile(r'WKB|GeoPackage envelope|non-finite')
 # How often a run is repeated without the features that the tool rejects
 MAX_ATTEMPTS = 25
 # How much of the output that is not of the report the log shows
@@ -73,9 +74,10 @@ def run_jobs(
     context: QgsProcessingContext,
     feedback: QgsProcessingFeedback,
 ) -> Outcome:
-    """Runs the jobs in one pass of the package or the executable, which
-    writes the errors to the GeoPackage at the output. All data is brought to
-    the CRS of the first input, which is also the CRS of the errors."""
+    """Runs the jobs in one pass of the package or the executable, and
+    writes the errors to the GeoPackage at the output, rule after rule. All
+    data is brought to the CRS of the first input, which is also the CRS of
+    the errors. A run that fails leaves no file."""
     feedback.pushInfo(describe(tool))
     made: dict[object, t.Any] = {}
     if isinstance(tool, Package):
@@ -112,7 +114,13 @@ def run_jobs(
                 made,
             )
 
-    outcome = retried(jobs, attempt, feedback)
+    try:
+        outcome = retried(jobs, attempt, feedback)
+    except BaseException:
+        # What the rules before the failure wrote is not a run
+        with contextlib.suppress(RunError):
+            remove_file(output)
+        raise
     if outcome.invalid:
         feedback.pushWarning(
             tr(
@@ -134,13 +142,15 @@ def retried(
     feature, the run is repeated without the features that it would reject,
     which are reported as errors: the exported inputs leave them out. Only
     the input that held the feature is exported again: the others stay as
-    they were.
+    they were. Each attempt starts by reading the layers, which is the stage
+    that the feedback hears of first, once for each attempt.
     """
     skips: Skips = {}
     # The inputs that are exported and not read from their own file
     exported: set[object] = set()
     first: Rejected | None = None
     for _ in range(MAX_ATTEMPTS):
+        staged(feedback, Stage.READING)
         try:
             return attempt(skips, exported)
         except Rejected as rejected:
@@ -174,7 +184,7 @@ def retried(
                 for item in (job.layer, job.other)
                 if item is not None
             }
-            if not UNREADABLE.search(str(error)) or keys <= exported:
+            if not UNREADABLE_GEOMETRY.search(str(error)) or keys <= exported:
                 raise
             exported.update(keys)
     raise first or RunError(tr('Too many features were rejected by the tool'))
@@ -195,12 +205,11 @@ def run_once(
     """Runs the jobs once with the executable, from the layers' own files
     and from exports, and writes the errors to the GeoPackage at the output
     as the package does. The log and the feedback hear of each rule as soon
-    as the executable says it is done.
+    as the executable says it is done, and its errors are written then.
 
     A canceled run ends with the errors of the rules that are done. When
     none is, it raises.
     """
-    staged(feedback, Stage.READING)
     target = jobs[0].layer.source.sourceCrs()
     prepared: dict[object, Prepared] = {}
     inputs: dict[object, Input] = {}
@@ -249,7 +258,15 @@ def run_once(
         for item in prepared.values()
         if item.ids is not None
     }
-    gathered = Gathered(jobs, layers, feedback)
+    # The errors have no CRS where an input has none, as the tool reads it
+    crs = (
+        target
+        if all(item.source.sourceCrs().isValid() for item in inputs.values())
+        else QgsCoordinateReferenceSystem()
+    )
+    gathered = Gathered(
+        jobs, layers, feedback, ErrorsFile(output, crs, context)
+    )
     names = [
         (
             aliases[check.layer],
@@ -273,7 +290,7 @@ def run_once(
             feedback,
             report.line,
             lambda: staged(feedback, Stage.CHECKING, None, len(jobs)),
-            done=lambda: report.complete,
+            done=lambda: report.over,
         )
     except RunError:
         if not (feedback.isCanceled() and gathered.counts):
@@ -295,16 +312,8 @@ def run_once(
             )
         if not report.complete:
             unread(feedback, report, completed.stdout)
-            raise RunError(tr('Could not read the report of the tool'))
+            raise RunError(tr("Could not read the executable's report."))
     errors = gathered.errors(report.warnings or ())
-    # The errors have no CRS where an input has none, as the tool reads it
-    crs = (
-        target
-        if all(item.source.sourceCrs().isValid() for item in inputs.values())
-        else QgsCoordinateReferenceSystem()
-    )
-    if errors.rows:
-        write_errors(output, errors, crs, context)
     invalid = [
         Invalid(
             aliases[item.dataset],

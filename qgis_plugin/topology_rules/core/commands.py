@@ -21,6 +21,8 @@ if t.TYPE_CHECKING:
     from .._typing import ReportJson
 
 ERROR_LAYERS = ('errors_point', 'errors_line', 'errors_polygon')
+# How much of a report that cannot be read the log shows
+SHOWN_CHARS = 200
 
 
 @dataclasses.dataclass(frozen=True)
@@ -214,10 +216,13 @@ def utility_command(
     ]
 
 
-def rule_counts(completed: Completed) -> list[int]:
+def rule_counts(
+    completed: Completed, feedback: QgsProcessingFeedback
+) -> list[int]:
     """The number of errors of each rule of a run, in the order of the run.
 
-    Raises if the run failed.
+    Raises if the run failed, or if its report cannot be read, the start of
+    which the log shows.
     """
     if completed.exit_code not in (
         ExitCode.VALID.value,
@@ -228,13 +233,10 @@ def rule_counts(completed: Completed) -> list[int]:
         report = t.cast('ReportJson', json.loads(completed.stdout))
         return [sum(rule['counts'].values()) for rule in report['rules']]
     except (ValueError, KeyError, TypeError) as error:
-        raise RunError(
-            tr('Could not read the report: {report}').format(
-                report=repr(completed.stdout[:200])
-            )
-        ) from error
-
-
-def count_errors(completed: Completed) -> int:
-    """The number of errors in a run, raising if the run failed."""
-    return sum(rule_counts(completed))
+        start = completed.stdout.strip()
+        if len(start) > SHOWN_CHARS:
+            start = start[:SHOWN_CHARS] + '…'
+        feedback.pushInfo(
+            tr('The report starts with: {text}').format(text=start)
+        )
+        raise RunError(tr("Could not read the executable's report.")) from error

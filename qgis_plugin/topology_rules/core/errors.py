@@ -1,12 +1,14 @@
 """The errors of a run as both engines find them: the rows of the layer of
 each family of geometry, which the log and the panel hear of as each rule
-is done, and the GeoPackage that they are written to."""
+is done, and which are written to the GeoPackage right after."""
 
 from __future__ import annotations
 
 import collections.abc as c
 import dataclasses
+import itertools
 import typing as t
+from pathlib import Path
 
 from qgis.core import (
     Qgis,
@@ -50,11 +52,9 @@ FAMILIES = tuple(name.removeprefix('errors_') for name in ERROR_LAYERS)
 
 @dataclasses.dataclass
 class Errors:
-    """The errors of a run, as the rows of the layer of each family of
-    geometry, the number of errors of each rule that is done, and what the
-    engine said about the data."""
+    """The number of errors of each rule that is done, and what the engine
+    said about the data."""
 
-    rows: dict[str, list[Found]]
     counts: list[int]
     warnings: list[str]
 
@@ -83,44 +83,120 @@ def found_in(geometry: QgsGeometry, values: tuple[object, ...]) -> list[Found]:
     for member in members(geometry):
         family = wkb_kind(member.wkbType())
         member.convertToMultiType()
-        found.append(Found(family, member, values))
+        # data() is bytes at run time; some stubs type it as str
+        found.append(
+            Found(family, t.cast('bytes', member.asWkb().data()), values)
+        )
     return found
+
+
+def remove_file(path: str) -> None:
+    """Removes the GeoPackage at the path, if there is one."""
+    try:
+        for suffix in ('', '-wal', '-shm'):
+            Path(f'{path}{suffix}').unlink(missing_ok=True)
+    except OSError as error:
+        raise RunError(
+            tr('Could not remove {path}: {error}').format(
+                path=path, error=error
+            )
+        ) from error
+
+
+class ErrorsFile:
+    """The GeoPackage that the errors are written to as each rule is done:
+    the layers `errors_line`, `errors_point` and `errors_polygon`, those
+    that have any. A run that finds nothing writes nothing."""
+
+    def __init__(
+        self,
+        path: str,
+        crs: QgsCoordinateReferenceSystem,
+        context: QgsProcessingContext,
+    ) -> None:
+        self.path = path
+        self.crs = crs
+        self.context = context
+        self.fields = QgsVectorLayer(
+            f'None?field={COLUMNS}', 'errors', 'memory'
+        ).fields()
+        # The families that have a layer
+        self.made: set[str] = set()
+        # What an earlier attempt of the run wrote is not of this one
+        remove_file(path)
+
+    def add(self, found: c.Sequence[Found]) -> None:
+        """Writes the errors of a rule, which are in the order of their
+        families, after those of the rules before it."""
+        Action = QgsVectorFileWriter.ActionOnExistingFile
+        for family, items in itertools.groupby(found, lambda f: f.family):
+            name = f'errors_{family}'
+            action = (
+                Action.AppendToLayerNoNewFields
+                if family in self.made
+                else Action.CreateOrOverwriteLayer
+                if self.made
+                else Action.CreateOrOverwriteFile
+            )
+            writer = create_layer(
+                self.path,
+                name,
+                self.fields,
+                MULTI[family],
+                self.crs,
+                action,
+                self.context,
+            )
+            self.made.add(family)
+            try:
+                write_found(writer, items, self.fields, name)
+            finally:
+                del writer
 
 
 class Gathered:
     """The errors of the rules that are done. The log, the progress and the
     panel hear of each rule as soon as it is done, in the order of the
-    rules."""
+    rules, and then its errors are written to the file: none are kept."""
 
     def __init__(
         self,
         jobs: t.Sequence[Job],
         layers: c.Mapping[str, str],
         feedback: QgsProcessingFeedback,
+        file: ErrorsFile,
     ) -> None:
         self.jobs = jobs
         self.layers = layers
         self.feedback = feedback
-        self.rows: dict[str, list[Found]] = {}
+        self.file = file
         self.counts: list[int] = []
 
-    def add(self, found: c.Sequence[Found], count: int) -> None:
-        """A rule is done: the rows of its errors, and how many it found."""
-        for item in found:
-            self.rows.setdefault(item.family, []).append(item)
+    def add(
+        self, found: c.Sequence[Found], count: int, more: bool = False
+    ) -> None:
+        """A rule is done: the rows of its errors, and how many it found.
+        With more, the next rule is done too."""
         self.counts.append(count)
         index = len(self.counts) - 1
         log_rule(self.feedback, self.jobs, index, count)
         # The errors in the order the panel reads them from the layers: by
         # family, then as they were found
-        ordered = sorted(found, key=lambda item: FAMILIES.index(item.family))
+        ordered = tuple(
+            sorted(found, key=lambda item: FAMILIES.index(item.family))
+        )
         checked(
             self.feedback,
-            Checked(index, len(self.jobs), count, tuple(ordered), self.layers),
+            Checked(index, len(self.jobs), count, ordered, self.layers),
+            more,
         )
+        self.write(ordered)
+
+    def write(self, found: c.Sequence[Found]) -> None:
+        self.file.add(found)
 
     def errors(self, warnings: c.Iterable[str] = ()) -> Errors:
-        return Errors(self.rows, self.counts, list(warnings))
+        return Errors(self.counts, list(warnings))
 
 
 def create_layer(
@@ -129,20 +205,16 @@ def create_layer(
     fields: QgsFields,
     kind: Qgis.WkbType,
     crs: QgsCoordinateReferenceSystem,
-    first: bool,
+    action: QgsVectorFileWriter.ActionOnExistingFile,
     context: QgsProcessingContext,
 ) -> QgsVectorFileWriter:
-    """A new layer of the GeoPackage at the path, which the first one
-    creates."""
+    """A layer of the GeoPackage at the path: a new file, a new layer of the
+    file, or more features of a layer that is there, as the action says."""
     options = QgsVectorFileWriter.SaveVectorOptions()
     options.driverName = 'GPKG'
     options.fileEncoding = 'UTF-8'
     options.layerName = name
-    options.actionOnExistingFile = (
-        QgsVectorFileWriter.ActionOnExistingFile.CreateOrOverwriteFile
-        if first
-        else QgsVectorFileWriter.ActionOnExistingFile.CreateOrOverwriteLayer
-    )
+    options.actionOnExistingFile = action
     if not crs.isValid():
         options.layerOptions = [NO_CRS]
     writer = QgsVectorFileWriter.create(
@@ -179,30 +251,19 @@ def write_rows(
     write(writer, batch, name)
 
 
-def write_errors(
-    path: str,
-    errors: Errors,
-    crs: QgsCoordinateReferenceSystem,
-    context: QgsProcessingContext,
+def write_found(
+    writer: QgsVectorFileWriter,
+    found: c.Iterable[Found],
+    fields: QgsFields,
+    name: str,
 ) -> None:
-    """Writes the errors to the layers `errors_line`, `errors_point` and
-    `errors_polygon` of the GeoPackage, those that have any."""
-    columns = QgsVectorLayer(f'None?field={COLUMNS}', 'errors', 'memory')
-    fields = columns.fields()
-    for index, family in enumerate(sorted(errors.rows)):
-        name = f'errors_{family}'
-        writer = create_layer(
-            path, name, fields, MULTI[family], crs, index == 0, context
-        )
-        try:
-            write_rows(
-                writer,
-                (
-                    (found.geometry, found.values)
-                    for found in errors.rows[family]
-                ),
-                fields,
-                name,
-            )
-        finally:
-            del writer
+    """Writes the errors, whose geometries are multi geometries already."""
+    batch: list[QgsFeature] = []
+    for item in found:
+        feature = QgsFeature(fields)
+        feature.setGeometry(from_wkb(item.wkb))
+        feature.setAttributes(list(item.values))
+        batch.append(feature)
+        if len(batch) == BATCH:
+            write(writer, batch, name)
+    write(writer, batch, name)

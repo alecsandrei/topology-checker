@@ -20,6 +20,7 @@ from qgis.core import (
     QgsGeometry,
     QgsProcessingContext,
     QgsProcessingFeedback,
+    QgsVectorFileWriter,
     QgsVectorLayer,
     QgsWkbTypes,
 )
@@ -32,11 +33,11 @@ from .commands import unique
 from .errors import (
     MULTI,
     Errors,
+    ErrorsFile,
     Gathered,
     create_layer,
     found_in,
     from_wkb,
-    write_errors,
     write_rows,
 )
 from .inputs import (
@@ -291,7 +292,7 @@ def run_once(
     exported: set[object],
     made: dict[object, tuple[object, Snapshot]],
 ) -> Outcome:
-    """Runs the jobs with the package, which writes the errors to the
+    """Runs the jobs with the package, and writes the errors to the
     GeoPackage at the output as the executable does.
 
     The inputs are named as for the executable: after their file where it
@@ -299,7 +300,6 @@ def run_once(
     """
     import topology_checker as tc
 
-    staged(feedback, Stage.READING)
     found = snapshots(jobs, skips, exported, made, context, feedback)
     target = jobs[0].layer.source.sourceCrs()
     crs = (
@@ -332,9 +332,14 @@ def run_once(
         for key, entry in by_key.items()
         if (layer_id := found[key].item.layer_id) is not None
     }
-    errors = validate(topology, registered.values(), jobs, layers, feedback)
-    if errors.rows:
-        write_errors(output, errors, crs, context)
+    errors = validate(
+        topology,
+        registered.values(),
+        jobs,
+        layers,
+        feedback,
+        ErrorsFile(output, crs, context),
+    )
     for warning in errors.warnings + [
         note
         for entry in registered.values()
@@ -447,6 +452,10 @@ class Reports:
                 return t.cast('tc.RuleReport', item)
         return None
 
+    def ready(self) -> bool:
+        """Whether the next report is at hand already."""
+        return not self.found.empty()
+
     def __enter__(self) -> Reports:
         return self
 
@@ -482,8 +491,10 @@ def validate(
     jobs: t.Sequence[Job],
     layers: t.Mapping[str, str],
     feedback: QgsProcessingFeedback,
+    file: ErrorsFile,
 ) -> Errors:
-    """Runs the rules, telling the feedback of each as soon as it is done.
+    """Runs the rules, telling the feedback of each as soon as it is done,
+    and writing its errors to the file.
 
     A canceled run stops at once, with the errors of the rules that are
     done and the warnings known by then. When no rule is done, it raises.
@@ -491,7 +502,7 @@ def validate(
     import topology_checker as tc
 
     names = {entry.layer: entry.name for entry in registered}
-    gathered = Gathered(jobs, layers, feedback)
+    gathered = Gathered(jobs, layers, feedback, file)
     if feedback.isCanceled():
         raise RunError(tr('Canceled'))
     staged(feedback, Stage.CHECKING, 0, len(jobs))
@@ -506,7 +517,7 @@ def validate(
                     values = attributes(index, violation, names)
                     index += 1
                     found += found_in(from_wkb(violation.wkb), values)
-                gathered.add(found, report.error_count)
+                gathered.add(found, report.error_count, stream.ready())
             summary = not_none(stream.summary)
     except Canceled:
         if not gathered.counts:
@@ -577,7 +588,7 @@ def run_utility(
         fields,
         MULTI['line'],
         snapshot.crs,
-        True,
+        QgsVectorFileWriter.ActionOnExistingFile.CreateOrOverwriteFile,
         context,
     )
     try:

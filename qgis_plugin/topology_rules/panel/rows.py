@@ -3,6 +3,7 @@ from __future__ import annotations
 import collections.abc as c
 import dataclasses
 import hashlib
+import sys
 import typing as t
 
 from qgis.core import QgsFeature, QgsGeometry, QgsVectorLayer
@@ -38,7 +39,10 @@ def shape(geometry: QgsGeometry) -> str:
     if geometry.isNull():
         return ''
     # data() is bytes at run time; some stubs type it as str
-    wkb = t.cast('bytes', geometry.asWkb().data())
+    return wkb_shape(t.cast('bytes', geometry.asWkb().data()))
+
+
+def wkb_shape(wkb: bytes) -> str:
     return hashlib.blake2b(wkb, digest_size=8).hexdigest()
 
 
@@ -67,7 +71,7 @@ def plural(error: str) -> str:
     return text + 's'
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True, slots=True)
 class Row:
     """An error, as the tree shows it."""
 
@@ -91,8 +95,9 @@ class Row:
     # What the error is told by when the user ignores it, worked out once
     # the layers of the run are known
     mark: str = dataclasses.field(default='', compare=False)
-    # The error itself, in the CRS of the run, while it has no error layer
-    geometry: QgsGeometry | None = dataclasses.field(
+    # The error itself as WKB, in the CRS of the run, while it has no error
+    # layer
+    wkb: bytes | None = dataclasses.field(
         default=None, compare=False, repr=False
     )
 
@@ -142,6 +147,7 @@ def read_rows(
                 '' if index < 0 else value_text(values[index])
                 for index in indexes
             )
+            rule, error, origin, other = shared(rule, error, origin, other)
             rows.append(
                 Row(
                     rule,
@@ -166,30 +172,46 @@ def value_text(value: object) -> str:
     return '' if value is None or str(value) == 'NULL' else str(value)
 
 
+def shared(*texts: str) -> tuple[str, ...]:
+    """The texts that many errors have, such as the rule, the kind and the
+    layers, as one string each for all the errors."""
+    return tuple(map(sys.intern, texts))
+
+
 def found_rows(done: Checked, names: c.Mapping[str, str]) -> list[Row]:
     """The errors of a rule that is done, as read_rows reads them from the
     error layers later, with the names of the layers of the project by their
     ids, and the geometry of each error, as there is no layer yet."""
     rows: list[Row] = []
+    key = f'e{done.index}'
     for found in done.errors:
-        _, rule, error, origin, fid, _, other, other_fid, _ = (
-            value_text(value) for value in found.values
-        )
+        (
+            _violation,
+            rule,
+            error,
+            origin,
+            fid,
+            _part,
+            other,
+            other_fid,
+            _other_part,
+        ) = (value_text(value) for value in found.values)
+        rule, error, origin, other = shared(rule, error, origin, other)
         rows.append(
             Row(
-                rule,
-                error,
-                names.get(done.layers.get(origin, ''), origin),
-                number(fid),
-                names.get(done.layers.get(other, ''), other),
-                number(other_fid),
-                origin,
-                other,
-                '',
-                -1,
-                f'e{done.index}',
-                shape(found.geometry),
-                geometry=found.geometry,
+                rule_name=rule,
+                error=error,
+                layer=names.get(done.layers.get(origin, ''), origin),
+                feature=number(fid),
+                other=names.get(done.layers.get(other, ''), other),
+                other_feature=number(other_fid),
+                layer_alias=origin,
+                other_alias=other,
+                error_layer='',
+                error_fid=-1,
+                key=key,
+                shape=wkb_shape(found.wkb),
+                wkb=found.wkb,
             )
         )
     return rows

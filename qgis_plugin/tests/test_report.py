@@ -1,9 +1,10 @@
 """The report of the executable, read line by line: the errors of each rule
 with their geometry as WKB, the ids of the source features, and what is not
-of the report left out."""
+of the report left out. A line of the report that cannot be read ends it."""
 
 from __future__ import annotations
 
+import collections.abc as c
 import json
 import math
 import struct
@@ -15,7 +16,8 @@ from qgis.core import QgsGeometry
 
 from topology_rules.core import report
 from topology_rules.core.checks import Job
-from topology_rules.core.errors import Gathered, from_wkb
+from topology_rules.core.errors import ErrorsFile, Gathered, from_wkb
+from topology_rules.core.progress import Found, Stage
 from topology_rules.core.report import Report
 from topology_rules.exceptions import RunError
 
@@ -23,6 +25,8 @@ from .live import Recorder
 
 DANGLES = 'line/must-not-have-dangles'
 CROSSING = 'line/must-not-intersect-with'
+# What a run whose report is of other rules fails with
+MISMATCH = "^The executable's report does not match the rules that were run"
 
 
 def job(rule: str, layer: str, other: str | None = None) -> Job:
@@ -44,9 +48,24 @@ JOBS = [job(DANGLES, 'roads'), job(CROSSING, 'rivers', 'roads')]
 IDS = {'roads': (10, 20, 30), 'rivers': (7,)}
 
 
+class Written:
+    """The errors as the file is given them, rule after rule."""
+
+    def __init__(self) -> None:
+        self.rules: list[list[Found]] = []
+
+    def add(self, found: c.Sequence[Found]) -> None:
+        self.rules.append(list(found))
+
+
 def reading(jobs: list[Job] = JOBS) -> tuple[Report, Recorder]:
     feedback = Recorder()
-    gathered = Gathered(jobs, {'roads': 'r-id', 'rivers': 'v-id'}, feedback)
+    gathered = Gathered(
+        jobs,
+        {'roads': 'r-id', 'rivers': 'v-id'},
+        feedback,
+        t.cast(ErrorsFile, Written()),
+    )
     names = [
         (j.layer.name, None if j.other is None else j.other.name) for j in jobs
     ]
@@ -148,20 +167,45 @@ def test_each_rule_is_gathered_as_its_line_is_read():
     assert [(d.count, d.total) for d in feedback.checks()] == [(2, 2), (1, 2)]
     assert read.gathered.counts == [2, 1]
     assert [
-        found.geometry.asWkt() for found in feedback.checks()[0].errors
+        from_wkb(found.wkb).asWkt() for found in feedback.checks()[0].errors
     ] == [
         'MultiPoint ((0 0))',
         'MultiPoint ((5 5))',
     ]
+    # Each rule says the next, and the last that the errors are written
+    assert feedback.stages() == [
+        (Stage.CHECKING, 1, 2),
+        (Stage.WRITING, None, 2),
+    ]
+
+
+def test_the_errors_of_each_rule_are_written_once_it_is_told():
+    """None are kept once written."""
+    read, feedback = reading()
+    written = t.cast(Written, read.gathered.file)
+    assert read.line(line(FIRST))
+    assert written.rules == [list(feedback.checks()[0].errors)]
+    assert read.line(line(SECOND))
+    assert written.rules == [list(done.errors) for done in feedback.checks()]
+    assert set(vars(read.gathered)) == {
+        'jobs',
+        'layers',
+        'feedback',
+        'file',
+        'counts',
+    }
 
 
 def test_an_older_tool_tells_all_rules_at_the_end():
-    """Its one line has the rules, which are read as those of --stream."""
+    """Its one line has the rules, which are read as those of --stream. The
+    run does not say that it checks the rules after the first, which are
+    done already."""
     read, feedback = reading()
     assert read.line(line({**LAST, 'rules': [FIRST, SECOND]}))
     assert read.complete
     assert read.warnings == LAST['warnings']
     assert values(feedback) == EXPECTED
+    assert feedback.stages() == [(Stage.WRITING, None, 2)]
 
 
 def test_a_rule_past_the_last_fails_the_run():
@@ -169,7 +213,7 @@ def test_a_rule_past_the_last_fails_the_run():
     read, feedback = reading()
     for value in (FIRST, SECOND):
         assert read.line(line(value))
-    with pytest.raises(RunError, match='not of the rules of the run'):
+    with pytest.raises(RunError, match=MISMATCH):
         read.line(line(FIRST))
     assert len(feedback.checks()) == 2
     assert 'The run has 2 rules, and the tool told of' in feedback.textLog()
@@ -220,7 +264,7 @@ def test_a_report_of_the_next_rule_on_other_layers_fails_the_run(
         assert read.line(line(first))
     else:
         second = first
-    with pytest.raises(RunError, match='not of the rules of the run'):
+    with pytest.raises(RunError, match=MISMATCH):
         read.line(line(second))
     assert (
         values(feedback)
@@ -234,7 +278,7 @@ def test_a_report_of_the_next_rule_on_other_layers_fails_the_run(
 def test_a_layer_numbered_again_fails_the_run():
     read, feedback = reading([TWICE[0], TWICE[0]])
     assert read.line(line(ROADS))
-    with pytest.raises(RunError, match='not of the rules of the run'):
+    with pytest.raises(RunError, match=MISMATCH):
         read.line(line(on('roads', 0)))
     assert len(feedback.checks()) == 1
     assert f'and the tool told of {DANGLES} (roads #0)' in feedback.textLog()
@@ -253,14 +297,14 @@ def test_each_layer_is_read_by_the_number_the_tool_gives_it():
 def test_a_report_of_another_rule_fails_the_run():
     read, feedback = reading()
     assert read.line(line(FIRST))
-    with pytest.raises(RunError, match='not of the rules of the run'):
+    with pytest.raises(RunError, match=MISMATCH):
         read.line(line({**SECOND, 'spec': {**SECOND['spec'], 'rule': DANGLES}}))
     assert len(feedback.checks()) == 1
 
 
 def test_an_older_tool_whose_rules_are_of_other_layers_fails():
     read, feedback = reading(TWICE)
-    with pytest.raises(RunError, match='not of the rules of the run'):
+    with pytest.raises(RunError, match=MISMATCH):
         read.line(line({**LAST, 'rules': [RIVERS, ROADS]}))
     assert feedback.checks() == []
     assert read.warnings is None
@@ -276,7 +320,7 @@ def test_a_feature_outside_its_export_keeps_its_number():
 
 def test_a_report_of_a_rule_that_is_not_of_the_run_fails_it():
     read, feedback = reading()
-    with pytest.raises(RunError, match='not of the rules of the run'):
+    with pytest.raises(RunError, match=MISMATCH):
         read.line(line(changed(('spec', 'rule'), 'line/no-such-rule')))
     assert feedback.checks() == []
     assert (
@@ -296,7 +340,8 @@ def changed(path: tuple[object, ...], new: object) -> dict[str, object]:
     return value
 
 
-GARBAGE = {
+# Lines of the output that are not of the report
+NOISE = {
     'empty': '',
     'text': 'reading roads',
     'null': 'null',
@@ -305,7 +350,31 @@ GARBAGE = {
     'number': '12',
     'thousands of digits': '9' * 5000,
     'nested deep': '[' * 100000,
+    'an object': line({'message': 'reading roads', 'errors': [1]}),
+    'cut off before': '{"message": "the spec',
+    'junk after a brace': '{"rules": ' + 'x' * 1000,
+}
+
+
+@pytest.mark.parametrize('text', list(NOISE.values()), ids=list(NOISE))
+def test_a_line_that_is_not_of_the_report_says_nothing(text: str):
+    """It is left out, and the next line of the report is read as if it
+    were not there."""
+    read, feedback = reading()
+    assert not read.line(text)
+    assert feedback.checks() == []
+    assert read.warnings is None
+    assert not read.broken
+    assert read.line(line(FIRST))
+    assert read.line(line(SECOND))
+    assert values(feedback) == EXPECTED
+    assert 'cannot be read' not in feedback.textLog()
+
+
+# Lines of the report that cannot be read
+BROKEN = {
     'cut off': line(FIRST)[: len(line(FIRST)) // 2],
+    'garbled': '{"spec": {"rule": 5}, broken',
     'no spec': line({'spec': None, 'errors': [1]}),
     'rule a number': line(changed(('spec', 'rule'), 5)),
     'other without a number': line(changed(('other',), 'rivers')),
@@ -317,6 +386,7 @@ GARBAGE = {
     'count a float': line(changed(('counts', 'dangle'), 2.0)),
     'count a bool': line(changed(('counts', 'dangle'), True)),
     'errors a number': line(changed(('errors',), 5)),
+    'an error a number': line(changed(('errors', 0), 5)),
     'no geometry': line(changed(('errors', 0, 'geometry'), None)),
     'unknown geometry': line(changed(('errors', 0, 'geometry'), {'Circle': 1})),
     'two geometries': line(
@@ -338,17 +408,55 @@ GARBAGE = {
 }
 
 
-@pytest.mark.parametrize('text', list(GARBAGE.values()), ids=list(GARBAGE))
-def test_a_line_that_is_not_of_the_report_says_nothing(text: str):
-    """It is left out, and the next line of the report is read as if it
-    were not there."""
+@pytest.mark.parametrize('text', list(BROKEN.values()), ids=list(BROKEN))
+def test_no_line_is_read_after_one_of_the_report_that_cannot_be_read(
+    text: str,
+):
+    """Not even the next rule: the report cannot tell which rule the line
+    was of. The log says which rule's report it took it for, and the start
+    of the line."""
     read, feedback = reading()
     assert not read.line(text)
+    assert read.broken
+    for value in (FIRST, SECOND, LAST):
+        assert not read.line(line(value))
     assert feedback.checks() == []
-    assert read.warnings is None
+    assert not read.complete
+    assert read.over
+    log = feedback.textLog()
+    assert 'The report of rule 1 cannot be read (' in log
+    assert text.strip()[:50] in log
+    assert len(log) < 1000
+
+
+def test_a_rule_of_the_same_name_is_not_told_after_a_line_that_cannot_be_read():
+    """The same rule on two layers: once the line of the first cannot be
+    read, that of the second is not taken for the first, nor for itself."""
+    read, feedback = reading(TWICE)
+    assert not read.line('{"spec": {"rule": 5}, broken')
+    assert not read.line(line(RIVERS))
+    assert not read.line(line(ROADS))
+    assert not read.line(line(LAST))
+    assert feedback.checks() == []
+    assert read.gathered.counts == []
+
+
+def test_a_line_that_cannot_be_read_keeps_the_rules_before_it():
+    read, feedback = reading()
     assert read.line(line(FIRST))
-    assert read.line(line(SECOND))
-    assert values(feedback) == EXPECTED
+    assert not read.line(BROKEN['cut off'])
+    assert not read.line(line(SECOND))
+    assert values(feedback) == EXPECTED[:1]
+    assert 'The report of rule 2 cannot be read (' in feedback.textLog()
+
+
+def test_an_older_tool_with_a_rule_that_cannot_be_read_tells_none_after():
+    read, feedback = reading()
+    broken = {**SECOND, 'counts': [1]}
+    assert not read.line(line({**LAST, 'rules': [FIRST, broken]}))
+    assert values(feedback) == EXPECTED[:1]
+    assert read.broken
+    assert read.warnings is None
 
 
 def test_a_rule_is_not_gathered_once_the_run_is_canceled():

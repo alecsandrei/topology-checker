@@ -175,7 +175,8 @@ class CheckDefinition(SinkAlgorithm):
                         path,
                     ),
                     feedback,
-                )
+                ),
+                feedback,
             )
             with memory_copy(path) as source:
                 results = self.write_sinks(

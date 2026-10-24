@@ -178,15 +178,18 @@ def stage_changed(dock: Dock, run: Run, staged: Staged) -> None:
             else tr('Checking {count} rules').format(count=total)
         )
     elif 0 <= index < total:
-        template = (
+        dock.stage.say_about(
             tr('Checking {rule}')
             if total == 1
-            else tr('Checking {rule} ({index} of {total})').format(
-                rule='{rule}', index=index + 1, total=total
-            )
+            else tr('Checking {rule} ({index} of {total})'),
+            run.entries[index].title,
+            index=index + 1,
+            total=total,
         )
-        dock.stage.say_about(template, run.entries[index].title)
-    if index is not None or run.done:
+    if index is None and not run.done:
+        # Until the engine tells of the rules, which are all done then
+        dock.progress.setRange(0, 0)
+    else:
         dock.progress.setRange(0, total)
         dock.progress.setValue(len(run.done))
 

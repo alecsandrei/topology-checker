@@ -321,8 +321,8 @@ def test_runs_at_the_same_time_keep_to_their_own_rules(tmp_path: Path):
 class Holding:
     """The runs of the rules that the test lets go on rule by rule: with the
     package each report waits at a gate; the executable waits before the
-    line of each rule, and before it ends. The writing of the errors
-    waits."""
+    line of each rule, and before it ends. The writing of the errors of the
+    last rule waits."""
 
     engine: Engine
     gates: Gates

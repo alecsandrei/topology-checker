@@ -12,7 +12,7 @@ import dataclasses
 import typing as t
 from enum import Enum
 
-from qgis.core import QgsGeometry, QgsProcessingFeedback
+from qgis.core import QgsProcessingFeedback
 
 from ..utils import tr
 from .binary import named_with
@@ -27,13 +27,14 @@ class Stage(str, Enum):
     WRITING = 'writing'
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True, slots=True)
 class Found:
     """An error of a rule as a row of the layer of its family: a multi
-    geometry and the columns that the error layers have."""
+    geometry, as WKB, which takes a fraction of the memory of a geometry,
+    and the columns that the error layers have."""
 
     family: str
-    geometry: QgsGeometry
+    wkb: bytes
     values: tuple[object, ...]
 
 
@@ -72,20 +73,23 @@ def staged(
         feedback.staged(stage, index, total)
 
 
-def checked(feedback: QgsProcessingFeedback, done: Checked) -> None:
+def checked(
+    feedback: QgsProcessingFeedback, done: Checked, more: bool = False
+) -> None:
     """Tells the log and the progress that a rule is done, and the feedback
     of the panel what it found. Then the next rule is checked, or the
-    errors are written."""
+    errors are written. With more, the next rule is done already, and is
+    told next: the run does not say that it checks it."""
     feedback.setProgress(
         max(feedback.progress(), 50 + 50 * (done.index + 1) / done.total)
     )
     if isinstance(feedback, Progress):
         feedback.checked(done)
         following = done.index + 1
-        if following < done.total:
-            feedback.staged(Stage.CHECKING, following, done.total)
-        else:
+        if following >= done.total:
             feedback.staged(Stage.WRITING, None, done.total)
+        elif not more:
+            feedback.staged(Stage.CHECKING, following, done.total)
 
 
 def label(job: Job) -> str:

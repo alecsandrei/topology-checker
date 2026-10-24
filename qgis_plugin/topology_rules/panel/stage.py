@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import string
 import typing as t
 
 from qgis.PyQt.QtCore import Qt
@@ -25,10 +26,10 @@ class StageLabel(QLabel):
         self.setToolTip(self.full())
         self.fit()
 
-    def say_about(self, template: str, name: str) -> None:
-        """Says the template with the name where it has '{rule}'."""
-        before, _, after = template.partition('{rule}')
-        self.say(before, name, after)
+    def say_about(self, template: str, name: str, **values: object) -> None:
+        """Says the template with the values in its fields, and the name
+        where it has the field rule."""
+        self.say(*filled(template, name, values))
 
     def full(self) -> str:
         return ''.join(self.parts)
@@ -50,3 +51,40 @@ class StageLabel(QLabel):
     def resizeEvent(self, a0: t.Any) -> None:
         super().resizeEvent(a0)
         self.fit()
+
+
+def filled(
+    template: str, name: str, values: t.Mapping[str, object]
+) -> tuple[str, str, str]:
+    """The text of the template before the field rule, the name, and the
+    text after it, with the values in the other fields. A template without
+    the field, such as a translation that left it out, or that cannot be
+    read, is followed by the name."""
+    parts: list[list[str]] = [[]]
+    try:
+        for text, field, spec, conversion in string.Formatter().parse(template):
+            parts[-1].append(text)
+            if field is None:
+                continue
+            if field == 'rule':
+                if len(parts) == 1:
+                    parts.append([])
+                else:
+                    parts[-1].append(name)
+            elif field in values:
+                value = values[field]
+                if conversion == 'r':
+                    value = repr(value)
+                elif conversion == 'a':
+                    value = ascii(value)
+                elif conversion == 's':
+                    value = str(value)
+                parts[-1].append(format(value, spec or ''))
+            else:
+                parts[-1].append(f'{{{field}}}')
+    except (ValueError, TypeError):
+        parts = [[template]]
+    if len(parts) == 1:
+        return ''.join(parts[0]) + ' ', name, ''
+    before, after = parts
+    return ''.join(before), name, ''.join(after)

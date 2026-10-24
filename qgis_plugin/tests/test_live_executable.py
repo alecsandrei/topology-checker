@@ -595,7 +595,6 @@ def reordering(tmp_path: Path, order: list[int | str], **how: t.Any) -> str:
     ('order', 'kept'),
     [
         pytest.param([1, 0], 0, id='swapped'),
-        pytest.param(['{"spec": {"rule": 5}, cut', 1], 0, id='first cut off'),
         pytest.param([0, 0, 1], 1, id='first twice'),
         pytest.param([0, 1, 1], 2, id='last twice'),
     ],
@@ -610,7 +609,9 @@ def test_a_report_on_other_layers_fails_the_run(
     reference = run_told(executable, jobs, tmp_path / 'reference')
     assert all(reference.outcome.counts)
     recorder = Recorder()
-    with pytest.raises(RunError, match=r'^The report of the tool is not of'):
+    with pytest.raises(
+        RunError, match=r"^The executable's report does not match the rules"
+    ):
         run_told(
             reordering(tmp_path, order),
             jobs,
@@ -633,6 +634,48 @@ def test_a_report_on_other_layers_fails_the_run(
         ) in log
     else:
         assert 'The run has 2 rules, and the tool told of' in log
+
+
+# A line of the report that cannot be read
+GARBLED = '{"spec": {"rule": 5}, broken'
+
+
+@pytest.mark.parametrize(
+    ('order', 'kept'),
+    [
+        pytest.param([GARBLED, 1], 0, id='first, then the second'),
+        pytest.param([GARBLED, 0, 1], 0, id='first, then all'),
+        pytest.param([0, GARBLED, 1], 1, id='second'),
+    ],
+)
+def test_no_rule_is_told_after_a_line_of_the_report_that_cannot_be_read(
+    executable: str, tmp_path: Path, order: list[int | str], kept: int
+):
+    """The same rule on two layers: a line that cannot be read could be of
+    either, so no line after it is read. The run fails, and keeps the rules
+    before it with their own errors."""
+    jobs = jobs_of(executable, same_rule_on_two_layers())
+    reference = run_told(executable, jobs, tmp_path / 'reference')
+    recorder = Recorder()
+    with pytest.raises(
+        RunError, match=r"^Could not read the executable's report\.$"
+    ):
+        run_told(
+            reordering(tmp_path, order),
+            jobs,
+            tmp_path / 'run',
+            feedback=recorder,
+        )
+    assert [d.count for d in recorder.checks()] == (
+        reference.outcome.counts[:kept]
+    )
+    assert found_rows(recorder.checks()) == found_rows(
+        reference.feedback.checks()[:kept]
+    )
+    assert not (tmp_path / 'run' / 'errors.gpkg').exists()
+    log = recorder.textLog()
+    assert f'The report of rule {kept + 1} cannot be read (' in log
+    assert GARBLED in log
 
 
 def test_a_report_in_the_order_of_the_run_is_read(
@@ -667,7 +710,7 @@ def test_a_report_that_lacks_a_part_fails_the_run(
     path = reordering(tmp_path, [*order, junk], last=last)
     with pytest.raises(RunError) as raised:
         run_told(path, jobs, tmp_path / 'run', feedback=recorder)
-    assert str(raised.value) == 'Could not read the report of the tool'
+    assert str(raised.value) == "Could not read the executable's report."
     log = recorder.textLog()
     assert lacks in log
     assert (

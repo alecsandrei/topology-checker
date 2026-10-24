@@ -6,19 +6,28 @@ from __future__ import annotations
 
 import collections.abc as c
 import contextlib
+import gc
 import sqlite3
 import typing as t
 from pathlib import Path
 
 import pytest
-from qgis.core import QgsGeometry, QgsProcessingFeedback
+from qgis.core import QgsProcessingContext, QgsProcessingFeedback, QgsProject
 
 from topology_rules.core import engine
 from topology_rules.core.binary import Rule
-from topology_rules.core.checks import Job
+from topology_rules.core.checks import Job, run_jobs
 from topology_rules.core.engine import Package, Tool
+from topology_rules.core.errors import from_wkb
 from topology_rules.core.layers import Input
-from topology_rules.core.progress import Checked, Stage, counted, label
+from topology_rules.core.progress import (
+    Checked,
+    Found,
+    Progress,
+    Stage,
+    counted,
+    label,
+)
 from topology_rules.exceptions import RunError
 
 from .helpers import line_layer, point_layer, polygon_layer, real_streams
@@ -199,19 +208,34 @@ def streams(tool: Tool) -> bool:
 
 
 def told_in_order(
-    recorder: Recorder, total: int, streams: bool, refused: bool = False
+    recorder: Recorder,
+    total: int,
+    streams: bool,
+    refused: bool = False,
+    together: bool = False,
 ) -> None:
     """A run reads, then checks the rules one after the other, telling of
-    each when it is done and which comes next, then writes the errors."""
+    each when it is done and which comes next, then writes the errors. One
+    that is told all rules at once does not go through them. With together,
+    a rule that is done by the time the one before it is told may not be
+    said to be checked."""
     events = last_attempt(recorder)
     stages = expected_stages(total, streams, refused)
-    # What the run says before the first rule is done
-    head = len(stages) - total
-    expected: list[object] = list(stages[:head])
     done = [e for e in events if isinstance(e, Checked)]
     assert [d.index for d in done] == list(range(total))
+    if not streams:
+        assert events == [*stages[:-1], *done, stages[-1]]
+        return
+    expected: list[object] = list(stages[:2])
     for index in range(total):
-        expected += [done[index], stages[head + index]]
+        expected += [done[index], stages[index + 2]]
+    if together:
+        expected = [
+            e
+            for e in expected
+            if e in events
+            or not (isinstance(e, tuple) and e[0] is Stage.CHECKING and e[1])
+        ]
     assert events == expected
 
 
@@ -253,7 +277,12 @@ def test_each_rule_is_told_as_soon_as_it_is_done(
 ):
     jobs = jobs_of(tool, SHAPES[shape]())
     told = run_told(tool, jobs, tmp_path / 'run')
-    told_in_order(told.feedback, len(jobs), streams(tool))
+    told_in_order(
+        told.feedback,
+        len(jobs),
+        streams(tool),
+        together=isinstance(tool, Package),
+    )
     done = told.feedback.checks()[-len(jobs) :]
     assert [d.count for d in done] == told.outcome.counts
     assert {d.total for d in done} == {len(jobs)}
@@ -280,7 +309,7 @@ def test_the_errors_of_a_rule_are_in_the_order_of_their_layers(
         kinds = [order.index(found.family) for found in done.errors]
         assert kinds == sorted(kinds)
         for found in done.errors:
-            assert QgsGeometry(found.geometry).isMultipart()
+            assert from_wkb(found.wkb).isMultipart()
 
 
 def test_a_rule_is_told_with_the_names_of_its_layers(
@@ -384,6 +413,60 @@ def test_the_shapes_have_what_they_are_named_after(
     assert len(counts['single']) == 1
     assert all(counts['families'])
     assert sum(counts['many']) >= 80
+
+
+# Many errors
+
+# The errors of each rule of a run of many
+MANY = 3000
+
+
+class Counted(Progress):
+    """A feedback that counts the errors that the run holds as each rule is
+    done, and keeps nothing of what it is told."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.held: list[int] = []
+
+    def checked(self, done: Checked) -> None:
+        self.held.append(
+            sum(isinstance(item, Found) for item in gc.get_objects())
+        )
+
+
+def apart(name: str) -> Input:
+    """Lines that touch nothing, with two dangles each."""
+    return project(
+        line_layer(
+            *(
+                f'LINESTRING({i * 10} 0, {i * 10 + 5} 0)'
+                for i in range(MANY // 2)
+            ),
+            name=name,
+        )
+    )
+
+
+def test_a_run_holds_the_errors_of_one_rule_at_a_time(
+    tool: Tool, tmp_path: Path
+):
+    """A rule's errors go to the file as soon as it is done, and are let go
+    of: the run does not keep the errors of the rules before."""
+    jobs = jobs_of(
+        tool,
+        [('line/must-not-have-dangles', apart(f'lines {n}')) for n in range(3)],
+    )
+    work = tmp_path / 'work'
+    work.mkdir()
+    output = tmp_path / 'errors.gpkg'
+    context = QgsProcessingContext()
+    context.setProject(QgsProject.instance())
+    feedback = Counted()
+    outcome = run_jobs(jobs, tool, None, str(output), work, context, feedback)
+    assert outcome.counts == [MANY] * len(jobs)
+    assert feedback.held == [MANY] * len(jobs)
+    assert sum(map(len, file_rows(output).values())) == MANY * len(jobs)
 
 
 # Failures

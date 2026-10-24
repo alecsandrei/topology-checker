@@ -4,12 +4,14 @@ import collections.abc as c
 import typing as t
 
 from qgis.PyQt.QtCore import QEvent, Qt, pyqtSignal
-from qgis.PyQt.QtGui import QKeyEvent
+from qgis.PyQt.QtGui import QFont, QFontMetrics, QIcon, QKeyEvent
 from qgis.PyQt.QtWidgets import (
     QAbstractItemView,
     QHBoxLayout,
     QHeaderView,
     QPushButton,
+    QStyle,
+    QStyleOptionViewItem,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -19,10 +21,10 @@ from qgis.PyQt.QtWidgets import (
 from ..utils import not_none
 from .entries import Entry, project_layer, unit_of
 from .hint import Hint
-from .icons import decorate
+from .icons import decorate, icon
 from .marks import ENTRY, LAYER, OTHER, layer_text, mark_nodes, tip, tr
 from .narrow import shrink_buttons
-from .wrapping import wrap_long_text
+from .wrapping import WrapDelegate, wrap_long_text
 
 COLUMNS = ('Rule', 'Errors')
 # A rule that can be ticked, and one that a run keeps as it is. PyQt5
@@ -33,6 +35,24 @@ EDITABLE: t.Any = (
     | Qt.ItemFlag.ItemIsUserCheckable
 )
 READ_ONLY: t.Any = Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled
+# Where the count of a rule is: on the line of its label, at the right
+COUNT_ALIGNMENT: t.Any = (
+    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+)
+# The fewest digits that the column of the counts has room for
+DIGITS = 4
+
+
+class CountDelegate(WrapDelegate):
+    """Draws the icon of the rule that runs at the right of its cell, where
+    its count comes."""
+
+    def initStyleOption(  # pyright: ignore[reportIncompatibleMethodOverride]
+        self, *args: t.Any
+    ) -> None:
+        super().initStyleOption(*args)
+        option = t.cast(QStyleOptionViewItem, args[0])
+        option.decorationPosition = QStyleOptionViewItem.Position.Right
 
 
 class RuleList(QWidget):
@@ -68,12 +88,10 @@ class RuleList(QWidget):
         header.setStretchLastSection(False)
         header.setMinimumSectionSize(8)
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        # Room for a number of four digits, whatever the font, and no more
+        # As wide as the counts need, which fit_counts sees to
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
-        header.resizeSection(
-            1, self.tree.fontMetrics().horizontalAdvance('0000') + 2
-        )
         wrap_long_text(self.tree)
+        self.tree.setItemDelegateForColumn(1, CountDelegate(self.tree))
         self.placeholder = Hint(
             self.tree, tr('Choose a layer and a rule above, then add the rule.')
         )
@@ -179,6 +197,8 @@ class RuleList(QWidget):
             self.filling = was
 
     def mark_running(self, item: QTreeWidgetItem) -> None:
+        """Makes the rule that runs bold, with the icon of a running task
+        where its count comes."""
         index = item.data(0, ENTRY)
         running = index is not None and self.entries[index] is self.running
         for column in range(len(COLUMNS)):
@@ -186,6 +206,32 @@ class RuleList(QWidget):
             if font.bold() != running:
                 font.setBold(running)
                 item.setFont(column, font)
+        if item.icon(1).isNull() == running:
+            item.setIcon(1, icon('running') if running else QIcon())
+
+    def fit_counts(self) -> None:
+        """Makes the column of the counts as wide as the widest count, of
+        four digits at least, with the margins of the text, so that a count
+        never runs into the rule."""
+        font = QFont(self.tree.font())
+        # The rule that runs is bold
+        font.setBold(True)
+        metrics = QFontMetrics(font)
+        texts = ['0' * DIGITS] + [
+            str(entry.errors) for entry in self.entries if entry.errors
+        ]
+        widest = max(metrics.horizontalAdvance(text) for text in texts)
+        style = not_none(self.tree.style())
+        margin = (
+            style.pixelMetric(
+                QStyle.PixelMetric.PM_FocusFrameHMargin, None, self.tree
+            )
+            + 1
+        )
+        width = widest + 2 * margin + 2
+        header = not_none(self.tree.header())
+        if header.sectionSize(1) != width:
+            header.resizeSection(1, width)
 
     def item_changed(self, item: QTreeWidgetItem, column: int) -> None:
         index = item.data(0, ENTRY)
@@ -286,6 +332,7 @@ class RuleList(QWidget):
                     )
         finally:
             self.filling = was
+        self.fit_counts()
 
     def show_entries(self) -> None:
         """Fills the tree from the entries, marking the layers that have left
@@ -313,12 +360,13 @@ class RuleList(QWidget):
             )
             child.setData(0, OTHER, entry.other)
             child.setToolTip(0, tip(entry))
-            child.setTextAlignment(1, Qt.AlignmentFlag.AlignRight)
+            child.setTextAlignment(1, COUNT_ALIGNMENT)
             child.setToolTip(1, tr('Errors found in the last run'))
             parent.addChild(child)
             if self.running is not None:
                 self.mark_running(child)
         self.refresh_marks()
+        self.fit_counts()
         self.tree.expandAll()
         self.placeholder.set_empty(not self.entries)
         self.filling = False
