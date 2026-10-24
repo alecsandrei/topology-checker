@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Iterator
 from dataclasses import dataclass
 from types import MappingProxyType, TracebackType
@@ -151,6 +152,7 @@ class ValidationStream(Iterator[Violation]):
     Use a context manager or close() when stopping early. The worker owns immutable
     snapshots; later registrations cannot change this stream. Final summary is
     available only after successful exhaustion, and is None after early close.
+    Threads may share one stream; each violation goes to one of them.
     """
 
     def __init__(
@@ -165,6 +167,9 @@ class ValidationStream(Iterator[Violation]):
         self._specs = specs
         self._crs = crs
         self._batch: Iterator[_native.NativeViolation] = iter(())
+        # Guards the batch. close() takes it only after cancelling, which wakes
+        # a holder waiting for the next batch.
+        self._lock = threading.RLock()
         self._closed = False
         self.summary: ReportSummary | None = None
 
@@ -172,12 +177,20 @@ class ValidationStream(Iterator[Violation]):
         return self
 
     def __next__(self) -> Violation:
+        with self._lock:
+            item = self._take()
+        return decode(item, self._layers, self._specs)
+
+    def _take(self) -> _native.NativeViolation:
         if self._closed:
             raise StopIteration
         try:
             item = next(self._batch, None)
             if item is None:
-                self._batch = iter(self._native.next_batch())
+                batch = self._native.next_batch()
+                if self._closed:
+                    raise StopIteration
+                self._batch = iter(batch)
                 item = next(self._batch, None)
                 if item is None:
                     summary = self._native.summary
@@ -187,7 +200,7 @@ class ValidationStream(Iterator[Violation]):
                         )
                     self.close()
                     raise StopIteration
-            return decode(item, self._layers, self._specs)
+            return item
         except StopIteration:
             raise
         except BaseException:
@@ -195,11 +208,14 @@ class ValidationStream(Iterator[Violation]):
             raise
 
     def close(self) -> None:
-        """Cancel work and release queued violations; repeated close is harmless."""
-        if not self._closed:
-            self._closed = True
+        """Cancel work and release queued violations; repeated close is harmless.
+
+        Returns once the worker has stopped, also when another thread closes too.
+        """
+        self._closed = True
+        self._native.close()
+        with self._lock:
             self._batch = iter(())
-            self._native.close()
 
     def __enter__(self) -> ValidationStream:
         return self
@@ -262,10 +278,12 @@ class ReportStream(Iterator[RuleReport]):
             raise
 
     def close(self) -> None:
-        """Cancel the remaining rules; repeated close is harmless."""
-        if not self._closed:
-            self._closed = True
-            self._native.close()
+        """Cancel the remaining rules; repeated close is harmless.
+
+        Returns once the worker has stopped, also when another thread closes too.
+        """
+        self._closed = True
+        self._native.close()
 
     def __enter__(self) -> ReportStream:
         return self
