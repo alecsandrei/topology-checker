@@ -315,7 +315,16 @@ impl LineGraph {
                     (end, nodes.collect())
                 })
                 .collect();
-            trim_returns(&mut parts, &mut raw_edges, trims, &ties);
+            let mut list = Vec::new();
+            let mut spans = Vec::new();
+            for part in &parts {
+                spans.push(list.len()..list.len() + part.nodes.len());
+                list.extend(&part.nodes);
+            }
+            trim_returns(&parts, &list, &mut spans, &mut raw_edges, trims, &ties);
+            for (part, span) in parts.iter_mut().zip(spans) {
+                part.nodes = list[span].to_vec();
+            }
         }
         let mut contacts = BTreeMap::<_, Vec<_>>::new();
         for (coordinate, contact) in original_contacts {

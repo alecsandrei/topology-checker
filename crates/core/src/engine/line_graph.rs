@@ -1,7 +1,7 @@
 use crate::cache::Cache;
 use crate::{
     Error, FeatureRef, LayerId, Topology,
-    cancel::{checkpoint, every},
+    cancel::{self, checkpoint, every},
     engine::{
         cluster::{Sweep, distance},
         index::{self, Entry, Packed, Search},
@@ -15,7 +15,10 @@ use geo::{
 };
 use num_rational::BigRational;
 use num_traits::ToPrimitive;
-use std::collections::{BTreeMap, HashMap};
+use std::{
+    collections::{BTreeMap, HashMap},
+    ops::Range,
+};
 type FeatureKey = (LayerId, i64);
 /// A point where two passages meet, by its traversal position on each part.
 #[derive(Debug, Clone, Copy)]
@@ -346,7 +349,7 @@ pub(crate) struct EdgeUse {
 #[derive(Debug)]
 pub(crate) struct Edge {
     pub nodes: [usize; 2],
-    pub uses: std::ops::Range<usize>,
+    pub uses: Range<usize>,
 }
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Incident {
@@ -616,7 +619,9 @@ fn kept_visits(path: &[Visit], coords: &[Coord], tolerance: f64) -> [usize; 2] {
 /// An end that also lies within tolerance of another part, at a crack point
 /// outside its node, keeps its path: it still touches that part.
 fn trim_returns(
-    parts: &mut [GraphPart],
+    parts: &[GraphPart],
+    list: &[usize],
+    spans: &mut [Range<usize>],
     raw_edges: &mut Vec<([usize; 2], EdgeUse)>,
     trims: Vec<Trim>,
     ties: &HashMap<(usize, bool), Vec<usize>>,
@@ -632,7 +637,7 @@ fn trim_returns(
     // Parts ending at a removed node.
     let mut ends = HashMap::<usize, Vec<usize>>::new();
     for trim in &trims {
-        let nodes = &parts[trim.part].nodes;
+        let nodes = &list[spans[trim.part].clone()];
         for range in removed(trim, nodes.len()) {
             for (k, &node) in nodes[range].iter().enumerate() {
                 every(k, "trim.removed");
@@ -645,10 +650,8 @@ fn trim_returns(
         if part.is_closed {
             continue;
         }
-        for node in [part.nodes.first(), part.nodes.last()]
-            .into_iter()
-            .flatten()
-        {
+        let nodes = &list[spans[id].clone()];
+        for node in [nodes.first(), nodes.last()].into_iter().flatten() {
             if let Some(ends) = ends.get_mut(node)
                 && !ends.contains(&id)
             {
@@ -659,7 +662,8 @@ fn trim_returns(
     let mut dropped = Vec::<usize>::new();
     for trim in trims {
         checkpoint("trim.parts");
-        let nodes = &parts[trim.part].nodes;
+        let span = spans[trim.part].clone();
+        let nodes = &list[span.clone()];
         let n = nodes.len();
         let [mut start, mut end] = removed(&trim, n);
         let [first, last] = [nodes[0], nodes[n - 1]];
@@ -682,7 +686,7 @@ fn trim_returns(
             dropped.extend(trim.edges[1..=bounds[0]].iter().flatten());
         }
         if bounds != [0, n - 1] {
-            parts[trim.part].nodes = nodes[bounds[0]..=bounds[1]].to_vec();
+            spans[trim.part] = span.start + bounds[0]..span.start + bounds[1] + 1;
         }
     }
     parallel::sort(&mut dropped, "trim.dropped", Ord::cmp);
@@ -741,7 +745,7 @@ impl Found {
 }
 /// Runs of whole parts with similar numbers of segments, from the first
 /// segment of each part followed by the number of segments.
-fn part_ranges(workers: &Workers, starts: &[usize]) -> Vec<std::ops::Range<usize>> {
+fn part_ranges(workers: &Workers, starts: &[usize]) -> Vec<Range<usize>> {
     let parts = starts.len() - 1;
     let mut out = Vec::new();
     let mut first = 0;
@@ -2608,24 +2612,20 @@ impl LineGraph {
             .map(|(c, source)| (source, c))
             .collect::<Vec<_>>();
         workers.sort(&mut by_source, "cuts", Ord::cmp);
-        // Each task nodes a run of whole parts.
-        let mut runs = Vec::new();
-        let mut rest = &mut parts[..];
-        for range in part_ranges(&workers, &starts) {
-            let (head, tail) = rest.split_at_mut(range.len());
-            runs.push((range.start, head));
-            rest = tail;
-        }
-        let noded = workers.each(runs, |(first, run): (usize, &mut [GraphPart])| {
+        // Each task nodes a run of whole parts. Their nodes stay in one list per
+        // task until the end: see the last step.
+        let noded = workers.each(part_ranges(&workers, &starts), |run: Range<usize>| {
             let mut raw_edges: Vec<([usize; 2], EdgeUse)> = Vec::new();
             let mut trims = Vec::new();
+            let mut nodes = Vec::new();
+            let mut spans = Vec::with_capacity(run.len());
             // Segments of one part are consecutive, so one path is built at a time.
             let mut path: Vec<Visit> = Vec::new();
             let mut cuts = Vec::new();
-            let mut next = by_source.partition_point(|&(source, _)| source < starts[first]);
+            let mut next = by_source.partition_point(|&(source, _)| source < starts[run.start]);
             let mut work = 0_usize;
-            for (k, part) in run.iter_mut().enumerate() {
-                let id = first + k;
+            for id in run {
+                let part = &parts[id];
                 let coords = &part.original.0;
                 for source in starts[id]..starts[id + 1] {
                     every(work, "noding");
@@ -2666,6 +2666,9 @@ impl LineGraph {
                         }
                     }
                 }
+                let first = nodes.len();
+                nodes.extend(path.iter().map(|v| v.node));
+                spans.push(first..nodes.len());
                 if path.is_empty() {
                     continue;
                 }
@@ -2674,7 +2677,6 @@ impl LineGraph {
                 } else {
                     kept_visits(&path, coords, tolerance)
                 };
-                part.nodes.extend(path.iter().map(|v| v.node));
                 if bounds == [0, path.len() - 1] {
                     raw_edges.extend(path.iter().filter_map(|v| v.edge));
                 } else {
@@ -2695,13 +2697,16 @@ impl LineGraph {
                 }
                 path.clear();
             }
-            (raw_edges, trims)
+            (raw_edges, trims, nodes, spans)
         });
         drop(by_source);
         drop(cut_points);
         let mut raw_edges = Vec::with_capacity(segments.len());
         let mut trims = Vec::new();
-        for (edges, run) in noded {
+        // Nodes of all parts, and the span of each part's.
+        let mut nodes = Vec::new();
+        let mut spans = Vec::with_capacity(parts.len());
+        for (edges, run, run_nodes, run_spans) in noded {
             checkpoint("gather.edges");
             let base = raw_edges.len();
             trims.extend(run.into_iter().map(|mut trim| {
@@ -2709,28 +2714,18 @@ impl LineGraph {
                 trim
             }));
             raw_edges.extend(edges);
+            let base = nodes.len();
+            spans.extend(run_spans.into_iter().map(|s| s.start + base..s.end + base));
+            nodes.extend(run_nodes);
         }
         if !trims.is_empty() {
-            trim_returns(&mut parts, &mut raw_edges, trims, &ties);
+            trim_returns(&parts, &nodes, &mut spans, &mut raw_edges, trims, &ties);
         }
         // Contacts by node, each node's in the order found.
         let mut keys = parallel::repeated((0, 0), original_contacts.len(), "contacts");
         workers.fill(&mut keys, |k| (node_of[original_contacts[k].0], k));
         drop(node_of);
         workers.sort(&mut keys, "contacts.sort", Ord::cmp);
-        let mut grouped = Vec::<(usize, Vec<Contact>)>::new();
-        for (i, &(node, k)) in keys.iter().enumerate() {
-            every(i, "contacts");
-            let contact = original_contacts[k].1;
-            match grouped.last_mut() {
-                Some((last, list)) if *last == node => list.push(contact),
-                _ => grouped.push((node, vec![contact])),
-            }
-        }
-        drop(keys);
-        drop(original_contacts);
-        // In key order already, so the map is built in one pass.
-        let contacts = grouped.into_iter().collect::<BTreeMap<_, _>>();
         let coords = sweep.finish();
         workers.sort(&mut raw_edges, "edges.sort", |a, b| {
             (a.0, a.1.part, a.1.source).cmp(&(b.0, b.1.part, b.1.source))
@@ -2792,7 +2787,42 @@ impl LineGraph {
                 }
             }
         }
+        drop((cursor, edges, uses));
         let incident = Incidences { offsets, values };
+        // The many small lists of each part and node come last, without checks:
+        // freeing them on cancellation would take about as long as finishing.
+        let contacts = cancel::scope(None, || {
+            let mut runs = Vec::new();
+            let mut rest = &mut parts[..];
+            for range in part_ranges(&workers, &starts) {
+                let (head, tail) = rest.split_at_mut(range.len());
+                runs.push((range.start, head));
+                rest = tail;
+            }
+            workers.each(runs, |(first, run): (usize, &mut [GraphPart])| {
+                for (part, span) in run.iter_mut().zip(&spans[first..]) {
+                    part.nodes = nodes[span.clone()].to_vec();
+                }
+            });
+            // Each task lists the nodes whose contacts start in its range.
+            let grouped = workers.chunks(keys.len(), |range| {
+                let mut out = Vec::new();
+                let mut i = range.start;
+                while i < range.end && i > 0 && keys[i - 1].0 == keys[i].0 {
+                    i += 1;
+                }
+                while i < range.end {
+                    let node = keys[i].0;
+                    let end = i + keys[i..].partition_point(|&(n, _)| n == node);
+                    let list = keys[i..end].iter().map(|&(_, k)| original_contacts[k].1);
+                    out.push((node, list.collect::<Vec<Contact>>()));
+                    i = end;
+                }
+                out
+            });
+            // In key order already, so the map is built in one pass.
+            grouped.into_iter().flatten().collect::<BTreeMap<_, _>>()
+        });
         Ok(Self {
             matches: Cache::new(),
             #[cfg(test)]
