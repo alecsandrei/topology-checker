@@ -6,6 +6,88 @@ use topology_checker_io::{
 };
 
 #[test]
+fn each_finished_rule_hands_over_its_own_stored_rows() {
+    let root = tempfile::tempdir().unwrap();
+    let mut topology = Topology::new(0.).unwrap();
+    let layer = |name: &str, fids: &[i64]| {
+        Layer::from_features(
+            name,
+            fids.iter()
+                .map(|&fid| (fid, Point::new(5., 52.).into()))
+                .collect::<Vec<_>>(),
+        )
+    };
+    let points = topology.add_layer(layer("points", &[1, 2, 3]));
+    let single = topology.add_layer(layer("single", &[7]));
+    let copies = topology.add_layer(layer("copies", &[4, 5]));
+    for (a, b) in [(points, None), (single, None), (points, Some(copies))] {
+        let rule = if b.is_some() {
+            Rule::PointMustNotOverlapWith
+        } else {
+            Rule::PointMustNotOverlap
+        };
+        topology.add_rule(rule, a, b).unwrap();
+    }
+    topology
+        .add_rule(Rule::PointMustNotOverlap, copies, None)
+        .unwrap();
+    let mut seen = Vec::new();
+    let stored = DiskReport::validate_with_progress(&topology, Some(root.path()), |rule, rows| {
+        assert_eq!(rows.size_hint(), (rule.total, Some(rule.total)));
+        // Rows left unread, or read only in part, do not shift later rules.
+        let rows = match rule.spec.id.index() {
+            0 => rows.take(1).collect::<anyhow::Result<Vec<_>>>()?,
+            3 => Vec::new(),
+            _ => rows.collect::<anyhow::Result<Vec<_>>>()?,
+        };
+        seen.push((rule.spec.id.index(), rule.total, rows));
+        Ok(())
+    })
+    .unwrap();
+    let totals = seen.iter().map(|(i, n, _)| (*i, *n)).collect::<Vec<_>>();
+    assert_eq!(totals, [(0, 3), (1, 0), (2, 6), (3, 1)]);
+    let mut all = stored.rows().map(Result::unwrap).collect::<Vec<_>>();
+    for (index, total, rows) in seen {
+        let rest = all.split_off(total);
+        let expected = std::mem::replace(&mut all, rest);
+        assert!(expected.iter().all(|(rule, _)| *rule == index));
+        let expected = expected.into_iter().map(|(_, v)| v);
+        let expected = match index {
+            0 => expected.take(1).collect::<Vec<_>>(),
+            3 => Vec::new(),
+            _ => expected.collect(),
+        };
+        assert_eq!(rows, expected, "rule {index}");
+    }
+    assert!(all.is_empty());
+}
+
+#[test]
+fn a_failing_rule_end_stops_validation_and_removes_the_rows() {
+    let root = tempfile::tempdir().unwrap();
+    let mut topology = Topology::new(0.).unwrap();
+    let points = topology.add_layer(Layer::from_features(
+        "points",
+        [1, 2].map(|fid| (fid, Point::new(5., 52.).into())),
+    ));
+    for _ in 0..2 {
+        topology
+            .add_rule(Rule::PointMustNotOverlap, points, None)
+            .unwrap();
+    }
+    let mut ended = 0;
+    let error = DiskReport::validate_with_progress(&topology, Some(root.path()), |_, mut rows| {
+        ended += 1;
+        rows.next().unwrap()?;
+        anyhow::bail!("output closed")
+    })
+    .unwrap_err();
+    assert_eq!(error.to_string(), "output closed");
+    assert_eq!(ended, 1);
+    assert_eq!(std::fs::read_dir(root.path()).unwrap().count(), 0);
+}
+
+#[test]
 fn binary_disk_rows_random_access_and_every_export_match_eager() {
     let root = tempfile::tempdir().unwrap();
     let mut topology = Topology::new(0.).unwrap();
