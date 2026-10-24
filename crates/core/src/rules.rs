@@ -207,7 +207,9 @@ fn feature_kinds(rule: Rule) -> &'static [ViolationKind] {
 /// order. Geometry scratch belongs to one feature and its candidate targets, and no
 /// complete feature-pair report is retained. Batches of `batch` features run in
 /// parallel and each feature runs once: its first kind is emitted with its batch, and
-/// later kinds wait until every feature has emitted the first.
+/// later kinds wait until every feature has emitted the first. The first feature runs
+/// alone, so it builds the caches every feature shares, such as the line graph, before
+/// workers would wait for them.
 fn per_feature_into<E>(
     t: &Topology,
     spec: RuleSpec,
@@ -222,23 +224,26 @@ fn per_feature_into<E>(
     fids.sort_unstable();
     let kinds = feature_kinds(spec.rule);
     let mut later = kinds.iter().skip(1).map(|_| Vec::new()).collect::<Vec<_>>();
-    for fids in fids.chunks(batch.max(1)) {
+    let feature = |fid| {
+        // Worker threads do not see the caller's cancellation scope.
+        t.cancellable(|| {
+            #[cfg(test)]
+            tests::visit(t, spec, fid)?;
+            let mut snapshot = t.snapshot();
+            snapshot.select_feature(spec.layer, fid)?;
+            let mut violations = run(&snapshot, spec)?;
+            sort(&mut violations);
+            Ok::<_, Error>(violations)
+        })
+    };
+    let first = fids.len().min(1);
+    let batches = std::iter::once(&fids[..first]).chain(fids[first..].chunks(batch.max(1)));
+    for fids in batches {
         crate::cancel::check();
-        let results = fids
-            .par_iter()
-            .map(|&fid| {
-                // Worker threads do not see the caller's cancellation scope.
-                t.cancellable(|| {
-                    #[cfg(test)]
-                    tests::visit(t, spec, fid)?;
-                    let mut snapshot = t.snapshot();
-                    snapshot.select_feature(spec.layer, fid)?;
-                    let mut violations = run(&snapshot, spec)?;
-                    sort(&mut violations);
-                    Ok(violations)
-                })
-            })
-            .collect::<Vec<Result<_, Error>>>();
+        let results = match fids {
+            &[fid] => vec![feature(fid)],
+            _ => fids.par_iter().map(|&fid| feature(fid)).collect::<Vec<_>>(),
+        };
         for violations in results {
             for v in violations? {
                 match kinds.iter().position(|&kind| kind == v.kind) {
@@ -315,6 +320,8 @@ mod tests {
         Cancel(CancellationToken),
         Fail,
         Panic(&'static str),
+        Hold(Duration),
+        Note(Arc<Mutex<Vec<Instant>>>),
     }
     /// Actions keyed by primary layer name and FID, taken as a worker starts that feature.
     static ACTIONS: Mutex<Vec<(String, i64, Action)>> = Mutex::new(Vec::new());
@@ -339,6 +346,11 @@ mod tests {
                 });
             }
             Some(Action::Panic(message)) => std::panic::panic_any(message),
+            Some(Action::Hold(duration)) => std::thread::sleep(duration),
+            Some(Action::Note(starts)) => starts
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push(Instant::now()),
             None => {}
         }
         Ok(())
@@ -1059,6 +1071,44 @@ mod tests {
             .concat(),
             expected
         );
+    }
+
+    #[test]
+    fn the_first_feature_runs_alone_before_the_parallel_batches() {
+        // It builds the caches every feature shares, so workers need not wait for them.
+        let mut t = Topology::new(0.).unwrap();
+        let lines = (0..24).map(|fid| {
+            let x = fid as f64;
+            let line = if fid % 2 == 0 {
+                LineString::from(vec![(x, -1.), (x, 13.)])
+            } else {
+                LineString::from(vec![(-1., x / 2.), (25., x / 2.)])
+            };
+            (fid, line.into())
+        });
+        let layer = t.add_layer(Layer::from_features("first-alone", lines));
+        let spec = t
+            .add_rule(Rule::LineMustNotIntersectOrTouchInterior, layer, None)
+            .unwrap();
+        let expected = reference(&t, spec).unwrap();
+        assert!(!expected.is_empty());
+        let hold = Duration::from_millis(50);
+        let starts = Arc::new(Mutex::new(Vec::new()));
+        let name = on(&t, spec, 0, Action::Hold(hold));
+        for fid in 1..24 {
+            on(&t, spec, fid, Action::Note(Arc::clone(&starts)));
+        }
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .unwrap();
+        let started = Instant::now();
+        let streamed = pool.install(|| streamed(&t, spec, None));
+        clear(&name);
+        assert_eq!(streamed.unwrap(), expected);
+        let starts = starts.lock().unwrap_or_else(PoisonError::into_inner);
+        assert_eq!(starts.len(), 23);
+        assert!(starts.iter().all(|&at| at >= started + hold));
     }
 
     #[test]
