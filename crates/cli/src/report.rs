@@ -62,21 +62,15 @@ pub fn stream_rule(
     Ok(())
 }
 
-/// Write the last line of a streamed report, `{"tolerance":…,"warnings":[…]}`,
-/// and the warnings.
-pub fn stream_end(
-    report: &DiskReport,
-    warnings: &[String],
-    output: &mut impl Write,
-    diagnostics: &mut impl Write,
-) -> Result<()> {
+/// Write the last line of a streamed report, `{"tolerance":…,"warnings":[…]}`.
+pub fn stream_end(report: &DiskReport, warnings: &[String], output: &mut impl Write) -> Result<()> {
     head(output, report.summary.tolerance, warnings)?;
     output.write_all(b"}\n")?;
-    warn(warnings, diagnostics);
+    output.flush()?;
     Ok(())
 }
 
-fn warn(warnings: &[String], diagnostics: &mut impl Write) {
+pub fn warn(warnings: &[String], diagnostics: &mut impl Write) {
     for warning in warnings {
         let _ = writeln!(diagnostics, "warning: {warning}");
     }

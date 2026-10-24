@@ -1119,3 +1119,63 @@ fn killing_a_stream_keeps_the_rules_already_printed() {
     // The second rule never finished, so nothing follows.
     assert_eq!(rest, "");
 }
+
+#[test]
+fn a_closed_stdout_ends_the_stream_but_not_the_run() {
+    use std::io::BufRead;
+    let dir = tempfile::tempdir().unwrap();
+    let (config, _) = slow_definition(dir.path());
+    let output = |name: &str| {
+        let folder = dir.path().join(name);
+        std::fs::create_dir(&folder).unwrap();
+        folder
+    };
+    let expected = output("plain");
+    let errors = expected.join("errors.geojson");
+    let plain = validate(
+        &["--json"],
+        &config,
+        &[OsStr::new("-o"), errors.as_os_str()],
+    );
+    assert_eq!(plain.status.code(), Some(1));
+    assert!(!folder(&expected).is_empty());
+    // The reader goes away before the first line, after it, or before the
+    // plain report.
+    for (name, stream, read) in [
+        ("start", true, false),
+        ("first", true, true),
+        ("report", false, false),
+    ] {
+        let written = output(name);
+        let mut command = std::process::Command::new(env!("CARGO_BIN_EXE_topology-checker"));
+        command
+            .args(["--json", "validate"])
+            .arg(&config)
+            .arg("-o")
+            .arg(written.join("errors.geojson"));
+        if stream {
+            command.arg(STREAM);
+        }
+        let mut child = command
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut stdout = std::io::BufReader::new(child.stdout.take().unwrap());
+        if read {
+            let mut line = String::new();
+            stdout.read_line(&mut line).unwrap();
+            assert!(line.ends_with('\n'), "{line}");
+        }
+        drop(stdout);
+        let result = child.wait_with_output().unwrap();
+        let stderr = String::from_utf8(result.stderr).unwrap();
+        // A closed stdout ends any run with status 0.
+        assert_eq!(result.status.code(), Some(0), "{name}: {stderr}");
+        assert!(!stderr.contains("\"error\""), "{name}: {stderr}");
+        if stream {
+            assert_eq!(stderr, String::from_utf8_lossy(&plain.stderr), "{name}");
+        }
+        assert_eq!(folder(&written), folder(&expected), "{name}");
+    }
+}

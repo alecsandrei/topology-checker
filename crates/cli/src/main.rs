@@ -272,6 +272,9 @@ fn finish(
     let stream = matches!(args.try_get_one::<bool>("stream"), Ok(Some(true)));
     let summary = matches.get_flag("summary");
     let rules = topology.rules().len();
+    // A reader that goes away stops the stream, not the run: `-o` and the
+    // warnings are still written, as when the plain report meets a closed pipe.
+    let mut closed = None;
     let result = topology_checker_io::report_store::DiskReport::validate_with_progress(
         topology,
         None,
@@ -281,8 +284,11 @@ fn finish(
                 let _ = writeln!(diagnostics, "{}", progress_line(rule, rules));
                 let _ = diagnostics.flush();
             }
-            if stream {
-                report::stream_rule(output, rule, (!summary).then_some(rows))?;
+            if stream && closed.is_none() {
+                match report::stream_rule(output, rule, (!summary).then_some(rows)) {
+                    Err(e) if is_broken_pipe(&e) => closed = Some(e),
+                    written => written?,
+                }
             }
             Ok(())
         },
@@ -319,7 +325,12 @@ fn finish(
         }
     }
     if stream {
-        report::stream_end(&result, &warnings, output, diagnostics)?;
+        let end = match closed {
+            Some(e) => Err(e),
+            None => report::stream_end(&result, &warnings, output),
+        };
+        report::warn(&warnings, diagnostics);
+        end?;
     } else {
         report::print(
             &result,
