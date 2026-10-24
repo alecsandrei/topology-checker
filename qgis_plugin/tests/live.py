@@ -18,13 +18,18 @@ import typing as t
 from pathlib import Path
 
 from qgis.core import (
+    Qgis,
+    QgsCoordinateReferenceSystem,
     QgsFeature,
     QgsGeometry,
     QgsProcessingContext,
     QgsProcessingFeedback,
     QgsProject,
+    QgsVectorFileWriter,
+    QgsVectorLayer,
 )
 
+from topology_rules.algorithms import check
 from topology_rules.core import package
 from topology_rules.core.checks import Job, Outcome, run_jobs
 from topology_rules.core.commands import ERROR_LAYERS, validate_command
@@ -37,18 +42,26 @@ from topology_rules.core.errors import (
     found_in,
     from_wkb,
 )
+from topology_rules.core.invalid import Invalid, error_fields
 from topology_rules.core.layers import private_layer
 from topology_rules.core.package import attributes
 from topology_rules.core.progress import Checked, Found, Progress, Stage
 from topology_rules.core.report import IdMap, Report, source_id
 from topology_rules.core.runner import Completed, execute
+from topology_rules.core.style import ColourBy, Grouping
 from topology_rules.exceptions import RunError
+from topology_rules.panel import controller
+from topology_rules.panel.entries import project_layer
+from topology_rules.panel.groups import add_errors, remove_errors
+from topology_rules.panel.rows import Row, number, value_text, wkb_shape
 from topology_rules.utils import not_none, tr
 
 from .helpers import hand_over, real_executable, write_tool
 
 if t.TYPE_CHECKING:
     import topology_checker as tc
+
+    from topology_rules.panel.dock import Dock
 
 # How long a held run waits for its test before it gives up, which only a
 # test that is stuck reaches
@@ -376,8 +389,8 @@ sys.exit(done.returncode)
 
 def let_lines(gates: Path, count: int) -> None:
     """Lets a replaying tool say the reports of its first `count` rules."""
-    for number in range(count):
-        (gates / str(number)).touch()
+    for index in range(count):
+        (gates / str(index)).touch()
 
 
 def let_all_lines(gates: Path) -> None:
@@ -682,7 +695,160 @@ def untold_executable(monkeypatch: t.Any) -> None:
     monkeypatch.setattr(checks, 'run_once', run_once)
 
 
+def append_invalid(
+    path: str,
+    invalid: t.Sequence[Invalid],
+    crs: QgsCoordinateReferenceSystem,
+    context: QgsProcessingContext,
+) -> None:
+    """How the features that were left out of a run were added to its
+    errors: to the layer of their family in the file, or to a new one."""
+    for kind, multi in (
+        ('point', 'MultiPoint'),
+        ('line', 'MultiLineString'),
+        ('polygon', 'MultiPolygon'),
+    ):
+        found = [item for item in invalid if item.kind == kind]
+        if not found:
+            continue
+        name = f'errors_{kind}'
+        layer = private_layer(f'{path}|layername={name}', name)
+        if layer.isValid():
+            assert layer.startEditing()
+            assert layer.addFeatures(
+                [item.feature(layer.fields()) for item in found]
+            )
+            assert layer.commitChanges()
+            continue
+        fields = error_fields()
+        options = QgsVectorFileWriter.SaveVectorOptions()
+        options.driverName = 'GPKG'
+        options.fileEncoding = 'UTF-8'
+        options.layerName = name
+        if Path(path).exists():
+            options.actionOnExistingFile = (
+                QgsVectorFileWriter.ActionOnExistingFile.CreateOrOverwriteLayer
+            )
+        writer = not_none(
+            QgsVectorFileWriter.create(
+                path,
+                fields,
+                getattr(Qgis.WkbType, multi),
+                crs,
+                context.transformContext(),
+                options,
+            )
+        )
+        assert writer.addFeatures([item.feature(fields) for item in found])
+        del writer
+
+
+def add_invalid_untold(
+    path: str,
+    outcome: Outcome,
+    total: int,
+    context: QgsProcessingContext,
+    feedback: QgsProcessingFeedback,
+) -> None:
+    """The features that were left out, added to the file once the run was
+    done, and told of nowhere."""
+    append_invalid(path, outcome.invalid, outcome.crs, context)
+
+
+# The columns of an error that a row of the panel is made of
+COLUMNS = (
+    'rule',
+    'error_type',
+    'origin_layer',
+    'origin_fid',
+    'destination_layer',
+    'destination_fid',
+)
+
+
+def read_rows(
+    layers: c.Mapping[str, QgsVectorLayer],
+    names: c.Mapping[str, str],
+    grouping: Grouping,
+) -> list[Row]:
+    """The errors of the error layers of each family, as the panel read
+    them once a run was done, with the names of the layers of the project
+    for the aliases of the run."""
+    rows: list[Row] = []
+    for family, layer in layers.items():
+        for feature in t.cast('c.Iterable[QgsFeature]', layer.getFeatures()):
+            rule, error, origin, fid, other, other_fid = (
+                value_text(feature[name]) for name in COLUMNS
+            )
+            geometry = feature.geometry()
+            rows.append(
+                Row(
+                    rule,
+                    error,
+                    names.get(origin, origin),
+                    number(fid),
+                    names.get(other, other),
+                    number(other_fid),
+                    origin,
+                    other,
+                    family,
+                    feature.id(),
+                    grouping.key_of(feature),
+                    ''
+                    if geometry.isNull()
+                    else wkb_shape(bytes(geometry.asWkb())),
+                )
+            )
+    return rows
+
+
+def show_errors_untold(
+    dock: Dock,
+    run: controller.Run,
+    path: Path,
+    results: dict[str, t.Any],
+    counts: list[int],
+    switch: bool = True,
+) -> None:
+    """How the panel showed the errors of a run, of which it heard nothing
+    until the end: read from their layers once these were added."""
+    todo = run.entries
+    dock.results.clear()
+    remove_errors()
+    layers = controller.loads(results.get(controller.LAYERS), {})
+    names = {
+        alias: layer.name()
+        for alias, layer_id in layers.items()
+        if (layer := project_layer(layer_id)) is not None
+    }
+    dock.legends = controller.legends_of(todo, counts)
+    legend = dock.legends[ColourBy.RULE_AND_LAYER]
+    dock.run_keys = {
+        entry.key: f'e{i}' for i, entry in enumerate(todo[: len(counts)])
+    }
+    added = add_errors(path, dock.legends, run.crs)
+    rows = read_rows(added, names, legend.grouping)
+    dock.results.show_rows(rows, layers, legend.grouping, dict(legend.labels))
+    dock.results.error_layer_ids = {
+        family: layer.id() for family, layer in added.items()
+    }
+    dock.results.filter_map(None)
+    invalid: dict[str, int] = {}
+    for alias, layer_id in layers.items():
+        invalid[layer_id] = invalid.get(layer_id, 0) + sum(
+            1 for r in rows if not r.rule_name and r.layer_alias == alias
+        )
+    dock.rule_list.set_invalid(invalid)
+    active = dock.results.active()
+    dock.set_error_count(len(active))
+    if active and switch:
+        dock.tabs.setCurrentIndex(controller.ERRORS_TAB)
+
+
 def untold(monkeypatch: t.Any) -> None:
-    """Both engines as they ran before they told of each rule."""
+    """Both engines as they ran before they told of each rule, and the
+    panel as it showed their errors then."""
     monkeypatch.setattr(package, 'validate', validate_untold)
     untold_executable(monkeypatch)
+    monkeypatch.setattr(check, 'add_invalid', add_invalid_untold)
+    monkeypatch.setattr(controller, 'show_errors', show_errors_untold)

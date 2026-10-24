@@ -56,13 +56,14 @@ class Outcome:
 
     The layers tell which layer of the project each name in the errors
     stands for. The invalid features are those that were left out of the
-    run.
+    run. Written tells how many errors of each family the output has.
     """
 
     counts: list[int]
     layers: dict[str, str]
     invalid: list[Invalid]
     crs: QgsCoordinateReferenceSystem
+    written: dict[str, int] = dataclasses.field(default_factory=dict)
 
 
 def run_jobs(
@@ -324,7 +325,7 @@ def run_once(
         for item in prepared.values()
         for skipped in item.skipped
     ]
-    return Outcome(errors.counts, layers, invalid, target)
+    return Outcome(errors.counts, layers, invalid, target, errors.written)
 
 
 def unread(

@@ -43,7 +43,9 @@ class Focus:
         self.clear()
         feature = layer.getFeature(fid)
         geometry = feature.geometry()
-        if not feature.isValid() or geometry.isNull():
+        # A feature whose coordinates are not finite is stored with an empty
+        # geometry, and there is nothing to show
+        if not feature.isValid() or geometry.isEmpty():
             return
         canvas = self.canvas()
         self.zoom(canvas, layer.crs(), geometry)
@@ -55,7 +57,7 @@ class Focus:
     ) -> None:
         """The same for an error that is not in a layer yet."""
         self.clear()
-        if geometry.isNull():
+        if geometry.isEmpty():
             return
         canvas = self.canvas()
         self.zoom(canvas, crs, geometry)

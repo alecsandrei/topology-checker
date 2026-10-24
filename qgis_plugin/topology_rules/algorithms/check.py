@@ -25,7 +25,7 @@ from qgis.core import (
 from .._typing import Parameters
 from ..core import engine, folders
 from ..core.checks import Job, run_jobs
-from ..core.invalid import append_invalid
+from ..core.errors import add_invalid
 from ..core.layers import Input, require_kind
 from ..utils import (
     QgsProcessingException,
@@ -237,7 +237,7 @@ class CheckRulesAlgorithm(Planned):
                     context,
                     feedback,
                 )
-            append_invalid(output, outcome.invalid, outcome.crs, context)
+            add_invalid(output, outcome, len(plan.jobs), context, feedback)
         total = sum(outcome.counts) + len(outcome.invalid)
         if len(outcome.counts) < len(plan.jobs):
             # Canceled: what the rules that are done found, which the panel

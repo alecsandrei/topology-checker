@@ -30,7 +30,7 @@ from .entries import project_layer
 from .focus import Focus
 from .hint import Hint
 from .ignored import Ignored, stamp
-from .rows import Row
+from .rows import Row, Shapes
 from .tree import (
     ROLE,
     ErrorModel,
@@ -38,7 +38,6 @@ from .tree import (
     find_group,
     group_key,
     grouped,
-    in_order,
     put_group,
 )
 from .wrapping import wrap_long_text
@@ -52,23 +51,6 @@ def quoted(text: str) -> str:
 
 def idle_text() -> str:
     return tr('Run the rules to see their errors here.')
-
-
-def seen(row: Row) -> tuple[object, ...]:
-    """What the tree shows of an error and the features it is about: the
-    same for an error found during a run as for the error read from its
-    layer afterwards, which come in the same order."""
-    return (
-        row.key,
-        row.rule_name,
-        row.error,
-        row.layer,
-        row.feature,
-        row.other,
-        row.other_feature,
-        row.layer_alias,
-        row.other_alias,
-    )
 
 
 def node_of(data: object) -> Node | None:
@@ -97,10 +79,14 @@ class ResultsPanel(QWidget):
         self.layers: dict[str, str] = {}
         # All the errors of the run, the ignored ones too
         self.rows: list[Row] = []
+        # The error layer of each family of the errors of the run
+        self.error_layer_ids: dict[str, str] = {}
         self.ignored = Ignored()
         self.grouping = rule_grouping()
         self.labels: dict[str, str] = {}
-        # The CRS of the errors that have no layer yet, during a run
+        # The geometries of the errors of each group while they have no
+        # layer, during a run, in the CRS of the run
+        self.shapes: dict[str, Shapes] = {}
         self.crs = QgsCoordinateReferenceSystem()
         self.model = ErrorModel()
         self.model.setHorizontalHeaderLabels([tr('Errors')])
@@ -181,15 +167,17 @@ class ResultsPanel(QWidget):
             )
         )
 
-    def clear(self) -> None:
-        self.show_rows([], {})
+    def clear(self, labels: dict[str, str] | None = None) -> None:
+        self.error_layer_ids = {}
+        self.shapes = {}
+        self.show_rows([], {}, None, labels)
 
     def begin(
         self, labels: dict[str, str], crs: QgsCoordinateReferenceSystem
     ) -> None:
         """Starts the tree over for a run whose errors come rule by rule, in
         the CRS of the run."""
-        self.show_rows([], {}, None, labels)
+        self.clear(labels)
         self.crs = crs
         self.placeholder.setText(tr('No errors yet.'))
 
@@ -197,12 +185,18 @@ class ResultsPanel(QWidget):
         self.placeholder.setText(idle_text())
 
     def add_rule(
-        self, key: str, rows: list[Row], layers: c.Mapping[str, str]
+        self,
+        key: str,
+        rows: list[Row],
+        layers: c.Mapping[str, str],
+        shapes: Shapes,
     ) -> None:
         """Shows the errors of a rule that is done where the list has the
-        rule. The other groups stay as they are."""
+        rule, or the features that were left out of the run last. The other
+        groups stay as they are."""
         self.layers = {**self.layers, **layers}
         self.rows = [row for row in self.rows if row.key != key] + rows
+        self.shapes[key] = shapes
         put_group(
             self.model,
             key,
@@ -214,124 +208,24 @@ class ResultsPanel(QWidget):
         self.placeholder.set_empty(not self.rows)
         self.update_select()
 
+    def drop_shapes(self) -> None:
+        """Lets go of the geometries of the errors of the run, which their
+        layers hold from now on."""
+        self.shapes = {}
+
     def hand_over(
         self,
-        rows: list[Row],
+        layer_ids: c.Mapping[str, str],
         layers: dict[str, str],
         grouping: Grouping,
-        labels: dict[str, str],
     ) -> None:
-        """Puts the errors read from the error layers in place of the same
-        errors found during the run. The tree stays open, selected and
-        scrolled as it was, and the ignored errors stay ignored. Only a
-        group that is not the same is built again."""
-        final = stamp(rows, layers)
-        # The ids of the errors that the tree shows grey now. The rest of
-        # what it shows is in the model: no copy of every error is made
-        grey = {
-            id(row)
-            for kind_rows in self.model.kinds.values()
-            for row in kind_rows
-            if self.is_ignored(row)
-        }
-        self.carry_ignored(final)
-        self.labels = labels
-        shown = grouped(filter(self.is_shown, final), list(labels))
-        bar = not_none(self.view.verticalScrollBar())
-        scrolled = bar.value()
-        current = self.current().data(ROLE)
-        for index in reversed(range(self.model.rowCount())):
-            key = group_key(not_none(self.model.item(index)))
-            if key not in shown:
-                self.rebuild(key, [])
-        for key, kinds in shown.items():
-            if not self.swap(key, kinds, grey):
-                self.rebuild(
-                    key, [row for rows in kinds.values() for row in rows]
-                )
+        """The errors of the run are in their layers now, each with the id
+        it was told: the map shows them as the tree does. The tree stays as
+        it is, open, selected and scrolled as the user left it."""
+        self.error_layer_ids = dict(layer_ids)
         self.layers = layers
-        self.rows = final
         self.grouping = grouping
-        bar.setValue(scrolled)
-        self.count_ignored()
-        self.placeholder.set_empty(not final)
-        now = self.current().data(ROLE)
-        if (
-            isinstance(now, Row)
-            and isinstance(current, Row)
-            and seen(now) == seen(current)
-        ):
-            # The same error, now in its layer, which shows only its kind
-            self.update_select()
-            self.filter_map(node_of(now))
-        else:
-            self.selection_changed()
-
-    def carry_ignored(self, final: list[Row]) -> None:
-        """Ignores the errors of the layers whose errors of the run were
-        ignored, should they be told apart otherwise."""
-        if not any(map(self.is_ignored, self.rows)):
-            return
-        waiting: dict[tuple[object, ...], list[Row]] = {}
-        for row in self.rows:
-            waiting.setdefault(seen(row), []).append(row)
-        for row in final:
-            matches = waiting.get(seen(row))
-            if not matches:
-                continue
-            old = matches.pop(0)
-            if old.mark != row.mark and self.is_ignored(old):
-                self.ignored.remove([old])
-                self.ignored.add([row])
-
-    def swap(
-        self,
-        key: str,
-        kinds: dict[str, list[Row]],
-        grey: c.Container[int],
-    ) -> bool:
-        """Gives the items of a group the errors read from the layers, when
-        the group shows them just as it does, with the errors that were grey
-        by their ids: nothing changes on screen. False when the group is not
-        the same."""
-        index = find_group(self.model, key)
-        if index < 0:
-            return False
-        group = not_none(self.model.item(index))
-        children = {
-            kind_of(child): child
-            for child in (
-                not_none(group.child(i)) for i in range(group.rowCount())
-            )
-        }
-        ordered = {error: in_order(rows) for error, rows in kinds.items()}
-        if set(children) != set(ordered) or not all(
-            self.same(self.model.kinds.get((key, error), []), rows, grey)
-            for error, rows in ordered.items()
-        ):
-            return False
-        # The view has nothing to draw again: errors are told apart by
-        # their data only, which the view does not show
-        blocker = QSignalBlocker(self.model)
-        try:
-            for error, rows in ordered.items():
-                child = children[error]
-                for i, row in enumerate(rows):
-                    not_none(child.child(i)).setData(row, ROLE)
-                self.model.kinds[key, error] = rows
-        finally:
-            blocker.unblock()
-        return True
-
-    def same(
-        self, shown: list[Row], rows: list[Row], grey: c.Container[int]
-    ) -> bool:
-        """Whether a kind of errors that the tree shows, with those that were
-        grey, looks just as the errors that take their place."""
-        return len(shown) == len(rows) and all(
-            seen(old) == seen(new) and (id(old) in grey) == self.is_ignored(new)
-            for old, new in zip(shown, rows, strict=True)
-        )
+        self.filter_map(node_of(self.current().data(ROLE)))
 
     def rebuild(self, key: str, rows: list[Row]) -> None:
         """Builds a group again, as open as it was, with the same item
@@ -437,10 +331,21 @@ class ResultsPanel(QWidget):
         self.refresh()
         self.ignored_changed.emit()
 
-    def error_layers(self) -> list[QgsVectorLayer]:
-        found = {row.error_layer for row in self.rows}
-        layers = [project_layer(layer_id) for layer_id in found]
-        return [layer for layer in layers if layer is not None]
+    def error_layer(self, row: Row) -> QgsVectorLayer | None:
+        layer_id = self.error_layer_ids.get(row.family)
+        return None if layer_id is None else project_layer(layer_id)
+
+    def error_layers(self) -> dict[str, QgsVectorLayer]:
+        """The error layers of the run, by family."""
+        layers = {
+            family: project_layer(layer_id)
+            for family, layer_id in self.error_layer_ids.items()
+        }
+        return {
+            family: layer
+            for family, layer in layers.items()
+            if layer is not None
+        }
 
     def filter_map(self, node: tuple[str, str, str | None] | None) -> None:
         """Shows only the errors of a group, or of a kind of error of it, on
@@ -453,19 +358,28 @@ class ResultsPanel(QWidget):
         hidden: dict[str, list[int]] = {}
         for row in self.rows:
             if not self.is_shown(row):
-                hidden.setdefault(row.error_layer, []).append(row.error_fid)
-        for layer in self.error_layers():
-            fids = sorted(hidden.get(layer.id(), []))
+                hidden.setdefault(row.family, []).append(row.error_fid)
+        for family, layer in self.error_layers().items():
+            fids = sorted(hidden.get(family, []))
             gone = [f'$id NOT IN ({", ".join(map(str, fids))})'] if fids else []
             expression = ' AND '.join(parts + gone)
             if layer.subsetString() != expression:
                 layer.setSubsetString(expression)
 
     def drop_layers(self, layer_ids: c.Iterable[str]) -> None:
+        """Drops the errors of the error layers that left the project."""
         gone = set(layer_ids)
-        if any(row.error_layer in gone for row in self.rows):
-            kept = [r for r in self.rows if r.error_layer not in gone]
-            self.show_rows(kept, self.layers, self.grouping, self.labels)
+        families = {
+            family
+            for family, layer_id in self.error_layer_ids.items()
+            if layer_id in gone
+        }
+        if not families:
+            return
+        for family in families:
+            del self.error_layer_ids[family]
+        kept = [row for row in self.rows if row.family not in families]
+        self.show_rows(kept, self.layers, self.grouping, self.labels)
 
     def current(self) -> QModelIndex:
         selection = self.view.selectionModel()
@@ -520,13 +434,21 @@ class ResultsPanel(QWidget):
     def show_error(self, row: Row) -> None:
         """Zooms to the error in its layer, or to its own geometry while it
         has no layer."""
-        if not row.error_layer:
-            if row.wkb is not None:
-                self.focus.show_geometry(from_wkb(row.wkb), self.crs)
+        layer = self.error_layer(row)
+        if layer is not None:
+            if layer.isValid():
+                self.focus.show(layer, row.error_fid)
             return
-        layer = project_layer(row.error_layer)
-        if layer is not None and layer.isValid():
-            self.focus.show(layer, row.error_fid)
+        wkb = self.shape_of(row)
+        if wkb:
+            self.focus.show_geometry(from_wkb(wkb), self.crs)
+
+    def shape_of(self, row: Row) -> bytes:
+        """The geometry of an error that has no layer, as WKB, if it has
+        one."""
+        first, wkbs = self.shapes.get(row.key, {}).get(row.family, (0, ()))
+        index = row.error_fid - first
+        return wkbs[index] if 0 <= index < len(wkbs) else b''
 
     def selection_changed(self) -> None:
         self.update_select()

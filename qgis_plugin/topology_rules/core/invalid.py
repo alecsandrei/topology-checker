@@ -3,23 +3,21 @@ from __future__ import annotations
 import dataclasses
 import re
 import typing as t
-from pathlib import Path
 
 from qgis.core import (
-    Qgis,
-    QgsCoordinateReferenceSystem,
     QgsFeature,
     QgsFields,
     QgsGeometry,
-    QgsProcessingContext,
-    QgsVectorFileWriter,
+    QgsMultiLineString,
+    QgsMultiPoint,
+    QgsMultiPolygon,
     QgsVectorLayer,
 )
 
 from ..exceptions import RunError
-from ..utils import tr
 from .inputs import not_finite
-from .layers import geometry_word, private_layer, wkb_kind
+from .layers import wkb_kind
+from .progress import Found
 
 # The columns of the tool, as a memory layer defines them
 FIELDS = (
@@ -28,12 +26,6 @@ FIELDS = (
     '&field=origin_part:integer&field=destination_layer:string'
     '&field=destination_fid:integer&field=destination_part:integer'
 )
-# The geometry that each layer of errors holds
-MULTI = {
-    'point': 'MultiPoint',
-    'line': 'MultiLineString',
-    'polygon': 'MultiPolygon',
-}
 # How the tool names the feature that it rejects; the Python package names
 # no layer where it refuses the data that it is given
 FAILURE = re.compile(
@@ -44,6 +36,13 @@ FAILURE = re.compile(
 # What it rejects, as opposed to what is wrong with the rule or the layer
 # (crates/core/src/error.rs has the messages)
 REJECTED = ('invalid polygon', 'coordinates must be finite')
+# What the layer of each family holds for a feature that is written without
+# a geometry
+EMPTY = {
+    'point': QgsMultiPoint,
+    'line': QgsMultiLineString,
+    'polygon': QgsMultiPolygon,
+}
 
 
 def error_fields() -> QgsFields:
@@ -105,57 +104,20 @@ class Invalid:
         feature.setAttributes([values.get(n) for n in fields.names()])
         return feature
 
-
-def append_invalid(
-    path: str,
-    invalid: t.Sequence[Invalid],
-    crs: QgsCoordinateReferenceSystem,
-    context: QgsProcessingContext,
-) -> None:
-    """Adds the invalid features to the errors of a GeoPackage, which the
-    tool has not made when it found no other errors."""
-    fields = error_fields()
-    for kind in MULTI:
-        found = [item for item in invalid if item.kind == kind]
-        if not found:
-            continue
-        name = f'errors_{kind}'
-        layer = private_layer(f'{path}|layername={name}', name)
-        if layer.isValid():
-            if not (
-                layer.startEditing()
-                and layer.addFeatures(
-                    [item.feature(layer.fields()) for item in found]
-                )
-                and layer.commitChanges()
-            ):
-                raise RunError(
-                    tr('Could not write the {kind} errors').format(
-                        kind=geometry_word(kind)
-                    )
-                )
-            continue
-        features = [item.feature(fields) for item in found]
-        options = QgsVectorFileWriter.SaveVectorOptions()
-        options.driverName = 'GPKG'
-        options.fileEncoding = 'UTF-8'
-        options.layerName = name
-        if Path(path).exists():
-            options.actionOnExistingFile = (
-                QgsVectorFileWriter.ActionOnExistingFile.CreateOrOverwriteLayer
-            )
-        writer = QgsVectorFileWriter.create(
-            path,
-            fields,
-            getattr(Qgis.WkbType, MULTI[kind]),
-            crs,
-            context.transformContext(),
-            options,
-        )
-        if writer is None or not writer.addFeatures(features):
-            raise RunError(
-                tr('Could not write the {kind} errors').format(
-                    kind=geometry_word(kind)
-                )
-            )
-        del writer
+    def found(self) -> Found:
+        """The feature as a row of the error layer of its kind, with its
+        geometry as the layer stores it: a multi geometry without Z or M
+        values, which is empty where a coordinate is not finite."""
+        if not_finite(self.geometry):
+            geometry = QgsGeometry(EMPTY[self.kind]())
+        else:
+            geometry = QgsGeometry(self.geometry)
+            geometry.convertToMultiType()
+            part = geometry.get()
+            if part is not None:
+                part.dropZValue()
+                part.dropMValue()
+        # data() is bytes at run time; some stubs type it as str
+        wkb = t.cast('bytes', geometry.asWkb().data())
+        values = (None, '', 'invalid', self.alias, self.fid)
+        return Found(self.kind, wkb, values + (None,) * 4)

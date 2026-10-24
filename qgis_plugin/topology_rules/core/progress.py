@@ -29,9 +29,9 @@ class Stage(str, Enum):
 
 @dataclasses.dataclass(frozen=True, slots=True)
 class Found:
-    """An error of a rule as a row of the layer of its family: a multi
-    geometry, as WKB, which takes a fraction of the memory of a geometry,
-    and the columns that the error layers have."""
+    """An error as a row of the layer of its family: a multi geometry, as
+    WKB, which takes a fraction of the memory of a geometry, and the columns
+    that the error layers have."""
 
     family: str
     wkb: bytes
@@ -42,13 +42,15 @@ class Found:
 class Checked:
     """A rule that is done: its place in the run, how many errors it found,
     and the errors. The layers tell which layer of the project each name in
-    the errors stands for."""
+    the errors stands for. Written tells how many errors of each family the
+    file has before these, whose ids follow on from them in their order."""
 
     index: int
     total: int
     count: int
     errors: tuple[Found, ...]
     layers: c.Mapping[str, str] = dataclasses.field(default_factory=dict)
+    written: c.Mapping[str, int] = dataclasses.field(default_factory=dict)
 
 
 class Progress(QgsProcessingFeedback):
@@ -61,6 +63,10 @@ class Progress(QgsProcessingFeedback):
 
     def checked(self, done: Checked) -> None:
         """A rule is done."""
+
+    def left_out(self, done: Checked) -> None:
+        """The features that were left out of the run are written after the
+        errors of the rules, as errors of their own."""
 
 
 def staged(
@@ -90,6 +96,11 @@ def checked(
             feedback.staged(Stage.WRITING, None, done.total)
         elif not more:
             feedback.staged(Stage.CHECKING, following, done.total)
+
+
+def left_out(feedback: QgsProcessingFeedback, done: Checked) -> None:
+    if isinstance(feedback, Progress):
+        feedback.left_out(done)
 
 
 def label(job: Job) -> str:

@@ -358,6 +358,7 @@ def run_once(
             for skipped in entry.snapshot.skipped
         ],
         target,
+        errors.written,
     )
 
 

@@ -45,6 +45,7 @@ from topology_rules.core import engine
 from topology_rules.core.engine import Engine, Package
 from topology_rules.enums import PROVIDER_ID
 from topology_rules.exceptions import PackageError
+from topology_rules.panel.rows import Row, number, value_text, wkb_shape
 
 if t.TYPE_CHECKING:
     from topology_rules.panel.dock import Dock
@@ -713,6 +714,61 @@ def click_run(dock: Dock) -> None:
     """Clicks Run and waits for the end of the task."""
     dock.run_button.click()
     wait_for(lambda: dock.task is None)
+    rows_match_layers(dock)
+
+
+def rows_match_layers(dock: Dock) -> None:
+    """Checks that each error of the panel is the feature of its id in the
+    error layer of its family, as the map shows it, and that each feature
+    of those layers is an error of the panel. Before a run has put its
+    layers in the project, the errors have none."""
+    results = dock.results
+    layers = results.error_layers()
+    if not layers:
+        return
+    rows: dict[str, list[Row]] = {}
+    for row in results.rows:
+        rows.setdefault(row.family, []).append(row)
+    assert set(rows) <= set(layers)
+    for family, layer in layers.items():
+        # All of the features, the hidden ones too
+        subset = layer.subsetString()
+        assert layer.setSubsetString('')
+        try:
+            features = {
+                feature.id(): feature
+                for feature in t.cast(
+                    'c.Iterable[QgsFeature]', layer.getFeatures()
+                )
+            }
+        finally:
+            assert layer.setSubsetString(subset)
+        found = rows.get(family, [])
+        assert sorted(row.error_fid for row in found) == sorted(features)
+        for row in found:
+            feature = features[row.error_fid]
+            geometry = feature.geometry()
+            told = (
+                row.rule_name,
+                row.error,
+                row.layer_alias,
+                row.feature,
+                row.other_alias,
+                row.other_feature,
+                row.key,
+                row.shape,
+            )
+            stored = (
+                value_text(feature['rule']),
+                value_text(feature['error_type']),
+                value_text(feature['origin_layer']),
+                number(value_text(feature['origin_fid'])),
+                value_text(feature['destination_layer']),
+                number(value_text(feature['destination_fid'])),
+                results.grouping.key_of(feature),
+                '' if geometry.isNull() else wkb_shape(bytes(geometry.asWkb())),
+            )
+            assert told == stored, (family, row.error_fid)
 
 
 # The list of rules: layers that hold their rules

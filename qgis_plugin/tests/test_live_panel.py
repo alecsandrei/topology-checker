@@ -36,7 +36,6 @@ from topology_rules.panel.controller import canceled_text, summary
 from topology_rules.panel.dock import Dock
 from topology_rules.panel.icons import icon
 from topology_rules.panel.marks import ENTRY
-from topology_rules.panel.results import seen
 from topology_rules.panel.rows import Row
 from topology_rules.panel.stage import filled
 from topology_rules.panel.tree import ROLE, group_key
@@ -50,6 +49,7 @@ from .helpers import (
     message_text,
     polygon_layer,
     process_alive,
+    rows_match_layers,
     rule_items,
     wait_for,
 )
@@ -352,6 +352,7 @@ class Seen:
 
 
 def seen_now(dock: Dock) -> Seen:
+    rows_match_layers(dock)
     return Seen(
         counts_of(dock),
         tree_of(dock),
@@ -925,11 +926,20 @@ def test_a_tool_that_is_killed_keeps_what_it_showed(
 
 
 def stale_events(run: controller.Run) -> None:
-    """What an old run could still tell: a rule that is done, and the
-    stage after it."""
+    """What an old run could still tell: a rule that is done, the features
+    it left out, and the stage after it."""
     total = len(run.entries)
-    done = Checked(total - 1, total, 99, (), {})
-    run.feedback.rule_done.emit((done, []))
+    done = Checked(total - 1, total, 1, (), {})
+    stale = Row(
+        DANGLES, 'dangle', 'roads', 1, '', None, 'roads', '', 'point', 1
+    )
+    key = f'e{total - 1}'
+    run.feedback.rule_done.emit(
+        (done, [dataclasses.replace(stale, key=key)], {})
+    )
+    run.feedback.invalid_found.emit(
+        (done, [dataclasses.replace(stale, rule_name='', error='invalid')], {})
+    )
     run.feedback.stage_changed.emit((Stage.CHECKING, total - 1, total))
     run.feedback.stage_changed.emit((Stage.READING, None, 0))
     for _ in range(5):
@@ -1138,13 +1148,13 @@ def test_an_error_of_a_rule_that_is_done_works_during_the_run(
     view.expand(index.parent())
     view.setCurrentIndex(index)
     row = t.cast(Row, index.data(ROLE))
-    assert row.error_layer == ''
+    assert dock.results.error_layer(row) is None
     # Zoomed to and marked, from its own geometry
     focus = dock.results.focus
     assert focus.highlight is not None
     assert focus.highlight.isVisible()
     assert canvas.extent().contains(
-        from_wkb(not_none(row.wkb)).boundingBox().center()
+        from_wkb(dock.results.shape_of(row)).boundingBox().center()
     )
     assert dock.results.select_button.isEnabled()
     dock.results.select_button.click()
@@ -1187,9 +1197,8 @@ def test_an_error_of_a_rule_that_is_done_works_during_the_run(
     assert dock.tabs.tabText(ERRORS_TAB) == errors_tab(total - 1)
     ignored = [r for r in dock.results.rows if dock.results.is_ignored(r)]
     assert len(ignored) == 1
-    assert ignored[0].error_layer
-    assert seen(ignored[0]) == seen(row)
-    layer = not_none(QgsProject.instance().mapLayer(ignored[0].error_layer))
+    assert ignored[0] is row
+    layer = not_none(dock.results.error_layer(row))
     assert f'NOT IN ({ignored[0].error_fid})' in layer.subsetString()
 
 
@@ -1264,8 +1273,8 @@ def test_the_end_of_a_run_keeps_the_tree_as_the_user_left_it(
     assert scroll.value() == position
     now = dock.results.current_row()
     assert now is not None
-    assert seen(now) == seen(row)
-    assert now.error_layer
+    assert now is row
+    assert dock.results.error_layer(now) is not None
     assert [index.row() for index in selection.selectedIndexes()] == [5]
     assert view.currentIndex() == selection.selectedIndexes()[0]
     # The groups that were there are the same items
@@ -1314,8 +1323,8 @@ def test_a_grey_error_stays_grey_in_its_group_at_the_end_of_a_run(
     assert tree_of(dock)[0] == before[0]
     ignored = [r for r in dock.results.rows if dock.results.is_ignored(r)]
     assert len(ignored) == 1
-    assert ignored[0].error_layer
-    assert seen(ignored[0]) == seen(row)
+    assert ignored[0] is row
+    assert dock.results.error_layer(row) is not None
 
 
 def test_a_rule_of_thousands_of_errors_does_not_hold_up_the_panel(
@@ -1378,12 +1387,15 @@ def test_a_rule_of_thousands_of_errors_does_not_hold_up_the_panel(
 
 @dataclasses.dataclass
 class Shown:
-    """All that the panel shows at the end of a run."""
+    """All that the panel shows at the end of a run, and the errors it
+    holds, each with its error layer, id and fingerprint."""
 
     view: Seen
     message: str
     invalid: dict[str, int]
     current: int
+    rows: list[tuple[object, ...]]
+    subsets: dict[str, str]
 
 
 def shown_now(dock: Dock, bar: t.Any) -> Shown:
@@ -1392,6 +1404,8 @@ def shown_now(dock: Dock, bar: t.Any) -> Shown:
         last_message(bar),
         dict(dock.rule_list.invalid),
         dock.tabs.currentIndex(),
+        sorted(map(dataclasses.astuple, dock.results.rows), key=repr),
+        {layer.name(): layer.subsetString() for layer in error_layers()},
     )
 
 

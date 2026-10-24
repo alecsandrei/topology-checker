@@ -35,9 +35,10 @@ from qgis.PyQt import sip
 from qgis.PyQt.QtCore import QCoreApplication
 
 from topology_rules.core import package
-from topology_rules.core.errors import ErrorsFile
+from topology_rules.core.checks import Outcome
+from topology_rules.core.errors import ErrorsFile, add_invalid
 from topology_rules.core.inputs import chosen, prepare
-from topology_rules.core.invalid import Invalid, append_invalid, error_fields
+from topology_rules.core.invalid import Invalid, error_fields
 from topology_rules.core.layers import Input
 from topology_rules.core.progress import Found
 
@@ -221,16 +222,24 @@ def test_adding_the_invalid_features(tmp_path: Path, worker: Worker):
         first, 'polygon', 'MULTIPOLYGON(((0 0, 1 0, 0 1, 0 0)))'
     )
     bow = QgsGeometry.fromWkt('POLYGON((0 0, 1 1, 1 0, 0 1, 0 0))')
-    invalid = [Invalid('polygons', 4, bow, 'invalid polygon')]
+    # After the error of a rule, which the file has
+    outcome = Outcome(
+        [1],
+        {'polygons': 'polygons'},
+        [Invalid('polygons', 4, bow, 'invalid polygon')],
+        QgsCoordinateReferenceSystem('EPSG:3857'),
+        {'polygon': 1},
+    )
     for index in range(ROUNDS):
         path = shutil.copy(first, tmp_path / f'errors{index}.gpkg')
         worker.after(
             functools.partial(
-                append_invalid,
+                add_invalid,
                 str(path),
-                invalid,
-                QgsCoordinateReferenceSystem('EPSG:3857'),
+                outcome,
+                1,
                 QgsProcessingContext(),
+                QgsProcessingFeedback(),
             )
         )
         assert origin_ids(path, 'polygon') == [1, 4]

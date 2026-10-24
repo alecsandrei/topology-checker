@@ -28,7 +28,6 @@ from .entries import Entry, project_layer
 from .groups import add_errors, remove_errors
 from .icons import icon
 from .messages import Done, RunFeedback, Staged, push_failure, push_summary
-from .rows import read_rows
 
 if t.TYPE_CHECKING:
     from .dock import Dock
@@ -108,6 +107,9 @@ def start(dock: Dock) -> None:
     t.cast(t.Any, feedback.rule_done).connect(
         lambda found: rule_done(dock, run, found), queued
     )
+    t.cast(t.Any, feedback.invalid_found).connect(
+        lambda found: invalid_found(dock, run, found), queued
+    )
     task.executed.connect(lambda ok, results: done(dock, run, ok, results))
     task.taskTerminated.connect(lambda: LIVE.discard(run))
     dock.rules_page.lock(True)
@@ -132,10 +134,11 @@ def names_of(todo: list[Entry]) -> dict[str, str]:
 def begin(dock: Dock, run: Run) -> None:
     """Gives the panel to a run that starts: the errors of the last run are
     gone, and the errors of this one come as its rules are done."""
+    # The tree first, which has nothing to drop then as the layers go
+    dock.results.begin(rule_labels(run.entries), run.crs)
     remove_errors()
     dock.legends = {}
     dock.run_keys = {}
-    dock.results.begin(rule_labels(run.entries), run.crs)
     dock.set_error_count(0)
     dock.progress.setRange(0, 0)
     dock.stage.say(tr('Reading layers…'))
@@ -199,19 +202,28 @@ def rule_done(dock: Dock, run: Run, found: Done) -> None:
     errors in the tree."""
     if not current(dock, run):
         return
-    done, rows = found
+    done, rows, shapes = found
     if done.total != len(run.entries) or not 0 <= done.index < done.total:
         return
     entry = run.entries[done.index]
     key = f'e{done.index}'
     run.done[done.index] = done.count
     dock.run_keys[entry.key] = key
-    dock.results.add_rule(key, rows, done.layers)
+    dock.results.add_rule(key, rows, done.layers, shapes)
     entry.errors = len(dock.results.active(key))
     dock.rule_list.set_count(entry)
     dock.set_error_count(len(dock.results.active()))
     dock.progress.setRange(0, done.total)
     dock.progress.setValue(len(run.done))
+
+
+def invalid_found(dock: Dock, run: Run, found: Done) -> None:
+    """Shows the features that were left out of the run, after the errors
+    of the rules, once those are all done or the run was canceled."""
+    if not current(dock, run):
+        return
+    done, rows, shapes = found
+    dock.results.add_rule('', rows, done.layers, shapes)
 
 
 def settle(dock: Dock) -> None:
@@ -362,31 +374,31 @@ def show_errors(
     counts: list[int],
     switch: bool = True,
 ) -> None:
-    """Replaces the errors of the last run with those of this one, which
-    take the place of what the tree showed during the run."""
+    """Adds the error layers of the run to the project, for the errors that
+    the tree shows since their rules were done."""
     todo = run.entries
     remove_errors()
     layers = loads(results.get(LAYERS), {})
-    names = {
-        alias: layer.name()
-        for alias, layer_id in layers.items()
-        if (layer := project_layer(layer_id)) is not None
-    }
     # The errors of each rule of the list are a group, in the order of the
     # list: the tool numbers them rule after rule
     dock.legends = legends_of(todo, counts)
-    legend = dock.legends[ColourBy.RULE_AND_LAYER]
-    grouping, labels = legend.grouping, dict(legend.labels)
+    grouping = dock.legends[ColourBy.RULE_AND_LAYER].grouping
     dock.run_keys = {
         entry.key: f'e{i}' for i, entry in enumerate(todo[: len(counts)])
     }
-    rows = read_rows(add_errors(path, dock.legends, run.crs), names, grouping)
-    dock.results.hand_over(rows, layers, grouping, labels)
+    dock.results.drop_shapes()
+    added = add_errors(path, dock.legends, run.crs)
+    dock.results.hand_over(
+        {family: layer.id() for family, layer in added.items()},
+        layers,
+        grouping,
+    )
+    left_out = [row for row in dock.results.rows if not row.rule_name]
     # A layer can be several inputs of the run, each with a name of its own
     invalid: dict[str, int] = {}
     for alias, layer_id in layers.items():
         invalid[layer_id] = invalid.get(layer_id, 0) + sum(
-            1 for r in rows if not r.rule_name and r.layer_alias == alias
+            1 for r in left_out if r.layer_alias == alias
         )
     dock.rule_list.set_invalid(invalid)
     active = dock.results.active()
