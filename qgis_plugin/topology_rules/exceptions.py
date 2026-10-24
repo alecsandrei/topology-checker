@@ -10,7 +10,12 @@ class MissingError(ExecutableError):
 
 
 class PackageError(ExecutableError):
-    """The topology-checker Python package is missing or unusable."""
+    """The topology-checker Python package is missing or unusable, with why
+    in a few words for where the message has no room."""
+
+    def __init__(self, message: str, brief: str = '') -> None:
+        super().__init__(message)
+        self.brief = brief
 
 
 class RunError(Exception):

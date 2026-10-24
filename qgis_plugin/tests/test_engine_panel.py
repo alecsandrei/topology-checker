@@ -107,7 +107,7 @@ def no_package(monkeypatch: pytest.MonkeyPatch) -> None:
     """QGIS cannot import the package."""
 
     def missing() -> Package:
-        raise PackageError(MISSING)
+        raise PackageError(MISSING, 'not installed')
 
     monkeypatch.setattr(engine, 'find_package', missing)
 
@@ -258,14 +258,17 @@ def row_of(layout: QLayout, widget: QWidget) -> list[QWidget | None]:
 # The menu
 
 
-def test_the_menu_has_the_engines_then_the_installs_then_the_style():
+def test_the_menu_has_the_engines_then_the_installs_then_the_style(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    monkeypatch.setenv('PATH', str(tmp_path / 'nothing'))
     menu = PanelMenu()
     menu.fill()
     assert texts(menu) == [
         'Engine',
         'Automatic',
-        'Python package',
-        'Executable',
+        'Python package (not installed)',
+        'Executable (not found)',
         '---',
         'Install Python package…',
         'Choose executable…',
@@ -313,8 +316,31 @@ def test_the_package_cannot_be_chosen_where_qgis_cannot_use_it():
     menu.fill()
     package = menu.engines[Engine.PACKAGE]
     assert not package.isEnabled()
+    assert package.text() == 'Python package (not installed)'
     assert package.toolTip() == MISSING
     assert package.statusTip() == MISSING
+
+
+@pytest.mark.parametrize(
+    ('brief', 'text'),
+    [
+        ('too old', 'Python package (too old)'),
+        ('restart QGIS', 'Python package (restart QGIS)'),
+        ('', 'Python package (unavailable)'),
+    ],
+)
+def test_the_menu_says_briefly_why_the_package_cannot_be_chosen(
+    monkeypatch: pytest.MonkeyPatch, brief: str, text: str
+):
+    def unusable() -> Package:
+        raise PackageError('The whole reason', brief)
+
+    monkeypatch.setattr(engine, 'find_package', unusable)
+    menu = PanelMenu()
+    menu.fill()
+    package = menu.engines[Engine.PACKAGE]
+    assert package.text() == text
+    assert package.toolTip() == 'The whole reason'
 
 
 def test_a_package_that_qgis_can_use_can_be_chosen(usable: Package):
@@ -322,9 +348,22 @@ def test_a_package_that_qgis_can_use_can_be_chosen(usable: Package):
     menu.fill()
     package = menu.engines[Engine.PACKAGE]
     assert package.isEnabled()
+    assert package.text() == 'Python package'
     assert package.toolTip() == (
         f'topology-checker {VERSION} in {usable.location}'
     )
+
+
+def test_why_the_package_could_not_be_chosen_goes_once_it_can(
+    monkeypatch: pytest.MonkeyPatch, home: Path
+):
+    menu = PanelMenu()
+    menu.fill()
+    make_usable(monkeypatch, home)
+    menu.aboutToShow.emit()
+    package = menu.engines[Engine.PACKAGE]
+    assert package.isEnabled()
+    assert package.text() == 'Python package'
 
 
 def test_the_executable_cannot_be_chosen_without_one(
@@ -335,6 +374,7 @@ def test_the_executable_cannot_be_chosen_without_one(
     menu.fill()
     action = menu.engines[Engine.EXECUTABLE]
     assert not action.isEnabled()
+    assert action.text() == 'Executable (not found)'
     assert action.toolTip() == 'topology-checker was not found.'
 
 
@@ -343,6 +383,7 @@ def test_the_executable_can_be_chosen_with_one(executable: str):
     menu.fill()
     action = menu.engines[Engine.EXECUTABLE]
     assert action.isEnabled()
+    assert action.text() == 'Executable'
     assert action.toolTip() == str(Path(executable))
 
 

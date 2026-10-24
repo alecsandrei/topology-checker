@@ -119,11 +119,10 @@ class PanelMenu(QMenu):
         try:
             found = engine.find_package()
         except PackageError as error:
-            self.offer(self.engines[Engine.PACKAGE], str(error))
+            self.unusable(Engine.PACKAGE, str(error), error.brief)
         else:
-            self.offer(
-                self.engines[Engine.PACKAGE],
-                None,
+            self.usable(
+                Engine.PACKAGE,
                 tr('{package} {version} in {folder}').format(
                     package=PACKAGE,
                     version=found.version,
@@ -133,9 +132,9 @@ class PanelMenu(QMenu):
         try:
             path = binary.find_executable()
         except ExecutableError as error:
-            self.offer(self.engines[Engine.EXECUTABLE], reason(error))
+            self.unusable(Engine.EXECUTABLE, reason(error), tr('not found'))
         else:
-            self.offer(self.engines[Engine.EXECUTABLE], None, str(path))
+            self.usable(Engine.EXECUTABLE, str(path))
 
         version = install.installed()
         self.install_action.setVisible(version is None and found is None)
@@ -147,6 +146,22 @@ class PanelMenu(QMenu):
             )
         )
         self.remove_action.setVisible(version is not None)
+
+    def usable(self, choice: Engine, tip: str) -> None:
+        action = self.engines[choice]
+        action.setText(engine_names()[choice])
+        self.offer(action, None, tip)
+
+    def unusable(self, choice: Engine, reason: str, brief: str) -> None:
+        """Greys out the engine, with why in a few words after its name: a
+        tip shows only to a pointer that rests on the item."""
+        action = self.engines[choice]
+        action.setText(
+            tr('{engine} ({why})').format(
+                engine=engine_names()[choice], why=brief or tr('unavailable')
+            )
+        )
+        self.offer(action, reason)
 
     def offer(self, action: t.Any, reason: str | None, tip: str = '') -> None:
         """Lets the item be chosen, with a tip, or says why it cannot be."""

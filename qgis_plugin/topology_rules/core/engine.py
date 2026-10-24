@@ -19,6 +19,7 @@ from qgis.core import QgsApplication, QgsSettings
 
 from ..enums import PROVIDER_ID, Setting
 from ..exceptions import PackageError
+from ..utils import tr
 from . import binary, folders
 
 if t.TYPE_CHECKING:
@@ -121,21 +122,30 @@ def find_package() -> Package:
     try:
         module = importlib.import_module(MODULE)
     except ImportError as error:
+        absent = isinstance(error, ModuleNotFoundError) and error.name == MODULE
         raise PackageError(
-            f'The topology-checker Python package cannot be imported: {error}'
+            tr(
+                'The topology-checker Python package cannot be imported: '
+                '{error}'
+            ).format(error=error),
+            tr('not installed') if absent else tr('does not load'),
         ) from error
     location = Path(str(module.__file__)).parent
     lacking = missing(module)
     if lacking is not None:
-        message = (
-            f'The topology-checker Python package at {location} is too old '
-            f'for the plugin: it has no {lacking}.'
-        )
+        message = tr(
+            'The topology-checker Python package at {folder} is too old for '
+            'the plugin: it has no {name}.'
+        ).format(folder=location, name=lacking)
+        brief = tr('too old')
         # The one that was installed while QGIS runs loads at the next start
         installed = folders.installed()
         if installed is not None and folders.restart_needed():
-            message += f' Restart QGIS to load {installed}.'
-        raise PackageError(message)
+            message = tr('{message} Restart QGIS to load {version}.').format(
+                message=message, version=installed
+            )
+            brief = tr('restart QGIS')
+        raise PackageError(message, brief)
     return Package(version_at(location), location)
 
 

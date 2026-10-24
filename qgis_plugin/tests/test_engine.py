@@ -4,6 +4,7 @@ the engine of each run, and a run of the package that is canceled."""
 
 from __future__ import annotations
 
+import collections.abc as c
 import dataclasses
 import importlib.abc
 import importlib.machinery
@@ -22,8 +23,9 @@ from qgis.core import (
     QgsSettings,
 )
 from qgis.gui import QgisInterface
+from qgis.PyQt.QtCore import QCoreApplication, QTranslator
 
-from topology_rules.core import binary, engine
+from topology_rules.core import binary, engine, folders
 from topology_rules.core.checks import Job, run_jobs
 from topology_rules.core.engine import Engine, Package
 from topology_rules.core.layers import Input
@@ -218,6 +220,128 @@ def test_a_package_that_gives_no_wkb_of_the_errors_is_too_old(
     monkeypatch.setitem(sys.modules, engine.MODULE, package_module(Violation))
     with pytest.raises(PackageError, match=r'too old .* no Violation\.wkb'):
         engine.find_package()
+
+
+def too_old(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A package that has none of what the plugin uses."""
+    old = types.ModuleType(engine.MODULE)
+    old.__file__ = str(Path('somewhere', engine.MODULE, '__init__.py'))
+    monkeypatch.setitem(sys.modules, engine.MODULE, old)
+
+
+def restart_to_load(monkeypatch: pytest.MonkeyPatch, version: str) -> None:
+    """The plugin installed the version while QGIS runs an older one."""
+    monkeypatch.setattr(folders, 'installed', lambda: version)
+    monkeypatch.setattr(folders, 'restart_needed', lambda: True)
+
+
+def broken(monkeypatch: pytest.MonkeyPatch, folder: Path) -> None:
+    """A package whose native part is not there, as a wheel of another
+    platform."""
+    package = folder / engine.MODULE
+    package.mkdir(parents=True)
+    (package / '__init__.py').write_text('from . import _native\n')
+    for name in list(sys.modules):
+        if name.split('.')[0] == engine.MODULE:
+            monkeypatch.delitem(sys.modules, name)
+    monkeypatch.setattr(sys, 'path', [str(folder), *sys.path])
+
+
+def brief(error: pytest.ExceptionInfo[PackageError]) -> str:
+    return error.value.brief
+
+
+def test_a_package_that_is_not_there_is_not_installed(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    without_package(monkeypatch)
+    with pytest.raises(PackageError) as raised:
+        engine.find_package()
+    assert brief(raised) == 'not installed'
+
+
+def test_a_package_that_fails_to_import_does_not_load(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    broken(monkeypatch, tmp_path)
+    with pytest.raises(PackageError, match='cannot be imported') as raised:
+        engine.find_package()
+    assert brief(raised) == 'does not load'
+
+
+def test_a_package_without_what_the_plugin_uses_is_too_old(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    too_old(monkeypatch)
+    with pytest.raises(PackageError) as raised:
+        engine.find_package()
+    assert brief(raised) == 'too old'
+
+
+def test_an_old_package_with_a_new_one_installed_needs_a_restart(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    too_old(monkeypatch)
+    restart_to_load(monkeypatch, '9.9.9')
+    with pytest.raises(
+        PackageError, match=r'Restart QGIS to load 9\.9\.9'
+    ) as raised:
+        engine.find_package()
+    assert brief(raised) == 'restart QGIS'
+
+
+class Marked(QTranslator):
+    """Gives each text of the plugin a translation that shows the text."""
+
+    def translate(
+        self,
+        context: str | None,
+        source: str | None,
+        disambiguation: str | None = None,
+        n: int = -1,
+    ) -> str:
+        if context == 'TopologyRules':
+            return f'<{source}>'
+        return source or ''
+
+
+@pytest.fixture
+def marked() -> c.Iterator[None]:
+    translator = Marked()
+    QCoreApplication.installTranslator(translator)
+    yield
+    QCoreApplication.removeTranslator(translator)
+
+
+@pytest.mark.usefixtures('marked')
+def test_why_the_package_cannot_be_imported_is_translated(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    without_package(monkeypatch)
+    with pytest.raises(PackageError) as raised:
+        engine.find_package()
+    assert str(raised.value).startswith(
+        '<The topology-checker Python package cannot be imported: import of '
+    )
+    assert str(raised.value).endswith('>')
+    assert brief(raised) == '<not installed>'
+
+
+@pytest.mark.usefixtures('marked')
+def test_why_the_package_is_too_old_is_translated(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    too_old(monkeypatch)
+    restart_to_load(monkeypatch, '9.9.9')
+    with pytest.raises(PackageError) as raised:
+        engine.find_package()
+    folder = Path('somewhere', engine.MODULE)
+    assert str(raised.value) == (
+        f'<<The topology-checker Python package at {folder} is too old for '
+        'the plugin: it has no Topology.add_layer.> Restart QGIS to load '
+        '9.9.9.>'
+    )
+    assert brief(raised) == '<restart QGIS>'
 
 
 @pytest.mark.parametrize('needed', [False, True], ids=['skips', 'fails'])
