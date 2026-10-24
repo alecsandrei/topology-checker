@@ -210,6 +210,9 @@ class Task(QgsTask):
         """The body of the URL, fetched with the proxy, SSL and
         authentication settings of QGIS. Raises Failed with missing, when
         given, for a URL that is not found."""
+        if threading.current_thread() is threading.main_thread():
+            # The download runs on the main thread, which would wait here
+            raise RuntimeError('Task.get runs on the thread of the task')
         self.answered.clear()
         self.answer = None
         self.fetching = url

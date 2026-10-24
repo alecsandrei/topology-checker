@@ -481,6 +481,19 @@ def test_downloads_end_while_the_main_thread_holds_the_gil(
     assert done.stdout.splitlines()[-1] == '30'
 
 
+def test_a_download_on_the_main_thread_fails_at_once(pypi: Index):
+    url = pypi.serve('/file', b'x', kind='x')
+    task = install.ReleaseTask()
+    # Without the check the wait would never end: this ends it otherwise
+    end = threading.Timer(5, task.answered.set)
+    end.start()
+    try:
+        with pytest.raises(RuntimeError, match='thread of the task'):
+            task.get(url)
+    finally:
+        end.cancel()
+
+
 def test_an_answer_that_is_not_json_fails(pypi: Index):
     pypi.serve(
         f'/pypi/topology-checker/{VERSION}/json', b'<html>', kind='text/html'
