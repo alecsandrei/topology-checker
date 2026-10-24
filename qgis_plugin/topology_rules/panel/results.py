@@ -369,8 +369,29 @@ class ResultsPanel(QWidget):
         not_none(self.view.viewport()).update()
 
     def refresh(self) -> None:
-        """Builds the tree again, after the errors to show have changed."""
-        self.show_rows(self.rows, self.layers, self.grouping, self.labels)
+        """Builds the groups again, after the errors to show have changed.
+        The tree stays as open and scrolled as it was. Nothing is selected
+        then, and the map shows all the errors that are shown."""
+        bar = not_none(self.view.verticalScrollBar())
+        scrolled = bar.value()
+        shown = grouped(filter(self.is_shown, self.rows), list(self.labels))
+        for index in reversed(range(self.model.rowCount())):
+            key = group_key(not_none(self.model.item(index)))
+            if key not in shown:
+                self.rebuild(key, [])
+        for key, kinds in shown.items():
+            self.rebuild(key, [row for rows in kinds.values() for row in rows])
+        selection = not_none(self.view.selectionModel())
+        blocker = QSignalBlocker(selection)
+        try:
+            selection.clear()
+        finally:
+            blocker.unblock()
+        not_none(self.view.viewport()).update()
+        bar.setValue(scrolled)
+        self.count_ignored()
+        self.placeholder.set_empty(not self.rows)
+        self.selection_changed()
 
     def is_ignored(self, row: Row) -> bool:
         return self.ignored.has(row)
