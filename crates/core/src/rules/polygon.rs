@@ -42,7 +42,10 @@ pub(crate) fn overlap(t: &Topology, spec: RuleSpec) -> Result<Vec<Violation>, Er
         bj.push(j);
     }
     groups
+        .into_iter()
+        .collect::<Vec<_>>()
         .into_par_iter()
+        .with_min_len(super::min_len())
         .map(|((afid, bfid), (mut ai, mut bj))| {
             ai.sort_unstable();
             ai.dedup();

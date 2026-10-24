@@ -39,6 +39,7 @@ pub(super) fn points(
     let violations = a
         .points
         .par_iter()
+        .with_min_len(super::min_len())
         .flat_map_iter(|p| {
             let hits = t.cancellable(|| {
                 let mut candidates = b
@@ -107,25 +108,28 @@ pub(super) fn contained_points(
     let a = t.parts(spec.layer)?;
     let b = t.parts(other)?;
     let locations = crate::engine::location::locations(a);
-    let violations = index::pairs(a.polygon_index(), b.point_index(), t.tolerance(), false)
-        .par_bridge()
-        .filter_map(|(i, j)| {
-            let (p, q) = (&a.polygons[i], &b.points[j]);
-            t.cancellable(|| {
-                locations[i].position(q.geometry.0) == 1
-                    && !locations[i].near(q.geometry.0, t.tolerance())
-            })
-            .then(|| {
-                violation(
-                    spec,
-                    ViolationKind::Contained,
-                    q.geometry,
-                    Some(p.reference.at(spec.layer)),
-                    Some(q.reference.at(other)),
-                )
-            })
+    let pairs = index::pairs(a.polygon_index(), b.point_index(), t.tolerance(), false);
+    let contained = |(i, j): (usize, usize)| {
+        let (p, q) = (&a.polygons[i], &b.points[j]);
+        t.cancellable(|| {
+            locations[i].position(q.geometry.0) == 1
+                && !locations[i].near(q.geometry.0, t.tolerance())
         })
-        .collect();
+        .then(|| {
+            violation(
+                spec,
+                ViolationKind::Contained,
+                q.geometry,
+                Some(p.reference.at(spec.layer)),
+                Some(q.reference.at(other)),
+            )
+        })
+    };
+    let violations = if super::in_feature_task() {
+        pairs.filter_map(contained).collect()
+    } else {
+        pairs.par_bridge().filter_map(contained).collect()
+    };
     Ok(aggregate(violations, Merge::AllDimensions))
 }
 

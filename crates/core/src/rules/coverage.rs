@@ -71,6 +71,7 @@ fn uncovered(
     let b = t.parts(other)?;
     let violations = sources
         .par_iter()
+        .with_min_len(super::min_len())
         .enumerate()
         .filter(|(i, p)| {
             t.cancellable(|| {
@@ -118,25 +119,28 @@ pub(super) fn line_contacts(
 ) -> Result<Vec<Violation>, Error> {
     let a = t.parts(spec.layer)?;
     let b = t.parts(other)?;
-    let violations = index::pairs(a.point_index(), b.line_index(), t.tolerance(), false)
-        .par_bridge()
-        .filter_map(|(i, j)| {
-            let (p, l) = (&a.points[i], &b.lines[j]);
-            t.cancellable(|| {
-                l.geometry
-                    .lines()
-                    .any(|line| proximity::near_segment(p.geometry.0, line, t.tolerance()))
-            })
-            .then(|| {
-                violation(
-                    spec,
-                    ViolationKind::Intersection,
-                    p.geometry,
-                    Some(p.reference.at(spec.layer)),
-                    Some(l.reference.at(other)),
-                )
-            })
+    let pairs = index::pairs(a.point_index(), b.line_index(), t.tolerance(), false);
+    let contact = |(i, j): (usize, usize)| {
+        let (p, l) = (&a.points[i], &b.lines[j]);
+        t.cancellable(|| {
+            l.geometry
+                .lines()
+                .any(|line| proximity::near_segment(p.geometry.0, line, t.tolerance()))
         })
-        .collect();
+        .then(|| {
+            violation(
+                spec,
+                ViolationKind::Intersection,
+                p.geometry,
+                Some(p.reference.at(spec.layer)),
+                Some(l.reference.at(other)),
+            )
+        })
+    };
+    let violations = if super::in_feature_task() {
+        pairs.filter_map(contact).collect()
+    } else {
+        pairs.par_bridge().filter_map(contact).collect()
+    };
     Ok(aggregate(violations, Merge::AllDimensions))
 }

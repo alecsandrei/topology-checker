@@ -42,6 +42,7 @@ pub(super) fn properly_inside(
     let violations = a
         .lines
         .par_iter()
+        .with_min_len(super::min_len())
         .filter_map(|l| {
             let inside = t.cancellable(|| {
                 union.geometry.properly_contains(
@@ -76,12 +77,15 @@ pub(super) fn run(
     let a = t.parts(spec.layer)?;
     let b = t.parts(other)?;
     let bv = location::locations(b);
-    let violations = index::pairs(a.line_index(), b.polygon_index(), t.tolerance(), false)
-        .par_bridge()
-        .flat_map_iter(|(i, j)| {
-            t.cancellable(|| pair(t, spec, other, mode, &a.lines[i], &b.polygons[j], &bv[j]))
-        })
-        .collect();
+    let pairs = index::pairs(a.line_index(), b.polygon_index(), t.tolerance(), false);
+    let compare = |(i, j): (usize, usize)| {
+        t.cancellable(|| pair(t, spec, other, mode, &a.lines[i], &b.polygons[j], &bv[j]))
+    };
+    let violations = if super::in_feature_task() {
+        pairs.flat_map(compare).collect()
+    } else {
+        pairs.par_bridge().flat_map_iter(compare).collect()
+    };
     Ok(aggregate(violations, Merge::AllDimensions))
 }
 
@@ -650,6 +654,7 @@ pub(super) fn inside(
     let violations = input
         .lines
         .par_iter()
+        .with_min_len(super::min_len())
         .flat_map_iter(|line| {
             t.cancellable(|| {
                 outside_pieces(

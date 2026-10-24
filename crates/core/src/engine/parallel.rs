@@ -28,6 +28,26 @@ const TASKS: usize = 8;
 thread_local! {
     static FORCED: std::cell::Cell<Option<Workers>> = const { std::cell::Cell::new(None) };
 }
+thread_local! {
+    static CAP: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+}
+
+/// Run `f` with each step on at most `threads` threads, the calling one included,
+/// for callers that already run on threads of their own.
+pub(crate) fn capped<T>(threads: usize, f: impl FnOnce() -> T) -> T {
+    struct Restore(Option<usize>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            CAP.with(|c| c.set(self.0));
+        }
+    }
+    let _restore = Restore(CAP.with(|c| c.replace(Some(threads.max(1)))));
+    f()
+}
+/// The thread limit of the [`capped`] call running on this thread, if any.
+pub(crate) fn cap() -> Option<usize> {
+    CAP.with(std::cell::Cell::get)
+}
 
 /// Threads for one construction step.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -42,13 +62,24 @@ impl Workers {
         if let Some(forced) = FORCED.with(std::cell::Cell::get) {
             return forced;
         }
-        let threads = if work < INLINE {
-            1
+        if work < INLINE {
+            Self::with_threads(1)
         } else {
-            rayon::current_num_threads().max(1)
-        };
+            Self::all()
+        }
+    }
+    /// Every thread a step on this thread may use.
+    pub(crate) fn all() -> Self {
+        #[cfg(test)]
+        if let Some(forced) = FORCED.with(std::cell::Cell::get) {
+            return forced;
+        }
+        Self::with_threads(rayon::current_num_threads().min(cap().unwrap_or(usize::MAX)))
+    }
+    /// Exactly `threads` threads, the calling one included.
+    pub(crate) fn with_threads(threads: usize) -> Self {
         Self {
-            threads,
+            threads: threads.max(1),
             grain: GRAIN,
         }
     }

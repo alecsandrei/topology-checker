@@ -9,14 +9,20 @@ mod line_polygon;
 mod point;
 mod point_polygon;
 mod polygon;
-use crate::{Error, FeatureRef, Rule, RuleSpec, Topology, Violation, ViolationKind};
+use crate::{
+    Error, FeatureRef, Rule, RuleSpec, Topology, Violation, ViolationKind,
+    engine::parallel::{self, Workers},
+};
 use boundary::Boundary;
 use coverage::Target;
 use geo::{Coord, Geometry, LineString};
 use line::LineCheck;
 use line_polygon::LinePolygon;
 use point_polygon::{PointCount, PointTest};
-use rayon::prelude::*;
+use std::sync::{
+    OnceLock,
+    atomic::{self, AtomicUsize},
+};
 
 pub(crate) fn run(t: &Topology, spec: RuleSpec) -> Result<Vec<Violation>, Error> {
     // A worker thread can pick this rule up inside another validation's scope.
@@ -176,14 +182,74 @@ pub(crate) fn run_into<E>(
     ) {
         emit(run(t, spec)?, &mut sink)
     } else {
-        let batch = rayon::current_num_threads() * FEATURES_PER_THREAD;
-        per_feature_into(t, spec, batch, &mut sink)
+        per_feature_into(t, spec, FEATURES_PER_THREAD, &mut sink)
     }
 }
 /// Features per thread in one parallel batch of [`per_feature_into`]. Output waits
 /// for a whole batch, so batches stay small enough to stream early and to bound the
 /// violations held at once, and large enough to balance uneven features.
 const FEATURES_PER_THREAD: usize = 8;
+/// Helper threads in use by the feature batches of every validation in the process.
+static HELPERS: AtomicUsize = AtomicUsize::new(0);
+/// Helper threads of one feature batch, returned when it ends.
+struct Helpers {
+    threads: usize,
+    shared: usize,
+}
+impl Helpers {
+    /// Up to `want` of the helpers free now. All validations together use one helper
+    /// per CPU but one, and a batch never waits for them: without any it runs on the
+    /// calling thread alone.
+    fn take(want: usize) -> Self {
+        #[cfg(test)]
+        if tests::threads().is_some() {
+            return Self {
+                threads: want,
+                shared: 0,
+            };
+        }
+        static LIMIT: OnceLock<usize> = OnceLock::new();
+        let limit = *LIMIT.get_or_init(|| {
+            std::thread::available_parallelism().map_or(1, std::num::NonZero::get) - 1
+        });
+        let mut used = HELPERS.load(atomic::Ordering::Relaxed);
+        loop {
+            let threads = want.min(limit.saturating_sub(used));
+            if threads == 0 {
+                return Self { threads, shared: 0 };
+            }
+            match HELPERS.compare_exchange_weak(
+                used,
+                used + threads,
+                atomic::Ordering::Relaxed,
+                atomic::Ordering::Relaxed,
+            ) {
+                Ok(_) => {
+                    return Self {
+                        threads,
+                        shared: threads,
+                    };
+                }
+                Err(now) => used = now,
+            }
+        }
+    }
+}
+impl Drop for Helpers {
+    fn drop(&mut self) {
+        HELPERS.fetch_sub(self.shared, atomic::Ordering::Relaxed);
+    }
+}
+/// Whether this thread runs one feature of [`per_feature_into`]. Rayon steps then stay
+/// on it: a rayon job can wait behind other validations' jobs, which do not stop when
+/// this validation is cancelled.
+pub(super) fn in_feature_task() -> bool {
+    parallel::cap().is_some()
+}
+/// Smallest rayon job, in items: whole inputs within a feature task.
+pub(super) fn min_len() -> usize {
+    if in_feature_task() { usize::MAX } else { 1 }
+}
 /// Kinds of a per-feature rule in emission order. Empty when each feature emits all
 /// of its violations together.
 fn feature_kinds(rule: Rule) -> &'static [ViolationKind] {
@@ -205,15 +271,17 @@ fn feature_kinds(rule: Rule) -> &'static [ViolationKind] {
 }
 /// Run a rule on one original feature at a time and emit in kind order, then feature
 /// order. Geometry scratch belongs to one feature and its candidate targets, and no
-/// complete feature-pair report is retained. Batches of `batch` features run in
-/// parallel and each feature runs once: its first kind is emitted with its batch, and
-/// later kinds wait until every feature has emitted the first. The first feature runs
-/// alone, so it builds the caches every feature shares, such as the line graph, before
-/// workers would wait for them.
+/// complete feature-pair report is retained. Batches of `per_thread` features per
+/// thread run in parallel and each feature runs once: its first kind is emitted with
+/// its batch, and later kinds wait until every feature has emitted the first. The
+/// first feature runs alone, so it builds the caches every feature shares, such as the
+/// line graph, with every thread it may use. Batches run on the calling thread and
+/// helpers of their own, never on a shared pool, so cancelling stops them as soon as
+/// their features check, whatever else runs in the process.
 fn per_feature_into<E>(
     t: &Topology,
     spec: RuleSpec,
-    batch: usize,
+    per_thread: usize,
     sink: &mut impl FnMut(Violation) -> Result<(), E>,
 ) -> Result<(), crate::SinkError<E>> {
     let mut fids = t
@@ -225,26 +293,46 @@ fn per_feature_into<E>(
     let kinds = feature_kinds(spec.rule);
     // Holding later kinds saves a rerun per kind; a million held added about 10% to peak.
     let mut later = kinds.iter().skip(1).map(|_| Vec::new()).collect::<Vec<_>>();
-    // A snapshot only adds the selected feature, so each rayon job reuses one.
-    let feature = |snapshot: &mut Topology, &fid: &i64| {
-        // Worker threads do not see the caller's cancellation scope.
+    let feature = |fid: i64, threads: usize| {
+        // The selection checks this topology's token on whichever thread runs it.
         t.cancellable(|| {
-            #[cfg(test)]
-            tests::visit(t, spec, fid)?;
-            snapshot.select_feature(spec.layer, fid)?;
-            let mut violations = run(snapshot, spec)?;
-            sort(&mut violations);
-            Ok::<_, Error>(violations)
+            parallel::capped(threads, || {
+                #[cfg(test)]
+                tests::visit(t, spec, fid)?;
+                let mut snapshot = t.snapshot();
+                snapshot.select_feature(spec.layer, fid)?;
+                let mut violations = run(&snapshot, spec)?;
+                sort(&mut violations);
+                Ok::<_, Error>(violations)
+            })
         })
     };
-    let first = fids.len().min(1);
-    let batches = std::iter::once(&fids[..first]).chain(fids[first..].chunks(batch.max(1)));
-    for fids in batches {
+    let mut rest = &fids[..];
+    let mut first = true;
+    while !rest.is_empty() {
         crate::cancel::check();
-        let results = fids
-            .par_iter()
-            .map_init(|| t.snapshot(), feature)
-            .collect::<Vec<_>>();
+        let threads = Workers::all().threads();
+        #[cfg(test)]
+        let threads = tests::threads().unwrap_or(threads).max(1);
+        // A feature that runs alone may split its own steps over the helpers instead.
+        let alone = first || rest.len() == 1;
+        let helpers = Helpers::take(
+            if alone {
+                threads
+            } else {
+                threads.min(rest.len())
+            } - 1,
+        );
+        let threads = 1 + helpers.threads;
+        let (size, steps) = if alone {
+            (1, threads)
+        } else {
+            (threads * per_thread.max(1), 1)
+        };
+        let (fids, tail) = rest.split_at(size.min(rest.len()));
+        (rest, first) = (tail, false);
+        let results = Workers::with_threads(threads).run(fids.len(), |i| feature(fids[i], steps));
+        drop(helpers);
         for violations in results {
             for v in violations? {
                 match kinds.iter().position(|&kind| kind == v.kind) {
@@ -310,13 +398,68 @@ mod tests {
         Rect, coord,
     };
     use std::{
+        cell::Cell,
         collections::HashSet,
         convert::Infallible,
         panic::AssertUnwindSafe,
-        sync::{Arc, Mutex, PoisonError, mpsc},
+        sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, mpsc},
         thread::ThreadId,
         time::{Duration, Instant},
     };
+
+    thread_local! { static THREADS: Cell<Option<usize>> = const { Cell::new(None) }; }
+    /// Threads for feature batches started on this thread, whatever else is running.
+    pub(super) fn threads() -> Option<usize> {
+        THREADS.with(Cell::get)
+    }
+    /// Run `f` with feature batches on `threads` threads where they have the features.
+    fn with_threads<T>(threads: usize, f: impl FnOnce() -> T) -> T {
+        struct Restore(Option<usize>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                THREADS.with(|c| c.set(self.0));
+            }
+        }
+        let _restore = Restore(THREADS.with(|c| c.replace(Some(threads))));
+        f()
+    }
+
+    /// Longest wait for another thread in a test.
+    const PATIENCE: Duration = Duration::from_secs(60);
+    /// Threads that reached a point, and whether they may pass it.
+    #[derive(Debug, Default)]
+    struct Gate {
+        state: Mutex<Passage>,
+        changed: Condvar,
+    }
+    #[derive(Debug, Default)]
+    struct Passage {
+        arrivals: usize,
+        threads: HashSet<ThreadId>,
+        open: bool,
+    }
+    impl Gate {
+        fn state(&self) -> MutexGuard<'_, Passage> {
+            self.state.lock().unwrap_or_else(PoisonError::into_inner)
+        }
+        fn arrive(&self) {
+            let mut state = self.state();
+            state.arrivals += 1;
+            state.threads.insert(std::thread::current().id());
+            self.changed.notify_all();
+        }
+        fn open(&self) {
+            self.state().open = true;
+            self.changed.notify_all();
+        }
+        /// Block until `ready` holds, for at most [`PATIENCE`].
+        fn wait(&self, ready: impl Fn(&Passage) -> bool) -> MutexGuard<'_, Passage> {
+            self.changed
+                .wait_timeout_while(self.state(), PATIENCE, |state| !ready(state))
+                .unwrap_or_else(PoisonError::into_inner)
+                .0
+        }
+    }
 
     #[derive(Debug, Clone)]
     enum Action {
@@ -325,11 +468,16 @@ mod tests {
         Panic(&'static str),
         Hold(Duration),
         Note(Arc<Mutex<Vec<Instant>>>),
-        /// Record the thread, then check for cancellation as rule code does, returning
-        /// normally [`SPIN_GRACE`] after the token is cancelled if no check unwinds.
-        Spin(CancellationToken, Arc<Mutex<HashSet<ThreadId>>>),
+        /// Arrive at the gate and go on.
+        Arrive(Arc<Gate>),
+        /// Arrive at the gate and wait until it opens, then check for cancellation as
+        /// rule code does and, if that does not unwind, sleep before returning.
+        Block(Arc<Gate>, Duration),
+        /// Wait until this many threads arrived at the gate.
+        Await(Arc<Gate>, usize),
     }
-    const SPIN_GRACE: Duration = Duration::from_secs(1);
+    /// How long a feature blocked at a gate keeps running when cancelling misses it.
+    const GRACE: Duration = Duration::from_secs(1);
     /// Actions keyed by primary layer name and FID, taken as a worker starts that feature.
     static ACTIONS: Mutex<Vec<(String, i64, Action)>> = Mutex::new(Vec::new());
     pub(super) fn visit(t: &Topology, spec: RuleSpec, fid: i64) -> Result<(), Error> {
@@ -358,21 +506,15 @@ mod tests {
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .push(Instant::now()),
-            Some(Action::Spin(token, threads)) => {
-                threads
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .insert(std::thread::current().id());
-                let mut cancelled = None;
-                loop {
-                    crate::cancel::check();
-                    if token.is_cancelled()
-                        && cancelled.get_or_insert_with(Instant::now).elapsed() >= SPIN_GRACE
-                    {
-                        break;
-                    }
-                    std::thread::sleep(Duration::from_millis(1));
-                }
+            Some(Action::Arrive(gate)) => gate.arrive(),
+            Some(Action::Block(gate, then)) => {
+                gate.arrive();
+                drop(gate.wait(|state| state.open));
+                crate::cancel::check();
+                std::thread::sleep(then);
+            }
+            Some(Action::Await(gate, arrivals)) => {
+                drop(gate.wait(|state| state.arrivals >= arrivals));
             }
             None => {}
         }
@@ -891,8 +1033,9 @@ mod tests {
             assert!(expected.0 == passes, "seed {seed}");
             // The 4-thread pool runs twice, to catch output that varies between runs.
             for pool in [&pools[0], &pools[1], &pools[2], &pools[2]] {
+                let threads = pool.current_num_threads();
                 assert!(
-                    pool.install(|| output(seed)) == expected,
+                    pool.install(|| with_threads(threads, || output(seed))) == expected,
                     "seed {seed}, {} threads",
                     pool.current_num_threads()
                 );
@@ -953,9 +1096,11 @@ mod tests {
             );
             let mut emitted = Vec::new();
             let result = pool.install(|| {
-                case.topology.validate_into_cancellable(token, |_, v| {
-                    emitted.push(v);
-                    Ok::<_, Infallible>(())
+                with_threads(4, || {
+                    case.topology.validate_into_cancellable(token, |_, v| {
+                        emitted.push(v);
+                        Ok::<_, Infallible>(())
+                    })
                 })
             });
             clear(&name);
@@ -1042,8 +1187,8 @@ mod tests {
             // Cancel up to 5 ms after a seeded feature start. Every rule starts each
             // feature once, so starts count progress on any machine. Every fourth run
             // picks a rule's first feature, which builds the caches the rule shares.
-            let starts = Arc::new(Mutex::new(Vec::new()));
-            let note = || Action::Note(Arc::clone(&starts));
+            let starts = Arc::new(Gate::default());
+            let note = || Action::Arrive(Arc::clone(&starts));
             let name = on(&case.topology, case.specs[0], 0, note());
             for fid in 1..features as i64 {
                 on(&case.topology, case.specs[0], fid, note());
@@ -1057,6 +1202,7 @@ mod tests {
             let token = CancellationToken::default();
             let (send, receive) = mpsc::channel();
             let (worker_pool, worker_token) = (Arc::clone(pool), token.clone());
+            let finished = Arc::clone(&starts);
             let worker = std::thread::spawn(move || {
                 let mut emitted = Vec::new();
                 let result = worker_pool.install(|| {
@@ -1067,12 +1213,10 @@ mod tests {
                         })
                         .map(|_| ())
                 });
+                finished.open();
                 send.send((result, emitted)).unwrap();
             });
-            let started = || starts.lock().unwrap_or_else(PoisonError::into_inner).len();
-            while started() <= at && !worker.is_finished() {
-                std::thread::sleep(Duration::from_micros(50));
-            }
+            drop(starts.wait(|state| state.arrivals > at || state.open));
             std::thread::sleep(delay);
             let cancel = Instant::now();
             token.cancel();
@@ -1114,8 +1258,8 @@ mod tests {
 
     #[test]
     fn cancelling_stops_features_already_running_on_worker_threads() {
-        // Every feature of the one parallel batch keeps checking until a while after
-        // cancellation, so only checks on the workers themselves stop it promptly.
+        // Every feature of the one parallel batch blocks until cancellation and then
+        // checks once, so only checks on the workers themselves stop it promptly.
         let mut t = Topology::new(0.).unwrap();
         let lines = (0..33).map(|fid| {
             let x = fid as f64;
@@ -1124,40 +1268,98 @@ mod tests {
         let layer = t.add_layer(Layer::from_features("worker-cancel", lines));
         let spec = t.add_rule(Rule::LineMustNotIntersect, layer, None).unwrap();
         let token = CancellationToken::default();
-        let threads = Arc::new(Mutex::new(HashSet::new()));
-        let spin = || Action::Spin(token.clone(), Arc::clone(&threads));
-        let name = on(&t, spec, 1, spin());
+        let gate = Arc::new(Gate::default());
+        let block = || Action::Block(Arc::clone(&gate), GRACE);
+        let name = on(&t, spec, 1, block());
         for fid in 2..33 {
-            on(&t, spec, fid, spin());
+            on(&t, spec, fid, block());
         }
-        let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(4)
-            .build()
-            .unwrap();
-        let spinning = || threads.lock().unwrap_or_else(PoisonError::into_inner).len();
         let (stopped, result) = std::thread::scope(|scope| {
             let run = scope.spawn(|| {
-                let result = pool.install(|| {
+                let result = with_threads(4, || {
                     t.validate_into_cancellable(token.clone(), |_, _| Ok::<_, Infallible>(()))
                 });
                 (Instant::now(), result.map(|_| ()))
             });
-            let waiting = Instant::now();
-            while spinning() < 4 && waiting.elapsed() < Duration::from_secs(60) {
-                std::thread::sleep(Duration::from_millis(1));
-            }
+            drop(gate.wait(|state| state.threads.len() >= 4));
             let cancelled = Instant::now();
             token.cancel();
+            gate.open();
             let (ended, result) = run.join().unwrap();
             (ended - cancelled, result)
         });
         clear(&name);
-        assert_eq!(spinning(), 4);
+        assert_eq!(gate.state().threads.len(), 4);
+        assert_eq!(gate.state().arrivals, 4);
         assert!(
             matches!(result, Err(SinkError::Core(Error::Cancelled))),
             "{result:?}"
         );
-        assert!(stopped < SPIN_GRACE / 5, "{stopped:?}");
+        assert!(stopped < GRACE / 5, "{stopped:?}");
+    }
+
+    #[test]
+    fn a_cancelled_validation_never_waits_for_another_one() {
+        // Both validations share a pool. A cancels while two features of a batch run,
+        // and B is blocked in its first feature until A has returned.
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(2)
+            .build()
+            .unwrap();
+        let topology = |name: &str| {
+            let mut t = Topology::new(0.).unwrap();
+            let lines = (0..3).map(|fid| {
+                let x = fid as f64;
+                (fid, LineString::from(vec![(x, 0.), (x, 1.)]).into())
+            });
+            let layer = t.add_layer(Layer::from_features(name, lines));
+            let spec = t.add_rule(Rule::LineMustNotIntersect, layer, None).unwrap();
+            (t, spec)
+        };
+        let ((a, a_spec), (b, b_spec)) = (topology("concurrent-a"), topology("concurrent-b"));
+        let expected = reference(&b, b_spec).unwrap();
+        let (a_gate, b_gate) = (Arc::new(Gate::default()), Arc::new(Gate::default()));
+        // Feature 1 returns once feature 2 is blocked on another thread.
+        let a_name = on(&a, a_spec, 1, Action::Await(Arc::clone(&a_gate), 1));
+        on(&a, a_spec, 2, Action::Block(Arc::clone(&a_gate), GRACE));
+        let b_name = on(
+            &b,
+            b_spec,
+            0,
+            Action::Block(Arc::clone(&b_gate), Duration::ZERO),
+        );
+        let token = CancellationToken::default();
+        let run = |t: &Topology, token: CancellationToken| {
+            pool.install(|| {
+                with_threads(2, || {
+                    let mut out = Vec::new();
+                    let result = t.validate_into_cancellable(token, |_, v| {
+                        out.push(v);
+                        Ok::<_, Infallible>(())
+                    });
+                    result.map(|_| out)
+                })
+            })
+        };
+        let (done, a_result) = mpsc::channel();
+        std::thread::scope(|scope| {
+            let a_run = scope.spawn(|| done.send(run(&a, token.clone())).unwrap());
+            drop(a_gate.wait(|state| state.arrivals == 1));
+            let b_run = scope.spawn(|| run(&b, CancellationToken::default()));
+            drop(b_gate.wait(|state| state.arrivals == 1));
+            token.cancel();
+            a_gate.open();
+            let a_result = a_result.recv_timeout(Duration::from_secs(10));
+            b_gate.open();
+            assert!(
+                matches!(a_result, Ok(Err(SinkError::Core(Error::Cancelled)))),
+                "{a_result:?}"
+            );
+            assert_eq!(b_run.join().unwrap().unwrap(), expected);
+            a_run.join().unwrap();
+        });
+        clear(&a_name);
+        clear(&b_name);
         assert_idle(&pool);
     }
 
@@ -1191,7 +1393,7 @@ mod tests {
             .build()
             .unwrap();
         let started = Instant::now();
-        let streamed = pool.install(|| streamed(&t, spec, None));
+        let streamed = pool.install(|| with_threads(4, || streamed(&t, spec, None)));
         clear(&name);
         assert_eq!(streamed.unwrap(), expected);
         let starts = starts.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1244,13 +1446,17 @@ mod tests {
                 for cancellable in [false, true] {
                     let payload = std::panic::catch_unwind(AssertUnwindSafe(|| {
                         pool.install(|| {
-                            let sink = |_, _| Ok::<_, Infallible>(());
-                            if cancellable {
-                                case.topology
-                                    .validate_into_cancellable(CancellationToken::default(), sink)
-                            } else {
-                                case.topology.validate_into(sink)
-                            }
+                            with_threads(pool.current_num_threads(), || {
+                                let sink = |_, _| Ok::<_, Infallible>(());
+                                if cancellable {
+                                    case.topology.validate_into_cancellable(
+                                        CancellationToken::default(),
+                                        sink,
+                                    )
+                                } else {
+                                    case.topology.validate_into(sink)
+                                }
+                            })
                         })
                     }))
                     .expect_err("the panic propagates");

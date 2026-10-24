@@ -24,6 +24,7 @@ pub(crate) fn inside(
     let locations = crate::engine::location::locations(b);
     Ok(a.points
         .par_iter()
+        .with_min_len(super::min_len())
         .filter_map(|p| {
             t.cancellable(|| {
                 let inside = b
