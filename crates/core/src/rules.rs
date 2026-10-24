@@ -223,15 +223,16 @@ fn per_feature_into<E>(
         .collect::<Vec<_>>();
     fids.sort_unstable();
     let kinds = feature_kinds(spec.rule);
+    // Holding later kinds saves a rerun per kind; a million held added about 10% to peak.
     let mut later = kinds.iter().skip(1).map(|_| Vec::new()).collect::<Vec<_>>();
-    let feature = |fid| {
+    // A snapshot only adds the selected feature, so each rayon job reuses one.
+    let feature = |snapshot: &mut Topology, &fid: &i64| {
         // Worker threads do not see the caller's cancellation scope.
         t.cancellable(|| {
             #[cfg(test)]
             tests::visit(t, spec, fid)?;
-            let mut snapshot = t.snapshot();
             snapshot.select_feature(spec.layer, fid)?;
-            let mut violations = run(&snapshot, spec)?;
+            let mut violations = run(snapshot, spec)?;
             sort(&mut violations);
             Ok::<_, Error>(violations)
         })
@@ -240,10 +241,10 @@ fn per_feature_into<E>(
     let batches = std::iter::once(&fids[..first]).chain(fids[first..].chunks(batch.max(1)));
     for fids in batches {
         crate::cancel::check();
-        let results = match fids {
-            &[fid] => vec![feature(fid)],
-            _ => fids.par_iter().map(|&fid| feature(fid)).collect::<Vec<_>>(),
-        };
+        let results = fids
+            .par_iter()
+            .map_init(|| t.snapshot(), feature)
+            .collect::<Vec<_>>();
         for violations in results {
             for v in violations? {
                 match kinds.iter().position(|&kind| kind == v.kind) {
@@ -309,9 +310,11 @@ mod tests {
         Rect, coord,
     };
     use std::{
+        collections::HashSet,
         convert::Infallible,
         panic::AssertUnwindSafe,
         sync::{Arc, Mutex, PoisonError, mpsc},
+        thread::ThreadId,
         time::{Duration, Instant},
     };
 
@@ -322,7 +325,11 @@ mod tests {
         Panic(&'static str),
         Hold(Duration),
         Note(Arc<Mutex<Vec<Instant>>>),
+        /// Record the thread, then check for cancellation as rule code does, returning
+        /// normally [`SPIN_GRACE`] after the token is cancelled if no check unwinds.
+        Spin(CancellationToken, Arc<Mutex<HashSet<ThreadId>>>),
     }
+    const SPIN_GRACE: Duration = Duration::from_secs(1);
     /// Actions keyed by primary layer name and FID, taken as a worker starts that feature.
     static ACTIONS: Mutex<Vec<(String, i64, Action)>> = Mutex::new(Vec::new());
     pub(super) fn visit(t: &Topology, spec: RuleSpec, fid: i64) -> Result<(), Error> {
@@ -351,6 +358,22 @@ mod tests {
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .push(Instant::now()),
+            Some(Action::Spin(token, threads)) => {
+                threads
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .insert(std::thread::current().id());
+                let mut cancelled = None;
+                loop {
+                    crate::cancel::check();
+                    if token.is_cancelled()
+                        && cancelled.get_or_insert_with(Instant::now).elapsed() >= SPIN_GRACE
+                    {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+            }
             None => {}
         }
         Ok(())
@@ -1071,6 +1094,55 @@ mod tests {
             .concat(),
             expected
         );
+    }
+
+    #[test]
+    fn cancelling_stops_features_already_running_on_worker_threads() {
+        // Every feature of the one parallel batch keeps checking until a while after
+        // cancellation, so only checks on the workers themselves stop it promptly.
+        let mut t = Topology::new(0.).unwrap();
+        let lines = (0..33).map(|fid| {
+            let x = fid as f64;
+            (fid, LineString::from(vec![(x, 0.), (x, 1.)]).into())
+        });
+        let layer = t.add_layer(Layer::from_features("worker-cancel", lines));
+        let spec = t.add_rule(Rule::LineMustNotIntersect, layer, None).unwrap();
+        let token = CancellationToken::default();
+        let threads = Arc::new(Mutex::new(HashSet::new()));
+        let spin = || Action::Spin(token.clone(), Arc::clone(&threads));
+        let name = on(&t, spec, 1, spin());
+        for fid in 2..33 {
+            on(&t, spec, fid, spin());
+        }
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .unwrap();
+        let spinning = || threads.lock().unwrap_or_else(PoisonError::into_inner).len();
+        let (stopped, result) = std::thread::scope(|scope| {
+            let run = scope.spawn(|| {
+                let result = pool.install(|| {
+                    t.validate_into_cancellable(token.clone(), |_, _| Ok::<_, Infallible>(()))
+                });
+                (Instant::now(), result.map(|_| ()))
+            });
+            let waiting = Instant::now();
+            while spinning() < 4 && waiting.elapsed() < Duration::from_secs(60) {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            let cancelled = Instant::now();
+            token.cancel();
+            let (ended, result) = run.join().unwrap();
+            (ended - cancelled, result)
+        });
+        clear(&name);
+        assert_eq!(spinning(), 4);
+        assert!(
+            matches!(result, Err(SinkError::Core(Error::Cancelled))),
+            "{result:?}"
+        );
+        assert!(stopped < SPIN_GRACE / 5, "{stopped:?}");
+        assert_idle(&pool);
     }
 
     #[test]
