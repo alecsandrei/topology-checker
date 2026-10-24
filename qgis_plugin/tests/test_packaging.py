@@ -215,6 +215,8 @@ def test_the_about_text_says_how_to_get_the_tool(
 ):
     about = general(metadata, 'about')
     assert 'topology-checker executable' in about
+    # The plugin repository wants what the plugin downloads to be stated
+    assert 'downloads it from PyPI' in about
     assert '/qgis-plugin/#install' in about
     assert 'Processing' in about
 
