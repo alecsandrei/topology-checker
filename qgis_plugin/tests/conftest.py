@@ -10,6 +10,7 @@ import os
 import shutil
 import sys
 import tempfile
+import threading
 import traceback
 import types
 import typing as t
@@ -22,13 +23,14 @@ from qgis.PyQt.QtCore import QSettings
 from qgis.PyQt.QtGui import QFontDatabase, QFontInfo
 from qgis.PyQt.QtWidgets import QApplication, QMainWindow
 
-from topology_rules.core import binary, engine
+from topology_rules.core import binary, engine, install
 from topology_rules.core.engine import Engine, Package
 from topology_rules.enums import Setting
 from topology_rules.exceptions import ExecutableError, PackageError
 from topology_rules.panel.dock import Dock
 from topology_rules.panel.rules_page import COLLAPSED
 from topology_rules.provider import Provider
+from topology_rules.utils import not_none
 
 from .helpers import choose_engine, real_executable, wait_for
 
@@ -208,6 +210,33 @@ def unhandled(monkeypatch: pytest.MonkeyPatch) -> c.Iterator[list[str]]:
     monkeypatch.setattr(sys, 'excepthook', hook)
     yield errors
     assert not errors, '\n'.join(errors)
+
+
+def installing() -> list[install.Task]:
+    tasks = not_none(QgsApplication.taskManager()).activeTasks()
+    return [task for task in tasks if isinstance(task, install.Task)]
+
+
+@pytest.fixture(autouse=True)
+def installs_end() -> c.Iterator[None]:
+    """Stops the run when a cancelled install keeps running. Its thread
+    stays, and every later test that waits for the tasks of QGIS would fail
+    after its timeout, which takes longer than the jobs may run."""
+    yield
+    for task in installing():
+        task.cancel()
+    try:
+        wait_for(lambda: not installing(), 30)
+    except AssertionError:
+        names = ', '.join(task.description() for task in installing())
+        stacks = '\n'.join(
+            ''.join(traceback.format_stack(frame))
+            for ident, frame in sys._current_frames().items()
+            if ident != threading.get_ident()
+        )
+        pytest.exit(
+            f'Cancelled, but still running: {names}\n{stacks}', returncode=1
+        )
 
 
 @pytest.fixture(autouse=True)

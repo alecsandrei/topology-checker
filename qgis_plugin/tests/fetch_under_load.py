@@ -3,19 +3,21 @@ holds the GIL as it takes the locks of Qt, as a slot of the panel may.
 Exits 0 and prints the fetches once all are done; on a hang, faulthandler
 prints the threads and exits 1.
 
-Run by test_install, in a QGIS of its own: fetch_under_load.py PLUGIN COUNT
+Run by test_install, in a QGIS of its own: fetch_under_load.py PLUGIN URL
+SIZE COUNT. The server is in the tests, as one in this process would wait
+for the GIL too.
 """
 
 from __future__ import annotations
 
 import faulthandler
-import http.server
 import os
 import sys
-import threading
 
 sys.path.insert(0, sys.argv[1])
-COUNT = int(sys.argv[2])
+URL = sys.argv[2]
+SIZE = int(sys.argv[3])
+COUNT = int(sys.argv[4])
 
 from qgis.core import QgsApplication  # noqa: E402
 
@@ -26,24 +28,6 @@ from qgis.PyQt.QtCore import QObject  # noqa: E402
 
 from topology_rules.core import install  # noqa: E402
 
-BODY = b'x' * 50_000
-
-
-class Handler(http.server.BaseHTTPRequestHandler):
-    def do_GET(self) -> None:
-        self.send_response(200)
-        self.send_header('Content-Length', str(len(BODY)))
-        self.end_headers()
-        self.wfile.write(BODY)
-
-    def log_message(self, *args: object) -> None:
-        pass
-
-
-server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Handler)
-threading.Thread(target=server.serve_forever, daemon=True).start()
-URL = f'http://127.0.0.1:{server.server_port}/file'
-
 
 class Fetches(install.Task):
     def __init__(self) -> None:
@@ -52,7 +36,7 @@ class Fetches(install.Task):
 
     def work(self) -> None:
         for _ in range(COUNT):
-            assert self.get(URL) == BODY
+            assert len(self.get(URL)) == SIZE
             self.fetched += 1
 
     def succeed(self) -> None:

@@ -22,9 +22,10 @@ import typing as t
 from pathlib import Path
 
 import pytest
-from qgis.core import QgsApplication
+from qgis.core import Qgis, QgsApplication, QgsNetworkAccessManager
 from qgis.gui import QgisInterface
 from qgis.PyQt.QtCore import QCoreApplication
+from qgis.PyQt.QtNetwork import QNetworkReply, QNetworkRequest
 
 import topology_rules
 from topology_rules.core import folders, install, wheels
@@ -437,7 +438,10 @@ def test_no_network_fails_with_the_error(
 
 
 @pytest.mark.slow
-def test_downloads_end_while_the_main_thread_holds_the_gil(tmp_path: Path):
+def test_downloads_end_while_the_main_thread_holds_the_gil(
+    pypi: Index, tmp_path: Path
+):
+    url = pypi.serve('/file', b'x' * 50_000, kind='x')
     # A hang would stop the tests, so the fetches run in a QGIS of their own
     script = Path(__file__).with_name('fetch_under_load.py')
     plugin = Path(topology_rules.__file__).parents[1]
@@ -450,7 +454,7 @@ def test_downloads_end_while_the_main_thread_holds_the_gil(tmp_path: Path):
         'QT_QPA_PLATFORM': 'offscreen',
     }
     done = subprocess.run(
-        [sys.executable, str(script), str(plugin), '30'],
+        [sys.executable, str(script), str(plugin), url, '50000', '30'],
         env=env,
         capture_output=True,
         text=True,
@@ -621,6 +625,30 @@ def test_finding_the_release_can_be_cancelled(pypi: Index):
     wait_for(lambda: outcome.over, 30)
     assert outcome.failed == ['Cancelled']
     assert outcome.found == []
+
+
+@pytest.mark.skipif(
+    Qgis.QGIS_VERSION_INT < 33600,
+    reason='QGIS 3.34 crashes when Python sets a reply preprocessor',
+)
+def test_a_cancel_as_the_request_goes_out_ends_the_task(pypi: Index):
+    pypi.routes[f'/pypi/topology-checker/{VERSION}/json'] = trickle
+
+    def slow(request: QNetworkRequest, reply: QNetworkReply) -> None:
+        # As a plugin that looks at each reply, or a busy machine, may be
+        time.sleep(1)
+
+    key = QgsNetworkAccessManager.setReplyPreprocessor(slow)
+    try:
+        task = install.ReleaseTask()
+        outcome = start(task)
+        # Sent, but its reply only now made
+        wait_for(lambda: bool(pypi.asked), 30)
+        task.cancel()
+        wait_for(lambda: outcome.over, 30)
+    finally:
+        QgsNetworkAccessManager.removeReplyPreprocessor(key)
+    assert outcome.failed == ['Cancelled']
 
 
 def test_an_upgrade_loads_after_a_restart(

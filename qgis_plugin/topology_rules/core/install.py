@@ -13,24 +13,33 @@ module that defines it.
 
 from __future__ import annotations
 
+import collections
+import dataclasses
 import hashlib
 import importlib
 import json
 import platform
 import shlex
 import sys
+import threading
 import typing as t
 from pathlib import Path
 
 from qgis.core import (
     Qgis,
-    QgsBlockingNetworkRequest,
-    QgsFeedback,
     QgsNetworkAccessManager,
+    QgsNetworkReplyContent,
     QgsTask,
 )
-from qgis.PyQt.QtCore import QCoreApplication, QObject, QUrl, pyqtSignal
-from qgis.PyQt.QtNetwork import QNetworkRequest
+from qgis.PyQt.QtCore import (
+    QCoreApplication,
+    QMetaObject,
+    Qt,
+    QUrl,
+    pyqtSignal,
+    pyqtSlot,
+)
+from qgis.PyQt.QtNetwork import QNetworkReply, QNetworkRequest
 
 from ..utils import not_none, tr
 from . import folders, wheels
@@ -123,21 +132,6 @@ def forget(url: str) -> None:
         cache.remove(QUrl(url))
 
 
-def ignore(*args: object) -> None:
-    """A slot that does nothing, for prime()."""
-
-
-def prime(*objects: QObject) -> None:
-    """Has sip look up now whether Python overrides disconnectNotify on the
-    objects, which it then remembers. Else it looks it up as a download
-    ends, on the thread of the download while Qt holds a lock, and waits
-    there for the GIL: a main thread that holds the GIL and waits for the
-    lock hangs QGIS."""
-    for item in objects:
-        item.objectNameChanged.connect(ignore)
-        item.objectNameChanged.disconnect(ignore)
-
-
 def terminal() -> str:
     """Where command() is run."""
     if platform.system() == 'Windows':
@@ -148,64 +142,149 @@ def terminal() -> str:
 # The tasks
 
 
+@dataclasses.dataclass
+class Answer:
+    """What a download gave: its body, or why it failed."""
+
+    content: bytes = b''
+    error: str = ''
+    status: object = None
+
+
 class Task(QgsTask):
     """A step of the install that logs what it does, live and to the logs,
-    and says why it failed."""
+    and says why it failed.
+
+    Its downloads run on the main thread, and the thread of the task waits
+    for them; what it says is shown from the main thread too. So that thread
+    makes no connection and has no slot called: Qt calls those while it
+    holds a lock, and Python there would wait for the GIL, which the main
+    thread may keep while it waits for the lock. A cancel aborts the
+    download where it runs.
+    """
 
     logged = pyqtSignal(str)
     failed = pyqtSignal(str)
 
     def __init__(self, description: str):
         super().__init__(description)
-        self.feedback = QgsFeedback()
         self.error = ''
+        # What the thread of the task said, for the main thread to show
+        self.said: collections.deque[tuple[str, Qgis.MessageLevel]] = (
+            collections.deque()
+        )
+        # The download that get() waits for
+        self.fetching = ''
+        self.reply: QNetworkReply | None = None
+        self.answer: Answer | None = None
+        self.answered = threading.Event()
 
     def say(
         self, text: str, level: Qgis.MessageLevel = Qgis.MessageLevel.Info
     ) -> None:
-        folders.log(text, level)
-        self.logged.emit(text)
+        self.said.append((text, level))
+        if threading.current_thread() is threading.main_thread():
+            self.flush()
+        else:
+            # Only posts an event, which takes no lock of Qt's signals
+            QMetaObject.invokeMethod(
+                self, 'flush', Qt.ConnectionType.QueuedConnection
+            )
+
+    @pyqtSlot()
+    def flush(self) -> None:
+        """Logs and shows what the task said."""
+        while self.said:
+            text, level = self.said.popleft()
+            folders.log(text, level)
+            self.logged.emit(text)
 
     def cancel(self) -> None:
-        # The feedback aborts a download that is under way
-        self.feedback.cancel()
         super().cancel()
+        # On the main thread, as the download
+        if self.reply is not None:
+            self.reply.abort()
+        self.answered.set()
 
     def get(self, url: str, missing: str = '') -> bytes:
         """The body of the URL, fetched with the proxy, SSL and
         authentication settings of QGIS. Raises Failed with missing, when
         given, for a URL that is not found."""
-        request = QgsBlockingNetworkRequest()
-        prime(request, self.feedback, not_none(QCoreApplication.instance()))
-        request.downloadProgress.connect(
-            lambda done, total: (
-                self.setProgress(100 * done / total) if total > 0 else None
-            )
+        self.answered.clear()
+        self.answer = None
+        self.fetching = url
+        QMetaObject.invokeMethod(
+            self, 'fetch', Qt.ConnectionType.QueuedConnection
         )
-        forget(url)
-        code = request.get(QNetworkRequest(QUrl(url)), True, self.feedback)
-        forget(url)
-        if self.isCanceled():
+        # Also ends on a cancel that did not come through cancel() here
+        while not self.answered.wait(0.2) and not self.isCanceled():
+            pass
+        answer = self.answer
+        if self.isCanceled() or answer is None:
             raise Failed(tr('Cancelled'))
-        if code == QgsBlockingNetworkRequest.ErrorCode.NoError:
-            # data() is bytes at run time; some stubs type it as str
-            return t.cast('bytes', request.reply().content().data())
-        reply = request.reply()
-        status = reply.attribute(
-            QNetworkRequest.Attribute.HttpStatusCodeAttribute
-        )
-        if status == 404 and missing:
+        if answer.status == 404 and missing:
             raise Failed(missing)
-        if isinstance(status, int):
-            reason = reply.attribute(
-                QNetworkRequest.Attribute.HttpReasonPhraseAttribute
+        if answer.error:
+            raise Failed(
+                tr('Cannot fetch {url}: {error}').format(
+                    url=url, error=answer.error
+                )
             )
-            error = f'HTTP {status} {reason or ""}'.strip()
-        else:
-            error = request.errorMessage()
-        raise Failed(
-            tr('Cannot fetch {url}: {error}').format(url=url, error=error)
+        return answer.content
+
+    @pyqtSlot()
+    def fetch(self) -> None:
+        """Starts the download that get() waits for."""
+        if self.isCanceled():
+            self.answered.set()
+            return
+        forget(self.fetching)
+        request = QNetworkRequest(QUrl(self.fetching))
+        request.setAttribute(
+            QNetworkRequest.Attribute.CacheLoadControlAttribute,
+            QNetworkRequest.CacheLoadControl.AlwaysNetwork,
         )
+        request.setAttribute(
+            QNetworkRequest.Attribute.RedirectPolicyAttribute,
+            QNetworkRequest.RedirectPolicy.NoLessSafeRedirectPolicy,
+        )
+        manager = not_none(QgsNetworkAccessManager.instance())
+        self.reply = reply = not_none(manager.get(request))
+        reply.downloadProgress.connect(self.downloaded)
+        reply.finished.connect(self.replied)
+        if reply.isFinished():
+            self.replied()
+
+    @pyqtSlot('qint64', 'qint64')
+    def downloaded(self, done: int, total: int) -> None:
+        if total > 0:
+            self.setProgress(100 * done / total)
+
+    @pyqtSlot()
+    def replied(self) -> None:
+        reply, self.reply = self.reply, None
+        if reply is None:
+            return
+        forget(self.fetching)
+        reply.deleteLater()
+        state = QgsNetworkReplyContent(reply)
+        if state.error() == QNetworkReply.NetworkError.NoError:
+            # data() is bytes at run time; some stubs type it as str
+            content = t.cast('bytes', reply.readAll().data())
+            self.answer = Answer(content)
+        else:
+            status = state.attribute(
+                QNetworkRequest.Attribute.HttpStatusCodeAttribute
+            )
+            if isinstance(status, int):
+                reason = state.attribute(
+                    QNetworkRequest.Attribute.HttpReasonPhraseAttribute
+                )
+                error = f'HTTP {status} {reason or ""}'.strip()
+            else:
+                error = state.errorString()
+            self.answer = Answer(error=error, status=status)
+        self.answered.set()
 
     def work(self) -> None:
         raise NotImplementedError
@@ -230,6 +309,7 @@ class Task(QgsTask):
         return True
 
     def finished(self, result: bool) -> None:
+        self.flush()
         if result:
             self.succeed()
             return
