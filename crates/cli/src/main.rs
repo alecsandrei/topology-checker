@@ -11,7 +11,7 @@ use std::{
     path::PathBuf,
     process::ExitCode,
 };
-use topology_checker_core::{GeometryKind, LayerId, Rule, Topology};
+use topology_checker_core::{GeometryKind, LayerId, Rule, RuleSummary, Topology};
 use topology_checker_io::{read, write};
 
 fn main() -> ExitCode {
@@ -267,7 +267,20 @@ fn finish(
     output: &mut impl Write,
     diagnostics: &mut impl Write,
 ) -> Result<u8> {
-    let result = topology_checker_io::report_store::DiskReport::validate(topology, None)?;
+    let progress = matches!(args.try_get_one::<bool>("progress"), Ok(Some(true)));
+    let rules = topology.rules().len();
+    let result = topology_checker_io::report_store::DiskReport::validate_with_progress(
+        topology,
+        None,
+        |rule| {
+            if progress {
+                // Progress is advisory, like warnings: an unwritable stderr never fails validation.
+                let _ = writeln!(diagnostics, "{}", progress_line(rule, rules));
+                let _ = diagnostics.flush();
+            }
+            Ok(())
+        },
+    )?;
     let mut warnings = result
         .summary
         .warnings
@@ -308,6 +321,16 @@ fn finish(
         diagnostics,
     )?;
     Ok(if result.is_valid() { 0 } else { 1 })
+}
+
+fn progress_line(rule: &RuleSummary, rules: usize) -> String {
+    format!(
+        "checked rule {}/{rules} ({}): {} {}",
+        rule.spec.id.index() + 1,
+        rule.spec.rule.name(),
+        rule.total,
+        if rule.total == 1 { "error" } else { "errors" }
+    )
 }
 
 fn utility(

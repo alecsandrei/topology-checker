@@ -4,7 +4,7 @@ from ._api import Topology, explode_lines, merge_lines
 from ._enums import ErrorType, GeometryKind, Rule, RuleVariant
 from ._errors import PrecisionError
 from ._models import FeatureRef, Layer, LayerId, Report, RuleReport, RuleSpec, Violation
-from ._stream import ReportSummary, RuleSummary, ValidationStream
+from ._stream import ReportStream, ReportSummary, RuleSummary, ValidationStream
 
 __all__ = [
     "ErrorType",
@@ -14,6 +14,7 @@ __all__ = [
     "Layer",
     "LayerId",
     "Report",
+    "ReportStream",
     "ReportSummary",
     "RuleSummary",
     "ValidationStream",

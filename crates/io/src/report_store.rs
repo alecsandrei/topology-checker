@@ -8,7 +8,8 @@ use std::{
     path::Path,
 };
 use topology_checker_core::{
-    FeatureRef, LayerId, ReportSummary, Topology, Violation, ViolationKind,
+    FeatureRef, LayerId, ReportSummary, RuleSummary, Topology, ValidationEvent, Violation,
+    ViolationKind,
 };
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -42,6 +43,18 @@ impl DiskReport {
     /// # Errors
     /// Returns input, validation, encoding or disk-write failures.
     pub fn validate(topology: &Topology, parent: Option<&Path>) -> Result<Self> {
+        Self::validate_with_progress(topology, parent, |_| Ok(()))
+    }
+    /// Like [`validate`](Self::validate), calling `rule_end` as each rule finishes.
+    /// An error from `rule_end` stops validation and is returned.
+    ///
+    /// # Errors
+    /// Returns input, validation, encoding, disk-write or `rule_end` failures.
+    pub fn validate_with_progress(
+        topology: &Topology,
+        parent: Option<&Path>,
+        mut rule_end: impl FnMut(&RuleSummary) -> Result<()>,
+    ) -> Result<Self> {
         let mut builder = tempfile::Builder::new();
         builder.prefix("topology-report-");
         let storage = match parent {
@@ -52,7 +65,12 @@ impl DiskReport {
         let mut offsets = BufWriter::new(File::create(storage.path().join("offsets.bin"))?);
         let mut offset = 0_u64;
         let summary = topology
-            .validate_into(|spec, v| -> Result<()> {
+            .validate_events(|event| -> Result<()> {
+                let (spec, v) = match event {
+                    ValidationEvent::Violation(spec, v) => (spec, v),
+                    ValidationEvent::RuleEnd(summary) => return rule_end(summary),
+                    _ => return Ok(()),
+                };
                 let metadata = serde_json::to_vec(&Metadata {
                     rule: spec.id.index(),
                     kind: v.kind,

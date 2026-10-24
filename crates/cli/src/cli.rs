@@ -95,7 +95,13 @@ pub fn command() -> Command {
             Command::new("validate")
                 .about("Validate a TOML topology definition")
                 .arg(input())
-                .arg(output(false)),
+                .arg(output(false))
+                .arg(
+                    Arg::new("progress")
+                        .long("progress")
+                        .action(ArgAction::SetTrue)
+                        .help("Print each rule's error count to stderr when it finishes"),
+                ),
         )
         .subcommand(Command::new("rules").about("List rule definitions and GIS equivalents"))
         .subcommand(

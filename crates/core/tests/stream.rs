@@ -267,3 +267,138 @@ fn panics_in_the_sink_propagate_unchanged() {
     .unwrap_err();
     assert_eq!(panic.downcast_ref::<&str>(), Some(&"sink failed"));
 }
+
+fn mixed_topology() -> Topology {
+    use topology_checker_core::geo::LineString;
+    let mut t = Topology::new(0.).unwrap();
+    let duplicates = t.add_layer(Layer::from_features(
+        "duplicates",
+        [5, -2, 9].map(|fid| (fid, Point::new(0., 0.).into())),
+    ));
+    let distinct = t.add_layer(Layer::from_geometries(
+        "distinct",
+        [Point::new(1., 0.).into(), Point::new(2., 0.).into()],
+    ));
+    let lines = t.add_layer(Layer::from_geometries(
+        "lines",
+        [LineString::from(vec![(0., 0.), (1., 1.)]).into()],
+    ));
+    t.add_rule(Rule::PointMustNotOverlap, duplicates, None)
+        .unwrap();
+    t.add_rule(Rule::PointMustNotOverlap, distinct, None)
+        .unwrap();
+    t.add_rule(Rule::LineMustNotHaveDangles, lines, None)
+        .unwrap();
+    let single = t.add_layer(Layer::from_geometries(
+        "single",
+        [Point::new(0., 0.).into()],
+    ));
+    t.add_rule(Rule::PointMustNotOverlapWith, duplicates, Some(single))
+        .unwrap();
+    t.add_rule(Rule::PointMustNotOverlapWith, distinct, Some(duplicates))
+        .unwrap();
+    t
+}
+
+#[test]
+fn rule_end_follows_each_rules_violations_once_in_order() {
+    use topology_checker_core::ValidationEvent;
+    let t = mixed_topology();
+    let eager = t.validate().unwrap();
+    let mut ended = Vec::new();
+    let mut pending = Vec::new();
+    let summary = t
+        .validate_events(|event| {
+            match event {
+                ValidationEvent::Violation(spec, v) => {
+                    assert_eq!(spec.id.index(), ended.len());
+                    pending.push(v);
+                }
+                ValidationEvent::RuleEnd(rule) => {
+                    assert_eq!(rule.total, pending.len());
+                    ended.push((rule.clone(), std::mem::take(&mut pending)));
+                }
+                _ => unreachable!(),
+            }
+            Ok::<_, ()>(())
+        })
+        .unwrap();
+    assert!(pending.is_empty());
+    assert_eq!(ended.len(), eager.rules.len());
+    for (i, ((rule, violations), report)) in ended.iter().zip(&eager.rules).enumerate() {
+        assert_eq!(rule.spec, report.spec);
+        assert_eq!(rule.spec.id.index(), i);
+        assert_eq!(rule.counts, report.counts);
+        assert_eq!(rule.counts, summary.rules[i].counts);
+        assert_eq!(rule.total, summary.rules[i].total);
+        assert_eq!((&rule.layer, &rule.other), (&report.layer, &report.other));
+        assert_eq!(violations, &report.violations);
+    }
+    let totals = ended.iter().map(|(r, _)| r.total).collect::<Vec<_>>();
+    assert_eq!(totals, [3, 0, 2, 3, 0]);
+}
+
+#[test]
+fn cancellation_inside_a_rule_stops_before_its_end_and_later_rules() {
+    use topology_checker_core::{CancellationToken, Error, ValidationEvent};
+    let t = mixed_topology();
+    let token = CancellationToken::default();
+    let mut log = Vec::new();
+    let error = t
+        .validate_events_cancellable(token.clone(), |event| {
+            match event {
+                ValidationEvent::Violation(spec, _) => {
+                    log.push((spec.id.index(), false));
+                    if spec.id.index() == 2 {
+                        token.cancel();
+                    }
+                }
+                ValidationEvent::RuleEnd(rule) => log.push((rule.spec.id.index(), true)),
+                _ => unreachable!(),
+            }
+            Ok::<_, ()>(())
+        })
+        .unwrap_err();
+    assert!(matches!(error, SinkError::Core(Error::Cancelled)));
+    assert_eq!(
+        log,
+        [
+            (0, false),
+            (0, false),
+            (0, false),
+            (0, true),
+            (1, true),
+            (2, false)
+        ]
+    );
+    let token = CancellationToken::default();
+    let mut ends = 0;
+    let error = t
+        .validate_events_cancellable(token.clone(), |event| {
+            match event {
+                ValidationEvent::RuleEnd(_) => {
+                    ends += 1;
+                    token.cancel();
+                }
+                _ => assert_eq!(ends, 0),
+            }
+            Ok::<_, ()>(())
+        })
+        .unwrap_err();
+    assert!(matches!(error, SinkError::Core(Error::Cancelled)));
+    assert_eq!(ends, 1);
+    let mut ends = 0;
+    let error = t
+        .validate_events(|event| {
+            if matches!(event, ValidationEvent::RuleEnd(_)) {
+                ends += 1;
+                return Err("stop");
+            }
+            assert_eq!(ends, 0);
+            Ok(())
+        })
+        .unwrap_err();
+    assert!(matches!(error, SinkError::Consumer("stop")));
+    assert_eq!(ends, 1);
+    assert_eq!(t.validate().unwrap().violation_count(), 8);
+}
