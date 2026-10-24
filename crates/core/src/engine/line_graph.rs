@@ -900,7 +900,6 @@ impl LineGraph {
     }
     /// The index of construction again, in its search order when known.
     fn source_index(&self, workers: &Workers) -> Packed {
-        checkpoint("matches.index");
         let entry = |i: usize| Entry::new(i, self.source(i).bounding_rect());
         let mut entries = parallel::repeated(Entry::default(), self.sources.len(), "matches.index");
         match &self.order {
@@ -2330,7 +2329,7 @@ impl LineGraph {
             y: p.y + 0.,
         };
         let blank = ((LayerId(0), 0), Coord { x: 0., y: 0. });
-        let mut feature_ends = parallel::repeated(blank, ends.len(), "ends");
+        let mut feature_ends = parallel::repeated(blank, ends.len(), "ends.init");
         workers.fill(&mut feature_ends, |i| {
             let end = &ends[i];
             let feature = parts[segments[end.source].part].reference.feature();
@@ -2352,7 +2351,6 @@ impl LineGraph {
             }
         }
         feature_ends.truncate(end_counts.len());
-        checkpoint("index");
         let mut entries = parallel::repeated(Entry::default(), segments.len(), "index");
         workers.fill(&mut entries, |i| {
             Entry::new(i, segments[i].line(&parts).bounding_rect())
@@ -2733,7 +2731,7 @@ impl LineGraph {
         let mut uses = Vec::with_capacity(raw_edges.len());
         let mut groups = 0;
         for i in 0..raw_edges.len() {
-            every(i, "edges");
+            every(i, "edges.group");
             let (nodes, usage) = raw_edges[i];
             let start = uses.len();
             uses.push(usage);
@@ -2776,8 +2774,9 @@ impl LineGraph {
             every(i - 1, "edges.offsets");
             offsets[i] += offsets[i - 1];
         }
-        let mut cursor = parallel::copied(&offsets[..coords.len()], "edges.offsets");
-        let mut values = parallel::repeated(Incident { part: 0 }, uses.len() * 2, "edges.incident");
+        let mut cursor = parallel::copied(&offsets[..coords.len()], "edges.cursor");
+        let mut values =
+            parallel::repeated(Incident { part: 0 }, uses.len() * 2, "edges.incident.init");
         for (k, edge) in edges.iter().enumerate() {
             every(k, "edges.incident");
             for usage in &uses[edge.uses.clone()] {

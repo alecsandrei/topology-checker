@@ -241,7 +241,7 @@ impl Search for Packed {
         });
         let mut out = Vec::with_capacity(found.iter().map(Vec::len).sum());
         for part in found {
-            crate::cancel::checkpoint(step);
+            crate::cancel::checkpoint("pairs.join");
             out.extend(part);
         }
         out
@@ -328,7 +328,7 @@ fn clusters_per_axis(len: usize) -> usize {
 }
 fn select(entries: &mut [Entry], index: usize, axis: usize, count: &mut usize) {
     entries.select_nth_unstable_by(index, |l, r| {
-        crate::cancel::every(*count, "index");
+        crate::cancel::every(*count, "index.arrange");
         *count += 1;
         l.min[axis]
             .partial_cmp(&r.min[axis])
@@ -532,22 +532,43 @@ mod tests {
             .into_iter()
             .map(|(i, r)| Entry::new(i, r))
             .collect::<Vec<_>>();
-        for (step, visit) in [("index", 0), ("index", 5), ("pairs", 0), ("pairs", 40)] {
-            let token = hooks::watched(Some((step, visit)));
-            let result = std::panic::catch_unwind(|| {
+        let run = |token: &cancel::CancellationToken| {
+            std::panic::catch_unwind(|| {
                 cancel::scope(Some(token.clone()), || {
                     let workers = Workers::forced(4, 64, || Workers::new(0));
                     let packed = Packed::bulk(entries.clone(), &workers);
+                    assert!(packed.order("order").is_some());
                     collect_pairs(&packed, &workers, 0.5)
                 })
-            });
-            let record = hooks::record(&token);
-            assert!(result.expect_err("cancelled").is::<cancel::Cancelled>());
-            // Each other thread passes at most one more checkpoint.
-            let visits = record.visits[step];
-            assert!((visit + 1..=visit + 4).contains(&visits), "{step} {visit}");
-            assert_eq!(record.live, 0);
-            assert!(record.workers > 0 || step == "index", "{step} {visit}");
+            })
+        };
+        let token = hooks::watched(None);
+        run(&token).expect("pairs");
+        let visits = hooks::record(&token).visits;
+        // Every checkpoint is passed, so one taken out shows.
+        let steps = visits.keys().copied().collect::<Vec<_>>();
+        assert_eq!(
+            steps,
+            ["fill", "index.arrange", "order", "pairs", "pairs.join"]
+        );
+        for (step, count) in visits {
+            for visit in [0, count / 2] {
+                let token = hooks::watched(Some((step, visit)));
+                let result = run(&token);
+                let record = hooks::record(&token);
+                assert!(
+                    result.expect_err("cancelled").is::<cancel::Cancelled>(),
+                    "{step} {visit}"
+                );
+                // Each other thread passes at most one more checkpoint.
+                let visits = record.visits[step];
+                assert!(
+                    (visit + 1..=visit + 4).contains(&visits),
+                    "{step} {visit}: {visits}"
+                );
+                assert_eq!(record.live, 0);
+                assert!(record.workers > 0 || step != "pairs", "{step} {visit}");
+            }
         }
     }
 }
