@@ -113,6 +113,15 @@ pub(crate) mod hooks {
         ));
         COUNT.fetch_add(1, Ordering::Release);
     }
+    /// What has been recorded for a watched token so far.
+    pub(crate) fn record(token: &CancellationToken) -> Record {
+        let watched = WATCHED.lock().unwrap_or_else(PoisonError::into_inner);
+        watched
+            .iter()
+            .find(|(t, _)| t.same(token))
+            .map(|(_, record)| record.clone())
+            .expect("watched token")
+    }
     /// Stop watching a token and return what was recorded.
     pub(crate) fn unwatch(token: &CancellationToken) -> Record {
         let mut watched = WATCHED.lock().unwrap_or_else(PoisonError::into_inner);

@@ -327,6 +327,8 @@ mod tests {
         assert_eq!(near(at(2., 0.), 1.), [at(1., 0.)]);
     }
 }
+#[cfg(test)]
+mod reference;
 impl GraphPart {
     pub fn closed(&self) -> bool {
         self.is_closed
@@ -366,6 +368,9 @@ pub(crate) struct LineGraph {
     /// Sources in the search order of their index, to index them again
     /// without ordering, if their IDs fit.
     order: Option<Vec<u32>>,
+    /// Built the old way, and matched the old way too.
+    #[cfg(test)]
+    reference: bool,
 }
 #[derive(Debug)]
 pub(crate) struct Matched {
@@ -850,6 +855,10 @@ impl LineGraph {
     }
     pub fn matches(&self) -> &[Matched] {
         self.matches.get_or_init(|| {
+            #[cfg(test)]
+            if self.reference {
+                return self.reference_matches();
+            }
             let workers = Workers::new(self.sources.len());
             let tree = self.source_index(&workers);
             let found = tree.pairs(
@@ -2218,6 +2227,10 @@ impl LineGraph {
             .unwrap_or(&[])
     }
     pub fn build(t: &Topology, layers: &[(LayerId, InputMode)]) -> Result<Self, Error> {
+        #[cfg(test)]
+        if reference::active() {
+            return Self::reference_build(t, layers);
+        }
         let tolerance = t.tolerance();
         let mut parts = Vec::new();
         let mut segments = Vec::new();
@@ -2757,6 +2770,8 @@ impl LineGraph {
             incident,
             contacts,
             order,
+            #[cfg(test)]
+            reference: false,
         })
     }
 }
