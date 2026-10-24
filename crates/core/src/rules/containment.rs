@@ -6,7 +6,6 @@ use crate::{
     engine::{cross, index},
 };
 use geo::Relate;
-use rayon::prelude::*;
 
 /// Report cleaned features topologically contained by a target feature, excluding
 /// mutual containment.
@@ -46,14 +45,9 @@ pub(super) fn contained(
             Some(b.reference.at(other)),
         )))
     };
-    let violations: Vec<Option<Violation>> = if super::in_feature_task() {
-        pairs.map(contained).collect::<Result<_, Error>>()?
-    } else {
-        pairs
-            .par_bridge()
-            .map(contained)
-            .collect::<Result<_, Error>>()?
-    };
+    let violations = super::each_pair(pairs, contained)
+        .into_iter()
+        .collect::<Result<Vec<_>, Error>>()?;
     Ok(aggregate(
         violations.into_iter().flatten().collect(),
         Merge::AllDimensions,

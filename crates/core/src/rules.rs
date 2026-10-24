@@ -19,6 +19,7 @@ use geo::{Coord, Geometry, LineString};
 use line::LineCheck;
 use line_polygon::LinePolygon;
 use point_polygon::{PointCount, PointTest};
+use rayon::prelude::*;
 use std::sync::{
     OnceLock,
     atomic::{self, AtomicUsize},
@@ -240,15 +241,35 @@ impl Drop for Helpers {
         HELPERS.fetch_sub(self.shared, atomic::Ordering::Relaxed);
     }
 }
-/// Whether this thread runs one feature of [`per_feature_into`]. Rayon steps then stay
-/// on it: a rayon job can wait behind other validations' jobs, which do not stop when
-/// this validation is cancelled.
+/// Whether this thread runs one feature of [`per_feature_into`]. Its steps then run on
+/// the threads the feature holds, not on rayon: a rayon job can wait behind other
+/// validations' jobs, which do not stop when this validation is cancelled.
 pub(super) fn in_feature_task() -> bool {
     parallel::cap().is_some()
 }
 /// Smallest rayon job, in items: whole inputs within a feature task.
 pub(super) fn min_len() -> usize {
     if in_feature_task() { usize::MAX } else { 1 }
+}
+/// `task` of each item, results in order. A feature task runs them on the threads it
+/// holds, other callers on rayon.
+pub(super) fn each<I: Send, R: Send>(items: Vec<I>, task: impl Fn(I) -> R + Sync + Send) -> Vec<R> {
+    if in_feature_task() {
+        Workers::all().each(items, task)
+    } else {
+        items.into_par_iter().map(task).collect()
+    }
+}
+/// [`each`] for candidate pairs. Outside a feature task, results come in any order.
+pub(super) fn each_pair<R: Send>(
+    pairs: impl Iterator<Item = (usize, usize)> + Send,
+    task: impl Fn((usize, usize)) -> R + Sync + Send,
+) -> Vec<R> {
+    if in_feature_task() {
+        Workers::all().each(pairs.collect(), task)
+    } else {
+        pairs.par_bridge().map(task).collect()
+    }
 }
 /// Kinds of a per-feature rule in emission order. Empty when each feature emits all
 /// of its violations together.
@@ -275,9 +296,10 @@ fn feature_kinds(rule: Rule) -> &'static [ViolationKind] {
 /// thread run in parallel and each feature runs once: its first kind is emitted with
 /// its batch, and later kinds wait until every feature has emitted the first. The
 /// first feature runs alone, so it builds the caches every feature shares, such as the
-/// line graph, with every thread it may use. Batches run on the calling thread and
-/// helpers of their own, never on a shared pool, so cancelling stops them as soon as
-/// their features check, whatever else runs in the process.
+/// line graph, with every thread it may use. Features of a batch smaller than its
+/// threads split their own steps over the spare ones. Batches run on the calling thread
+/// and helpers of their own, never on a shared pool, so cancelling stops them as soon
+/// as their features check, whatever else runs in the process.
 fn per_feature_into<E>(
     t: &Topology,
     spec: RuleSpec,
@@ -314,23 +336,17 @@ fn per_feature_into<E>(
         let threads = Workers::all().threads();
         #[cfg(test)]
         let threads = tests::threads().unwrap_or(threads).max(1);
-        // A feature that runs alone may split its own steps over the helpers instead.
-        let alone = first || rest.len() == 1;
-        let helpers = Helpers::take(
-            if alone {
-                threads
-            } else {
-                threads.min(rest.len())
-            } - 1,
-        );
+        let helpers = Helpers::take(threads - 1);
         let threads = 1 + helpers.threads;
-        let (size, steps) = if alone {
-            (1, threads)
+        let size = if first {
+            1
         } else {
-            (threads * per_thread.max(1), 1)
+            threads * per_thread.max(1)
         };
         let (fids, tail) = rest.split_at(size.min(rest.len()));
         (rest, first) = (tail, false);
+        // Fewer features than threads split their own steps over the rest.
+        let steps = (threads / fids.len()).max(1);
         let results = Workers::with_threads(threads).run(fids.len(), |i| feature(fids[i], steps));
         drop(helpers);
         for violations in results {
@@ -412,7 +428,9 @@ mod tests {
     pub(super) fn threads() -> Option<usize> {
         THREADS.with(Cell::get)
     }
-    /// Run `f` with feature batches on `threads` threads where they have the features.
+    /// Run `f` with feature batches on `threads` threads where they have the features,
+    /// outside the helper budget. Busy tests use the budget instead, so they leave CPUs
+    /// to the tests running beside them.
     fn with_threads<T>(threads: usize, f: impl FnOnce() -> T) -> T {
         struct Restore(Option<usize>);
         impl Drop for Restore {
@@ -442,11 +460,13 @@ mod tests {
         fn state(&self) -> MutexGuard<'_, Passage> {
             self.state.lock().unwrap_or_else(PoisonError::into_inner)
         }
-        fn arrive(&self) {
+        /// Count this thread in and return how many arrived before it.
+        fn arrive(&self) -> usize {
             let mut state = self.state();
             state.arrivals += 1;
             state.threads.insert(std::thread::current().id());
             self.changed.notify_all();
+            state.arrivals - 1
         }
         fn open(&self) {
             self.state().open = true;
@@ -454,8 +474,16 @@ mod tests {
         }
         /// Block until `ready` holds, for at most [`PATIENCE`].
         fn wait(&self, ready: impl Fn(&Passage) -> bool) -> MutexGuard<'_, Passage> {
+            self.wait_for(PATIENCE, ready)
+        }
+        /// Block until `ready` holds, for at most `timeout`.
+        fn wait_for(
+            &self,
+            timeout: Duration,
+            ready: impl Fn(&Passage) -> bool,
+        ) -> MutexGuard<'_, Passage> {
             self.changed
-                .wait_timeout_while(self.state(), PATIENCE, |state| !ready(state))
+                .wait_timeout_while(self.state(), timeout, |state| !ready(state))
                 .unwrap_or_else(PoisonError::into_inner)
                 .0
         }
@@ -468,8 +496,9 @@ mod tests {
         Panic(&'static str),
         Hold(Duration),
         Note(Arc<Mutex<Vec<Instant>>>),
-        /// Arrive at the gate and go on.
-        Arrive(Arc<Gate>),
+        /// Arrive at the gate and go on, but wait until it opens when this many
+        /// arrived before.
+        Arrive(Arc<Gate>, usize),
         /// Arrive at the gate and wait until it opens, then check for cancellation as
         /// rule code does and, if that does not unwind, sleep before returning.
         Block(Arc<Gate>, Duration),
@@ -506,7 +535,12 @@ mod tests {
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .push(Instant::now()),
-            Some(Action::Arrive(gate)) => gate.arrive(),
+            Some(Action::Arrive(gate, wait)) => {
+                let earlier = gate.arrive();
+                if earlier == wait {
+                    drop(gate.wait(|state| state.open));
+                }
+            }
             Some(Action::Block(gate, then)) => {
                 gate.arrive();
                 drop(gate.wait(|state| state.open));
@@ -1033,9 +1067,8 @@ mod tests {
             assert!(expected.0 == passes, "seed {seed}");
             // The 4-thread pool runs twice, to catch output that varies between runs.
             for pool in [&pools[0], &pools[1], &pools[2], &pools[2]] {
-                let threads = pool.current_num_threads();
                 assert!(
-                    pool.install(|| with_threads(threads, || output(seed))) == expected,
+                    pool.install(|| output(seed)) == expected,
                     "seed {seed}, {} threads",
                     pool.current_num_threads()
                 );
@@ -1096,7 +1129,7 @@ mod tests {
             );
             let mut emitted = Vec::new();
             let result = pool.install(|| {
-                with_threads(4, || {
+                with_threads(2, || {
                     case.topology.validate_into_cancellable(token, |_, v| {
                         emitted.push(v);
                         Ok::<_, Infallible>(())
@@ -1187,18 +1220,20 @@ mod tests {
             // Cancel up to 5 ms after a seeded feature start. Every rule starts each
             // feature once, so starts count progress on any machine. Every fourth run
             // picks a rule's first feature, which builds the caches the rule shares.
-            let starts = Arc::new(Gate::default());
-            let note = || Action::Arrive(Arc::clone(&starts));
-            let name = on(&case.topology, case.specs[0], 0, note());
-            for fid in 1..features as i64 {
-                on(&case.topology, case.specs[0], fid, note());
-            }
+            // That feature waits until this thread is awake to time the cancel, and a
+            // timer that fires late still cancels within a rule's worth of starts.
             let at = if seed % 4 == 0 {
                 rng.below(rules.len()) * features
             } else {
                 rng.below(rules.len() * features)
             };
             let delay = Duration::from_micros(rng.below(5000) as u64);
+            let starts = Arc::new(Gate::default());
+            let note = || Action::Arrive(Arc::clone(&starts), at);
+            let name = on(&case.topology, case.specs[0], 0, note());
+            for fid in 1..features as i64 {
+                on(&case.topology, case.specs[0], fid, note());
+            }
             let token = CancellationToken::default();
             let (send, receive) = mpsc::channel();
             let (worker_pool, worker_token) = (Arc::clone(pool), token.clone());
@@ -1217,7 +1252,8 @@ mod tests {
                 send.send((result, emitted)).unwrap();
             });
             drop(starts.wait(|state| state.arrivals > at || state.open));
-            std::thread::sleep(delay);
+            starts.open();
+            drop(starts.wait_for(delay, |state| state.arrivals > at + features));
             let cancel = Instant::now();
             token.cancel();
             let (result, emitted) = receive

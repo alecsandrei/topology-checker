@@ -17,7 +17,6 @@ use geo::{
     BoundingRect, Coord, Distance, Euclidean, Geometry, Length, Line, LineString, Point, Polygon,
     line_intersection::{LineIntersection, line_intersection},
 };
-use rayon::prelude::*;
 
 /// Which contact between a line part and a polygon part is a violation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,32 +38,30 @@ pub(super) fn properly_inside(
     let a = t.parts(spec.layer)?;
     let target = t.parts(other)?;
     let union = polygons::union(target);
-    let violations = a
-        .lines
-        .par_iter()
-        .with_min_len(super::min_len())
-        .filter_map(|l| {
-            let inside = t.cancellable(|| {
-                union.geometry.properly_contains(
-                    l.geometry.as_ref(),
-                    t.tolerance(),
-                    &|segment, distance| {
-                        boundary(segment, target, location::locations(target), distance)
-                    },
-                )
-            });
-            (!inside).then(|| {
-                violation(
-                    spec,
-                    ViolationKind::Outside,
-                    l.geometry.as_ref().clone(),
-                    Some(l.reference.at(spec.layer)),
-                    None,
-                )
-            })
+    let violations = super::each(a.lines.iter().collect(), |l| {
+        let inside = t.cancellable(|| {
+            union.geometry.properly_contains(
+                l.geometry.as_ref(),
+                t.tolerance(),
+                &|segment, distance| {
+                    boundary(segment, target, location::locations(target), distance)
+                },
+            )
+        });
+        (!inside).then(|| {
+            violation(
+                spec,
+                ViolationKind::Outside,
+                l.geometry.as_ref().clone(),
+                Some(l.reference.at(spec.layer)),
+                None,
+            )
         })
-        .collect();
-    Ok(aggregate(violations, Merge::AllDimensions))
+    });
+    Ok(aggregate(
+        violations.into_iter().flatten().collect(),
+        Merge::AllDimensions,
+    ))
 }
 
 /// Compare every nearby line and polygon part pair.
@@ -81,12 +78,11 @@ pub(super) fn run(
     let compare = |(i, j): (usize, usize)| {
         t.cancellable(|| pair(t, spec, other, mode, &a.lines[i], &b.polygons[j], &bv[j]))
     };
-    let violations = if super::in_feature_task() {
-        pairs.flat_map(compare).collect()
-    } else {
-        pairs.par_bridge().flat_map_iter(compare).collect()
-    };
-    Ok(aggregate(violations, Merge::AllDimensions))
+    let violations = super::each_pair(pairs, compare);
+    Ok(aggregate(
+        violations.into_iter().flatten().collect(),
+        Merge::AllDimensions,
+    ))
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -651,33 +647,31 @@ pub(super) fn inside(
     let input = t.parts(spec.layer)?;
     let target = t.parts(other)?;
     let target_locations = location::locations(target);
-    let violations = input
-        .lines
-        .par_iter()
-        .with_min_len(super::min_len())
-        .flat_map_iter(|line| {
-            t.cancellable(|| {
-                outside_pieces(
-                    line.geometry.as_ref(),
-                    target,
-                    target_locations,
-                    t.tolerance(),
-                )
-            })
-            .into_iter()
-            .map(|piece| {
-                violation(
-                    spec,
-                    ViolationKind::Outside,
-                    piece,
-                    Some(line.reference.at(spec.layer)),
-                    None,
-                )
-            })
-            .collect::<Vec<_>>()
+    let violations = super::each(input.lines.iter().collect(), |line| {
+        t.cancellable(|| {
+            outside_pieces(
+                line.geometry.as_ref(),
+                target,
+                target_locations,
+                t.tolerance(),
+            )
         })
-        .collect();
-    Ok(aggregate(violations, Merge::AllDimensions))
+        .into_iter()
+        .map(|piece| {
+            violation(
+                spec,
+                ViolationKind::Outside,
+                piece,
+                Some(line.reference.at(spec.layer)),
+                None,
+            )
+        })
+        .collect::<Vec<_>>()
+    });
+    Ok(aggregate(
+        violations.into_iter().flatten().collect(),
+        Merge::AllDimensions,
+    ))
 }
 
 #[cfg(test)]

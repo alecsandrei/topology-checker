@@ -125,12 +125,11 @@ pub(super) fn contained_points(
             )
         })
     };
-    let violations = if super::in_feature_task() {
-        pairs.filter_map(contained).collect()
-    } else {
-        pairs.par_bridge().filter_map(contained).collect()
-    };
-    Ok(aggregate(violations, Merge::AllDimensions))
+    let violations = super::each_pair(pairs, contained);
+    Ok(aggregate(
+        violations.into_iter().flatten().collect(),
+        Merge::AllDimensions,
+    ))
 }
 
 /// Count point features whose retained parts all lie strictly inside a polygon feature.

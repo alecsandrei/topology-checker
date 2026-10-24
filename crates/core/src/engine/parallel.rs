@@ -35,13 +35,16 @@ thread_local! {
 /// Run `f` with each step on at most `threads` threads, the calling one included,
 /// for callers that already run on threads of their own.
 pub(crate) fn capped<T>(threads: usize, f: impl FnOnce() -> T) -> T {
+    with_cap(Some(threads.max(1)), f)
+}
+fn with_cap<T>(cap: Option<usize>, f: impl FnOnce() -> T) -> T {
     struct Restore(Option<usize>);
     impl Drop for Restore {
         fn drop(&mut self) {
             CAP.with(|c| c.set(self.0));
         }
     }
-    let _restore = Restore(CAP.with(|c| c.replace(Some(threads.max(1)))));
+    let _restore = Restore(CAP.with(|c| c.replace(cap)));
     f()
 }
 /// The thread limit of the [`capped`] call running on this thread, if any.
@@ -125,18 +128,22 @@ impl Workers {
         let next = AtomicUsize::new(0);
         let failed = AtomicBool::new(false);
         let results = (0..count).map(|_| Mutex::new(None)).collect::<Vec<_>>();
+        // Within a capped step, each task keeps its nested steps to its own thread.
+        let nested = cap().map(|_| 1);
         let work = || {
-            panic::catch_unwind(AssertUnwindSafe(|| {
-                while !failed.load(atomic::Ordering::Relaxed) {
-                    let i = next.fetch_add(1, atomic::Ordering::Relaxed);
-                    if i >= count {
-                        break;
+            with_cap(nested, || {
+                panic::catch_unwind(AssertUnwindSafe(|| {
+                    while !failed.load(atomic::Ordering::Relaxed) {
+                        let i = next.fetch_add(1, atomic::Ordering::Relaxed);
+                        if i >= count {
+                            break;
+                        }
+                        let result = task(i);
+                        *results[i].lock().unwrap_or_else(PoisonError::into_inner) = Some(result);
                     }
-                    let result = task(i);
-                    *results[i].lock().unwrap_or_else(PoisonError::into_inner) = Some(result);
-                }
-            }))
-            .inspect_err(|_| failed.store(true, atomic::Ordering::Relaxed))
+                }))
+                .inspect_err(|_| failed.store(true, atomic::Ordering::Relaxed))
+            })
         };
         let token = cancel::current();
         let payload = std::thread::scope(|scope| {

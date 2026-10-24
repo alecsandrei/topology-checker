@@ -137,10 +137,9 @@ pub(super) fn line_contacts(
             )
         })
     };
-    let violations = if super::in_feature_task() {
-        pairs.filter_map(contact).collect()
-    } else {
-        pairs.par_bridge().filter_map(contact).collect()
-    };
-    Ok(aggregate(violations, Merge::AllDimensions))
+    let violations = super::each_pair(pairs, contact);
+    Ok(aggregate(
+        violations.into_iter().flatten().collect(),
+        Merge::AllDimensions,
+    ))
 }
