@@ -47,6 +47,10 @@ jobs:
           npm run typecheck --prefix web
           npm test --prefix web
           npm run build --prefix web
+      # The workspace build links the Python crate against libpython of this interpreter.
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
