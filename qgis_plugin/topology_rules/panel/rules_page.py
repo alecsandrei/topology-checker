@@ -15,7 +15,8 @@ from qgis.PyQt.QtWidgets import (
 from ..utils import tr
 from .form import RuleForm
 from .icons import decorate
-from .narrow import narrowest, shrink_buttons
+from .narrow import narrowest
+from .offer import OfferBar
 from .rule_list import RuleList
 from .tolerance import tolerance_box
 
@@ -53,6 +54,7 @@ class RulesPage(QWidget):
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
+        self.offer = OfferBar()
         self.form = RuleForm()
         self.rule_list = RuleList()
         self.import_button = QPushButton(tr('Import…'))
@@ -80,12 +82,13 @@ class RulesPage(QWidget):
         page = QVBoxLayout(self)
         # Little room is lost on the sides, as the dock is narrow
         page.setContentsMargins(0, 2, 0, 2)
+        page.addWidget(self.offer)
         page.addWidget(self.form)
         page.addWidget(self.rule_list, 1)
-        shrink_buttons(self.import_button, self.export_button)
+        # The buttons share the row, and are never narrower than their text
         files_row = QHBoxLayout()
-        files_row.addWidget(self.import_button)
-        files_row.addWidget(self.export_button)
+        files_row.addWidget(self.import_button, 1)
+        files_row.addWidget(self.export_button, 1)
         page.addLayout(files_row)
         page.addWidget(self.options)
         for signal in (

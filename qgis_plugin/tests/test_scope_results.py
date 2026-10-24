@@ -14,6 +14,7 @@ from topology_rules.panel.dock import Dock
 
 from .helpers import (
     add,
+    both_engines,
     cell,
     click_run,
     layer_nodes,
@@ -25,6 +26,8 @@ from .helpers import (
 )
 from .test_invalid import BOWTIE, OVERLAPPING, OVERLAPS, SQUARE
 from .test_scope import CHAIN, DANGLES, FAR, look_at, project_layer
+
+pytestmark = both_engines
 
 NAME = 'Main roads'
 HOW = ['selected', 'extent']

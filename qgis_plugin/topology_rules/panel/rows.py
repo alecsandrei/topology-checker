@@ -10,11 +10,23 @@ from qgis.core import QgsFeature, QgsVectorLayer
 from ..core.binary import named_with, plain_name, short_name
 from ..core.style import INVALID, Grouping, rule_grouping
 
+# The fields of an error that a row is made from
+COLUMNS = (
+    'rule',
+    'error_type',
+    'origin_layer',
+    'origin_fid',
+    'destination_layer',
+    'destination_fid',
+)
 
-def field_text(layer: QgsVectorLayer, feature: QgsFeature, name: str) -> str:
-    if layer.fields().indexOf(name) < 0:
+
+def field_text(feature: QgsFeature, index: int) -> str:
+    """The text of the field at the index, empty for a null value or for a
+    field that the layer does not have, whose index is -1."""
+    if index < 0:
         return ''
-    value = feature[name]
+    value = feature.attribute(index)
     return '' if value is None or str(value) == 'NULL' else str(value)
 
 
@@ -113,17 +125,21 @@ def read_rows(
     grouping = grouping or rule_grouping()
     rows: list[Row] = []
     for layer in layers:
+        # The fields are looked up once for the layer, not for each feature
+        fields = layer.fields()
+        indexes = [fields.indexOf(name) for name in COLUMNS]
         for feature in t.cast('c.Iterable[QgsFeature]', layer.getFeatures()):
-            origin = field_text(layer, feature, 'origin_layer')
-            other = field_text(layer, feature, 'destination_layer')
+            rule, error, origin, fid, other, other_fid = (
+                field_text(feature, index) for index in indexes
+            )
             rows.append(
                 Row(
-                    field_text(layer, feature, 'rule'),
-                    field_text(layer, feature, 'error_type'),
+                    rule,
+                    error,
                     names.get(origin, origin),
-                    number(field_text(layer, feature, 'origin_fid')),
+                    number(fid),
                     names.get(other, other),
-                    number(field_text(layer, feature, 'destination_fid')),
+                    number(other_fid),
                     origin,
                     other,
                     layer.id(),

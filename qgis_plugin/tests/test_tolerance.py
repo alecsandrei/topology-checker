@@ -9,13 +9,20 @@ from qgis.gui import QgsDoubleSpinBox
 from topology_rules.panel.dock import Dock
 
 from .helpers import (
+    ED50,
+    ED50_FEET,
+    ED50_FEET_NAVD88,
+    SITE,
     add,
     add_features,
+    both_engines,
     click_run,
     select_rules,
     set_checked,
     shown,
 )
+
+pytestmark = both_engines
 
 DANGLES = 'line/must-not-have-dangles'
 
@@ -59,7 +66,14 @@ def test_the_default_tolerance_is_used_after_clearing(dock: Dock):
 
 
 @pytest.mark.parametrize(
-    ('crs', 'suffix'), [('EPSG:3857', ' m'), ('EPSG:4326', ' °')]
+    ('crs', 'suffix'),
+    [
+        ('EPSG:3857', ' m'),
+        ('EPSG:4326', ' °'),
+        (f'WKT:{ED50}', ' °'),
+        (f'WKT:{ED50_FEET_NAVD88}', ' ft'),
+    ],
+    ids=['metres', 'degrees', 'degrees with a datum shift', 'compound'],
 )
 def test_the_suffix_is_the_unit_of_the_first_layer(
     dock: Dock, crs: str, suffix: str
@@ -92,6 +106,24 @@ def test_the_suffix_changes_when_the_list_is_replaced(dock: Dock):
         ('EPSG:32633', 'Default (1 mm)'),
         ('EPSG:3857', 'Default (1 mm)'),
         ('EPSG:4326', 'Default (1e-8°)'),
+        (f'WKT:{ED50}', 'Default (1e-8°)'),
+        ('PROJ:+proj=longlat +ellps=bessel +no_defs', 'Default (1e-8°)'),
+        (f'WKT:{ED50_FEET}', 'Default (1 mm)'),
+        (
+            f'WKT:{ED50_FEET_NAVD88}',
+            'Default (1 mm)',
+        ),
+        (f'WKT:{SITE}', 'Default'),
+    ],
+    ids=[
+        'utm',
+        'web mercator',
+        'degrees',
+        'degrees with a datum shift',
+        'degrees of no authority',
+        'us feet with a datum shift',
+        'compound with a datum shift',
+        'engineering',
     ],
 )
 def test_the_default_says_what_it_is_for_the_first_layer(

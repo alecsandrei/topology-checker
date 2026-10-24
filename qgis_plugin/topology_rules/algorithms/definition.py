@@ -15,8 +15,9 @@ from qgis.core import (
 
 from .._typing import Parameters
 from ..core.commands import ERROR_LAYERS, rule_counts, run_validate
+from ..core.engine import describe
 from ..core.toml import TomlUnavailable, loads
-from ..utils import QgsProcessingException, double_type, not_none
+from ..utils import QgsProcessingException, double_type, not_none, tr
 from .base import (
     COUNT,
     TOLERANCE,
@@ -85,38 +86,39 @@ class CheckDefinition(SinkAlgorithm):
         return 'check_definition'
 
     def displayName(self) -> str:
-        return 'Check topology definition'
+        return tr('Check topology definition')
 
     def group(self) -> str:
-        return 'Utilities'
+        return tr('Utilities')
 
     def groupId(self) -> str:
         return 'utilities'
 
     def shortHelpString(self) -> str:
-        return (
+        return tr(
             'Runs the rules of a topology.toml on the data that it names. '
             'The paths in the file are relative to the file. A tolerance '
-            'given here replaces the one of the file.'
+            'given here replaces the one of the file. The topology-checker '
+            'executable runs the file, as on the command line.'
         )
 
     def initAlgorithm(self, configuration: Parameters | None = None):
         self.addParameter(
             QgsProcessingParameterFile(
-                DEFINITION, 'Topology definition', extension='toml'
+                DEFINITION, tr('Topology definition'), extension='toml'
             )
         )
         self.addParameter(
             QgsProcessingParameterNumber(
                 TOLERANCE,
-                'Tolerance (empty for the one of the file)',
+                tr('Tolerance (empty for the one of the file)'),
                 double_type(),
                 optional=True,
                 minValue=0,
             )
         )
         self.add_sinks()
-        self.addOutput(QgsProcessingOutputNumber(COUNT, 'Number of errors'))
+        self.addOutput(QgsProcessingOutputNumber(COUNT, tr('Number of errors')))
 
     def prepareAlgorithm(
         self,
@@ -133,7 +135,9 @@ class CheckDefinition(SinkAlgorithm):
             )
             if not definition.is_file():
                 raise QgsProcessingException(
-                    f'The definition does not exist: {definition}'
+                    tr('The definition does not exist: {path}').format(
+                        path=definition
+                    )
                 )
             refuse_files(
                 self.sink_files(parameters, context), data_files(definition)
@@ -160,6 +164,7 @@ class CheckDefinition(SinkAlgorithm):
             scratch() as tmp,
         ):
             path = str(Path(tmp) / 'errors.gpkg')
+            feedback.pushInfo(describe(plan.executable))
             counts = rule_counts(
                 run_validate(
                     plan.executable,
@@ -179,5 +184,7 @@ class CheckDefinition(SinkAlgorithm):
                     [],
                     plan.definition.stem,
                 )
-        feedback.pushInfo(f'{sum(counts)} topology errors')
+        feedback.pushInfo(
+            tr('{count} topology errors').format(count=sum(counts))
+        )
         return {**results, COUNT: sum(counts)}

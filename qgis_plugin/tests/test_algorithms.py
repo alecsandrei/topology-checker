@@ -23,12 +23,16 @@ from topology_rules.provider import Provider
 
 from .helpers import (
     FAKE_ALGORITHMS,
+    both_engines,
+    executable_only,
     fake_executable,
     line_layer,
     point_layer,
     refresh_to_fake_tool,
     save,
 )
+
+pytestmark = both_engines
 
 # Two lines meeting at a node: the free end of each is a dangle
 CHAIN = ('LINESTRING(0 0, 10 0)', 'LINESTRING(10 0, 20 0)')
@@ -48,6 +52,7 @@ def run(
     return results, ok, context
 
 
+@executable_only
 def test_provider_lists_the_rules_of_the_executable(
     tmp_path: Path,
     configure: c.Callable[[str | Path], None],
@@ -73,6 +78,7 @@ def test_provider_lists_the_rules_of_the_executable(
     ]
 
 
+@executable_only
 def test_provider_has_no_rules_without_an_executable(
     provider: Provider, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
@@ -135,6 +141,7 @@ def test_tool_failure_fails_the_algorithm(
     assert not ok
 
 
+@executable_only
 def test_missing_executable_fails_the_algorithm(
     tmp_path: Path,
     configure: c.Callable[[str | Path], None],

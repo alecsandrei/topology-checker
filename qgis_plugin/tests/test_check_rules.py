@@ -9,6 +9,7 @@ import pytest
 from qgis.core import QgsFeature, QgsGeometry, QgsProject, QgsVectorLayer
 
 from topology_rules.algorithms.rule import COUNT
+from topology_rules.core.engine import Engine
 
 from .helpers import (
     files_stay_open,
@@ -26,8 +27,9 @@ FAR = 'LINESTRING(0 50, 10 50)'
 
 
 @pytest.fixture(autouse=True)
-def ready(executable: str, provider: object) -> None:
-    """The real executable and the provider, as in a QGIS session."""
+def ready(run_engine: Engine, executable: str, provider: object) -> None:
+    """The real executable and the provider, as in a QGIS session, and
+    each of the two engines in turn."""
 
 
 def check(tmp_path: Path, *entries: dict[str, object], output: object = None):

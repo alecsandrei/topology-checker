@@ -13,6 +13,7 @@ from topology_rules.panel.dock import Dock
 
 from .helpers import (
     add,
+    both_engines,
     cli_counts,
     click_run,
     line_layer,
@@ -22,6 +23,8 @@ from .helpers import (
     queue_column,
     shown,
 )
+
+pytestmark = both_engines
 
 COVERED = 'point/must-be-covered-by-polygons'
 OVERLAPS_WITH = 'line/must-not-overlap-with'

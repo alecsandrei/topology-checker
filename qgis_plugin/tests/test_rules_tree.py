@@ -15,6 +15,7 @@ from topology_rules.panel.dock import Dock
 
 from .helpers import (
     add,
+    both_engines,
     click_run,
     layer_nodes,
     line_layer,
@@ -25,6 +26,8 @@ from .helpers import (
     select_rules,
 )
 from .test_wrapping import SLACK, room
+
+pytestmark = both_engines
 
 DANGLES = 'line/must-not-have-dangles'
 OVERLAPS = 'line/must-not-overlap'

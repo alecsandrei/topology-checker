@@ -21,6 +21,7 @@ from topology_rules.panel.dock import Dock
 
 from .helpers import (
     add,
+    both_engines,
     click_run,
     duration_of,
     message_text,
@@ -184,11 +185,13 @@ def run_with_invalid(dock: Dock) -> None:
     click_run(dock)
 
 
+@both_engines
 def test_a_run_pushes_one_message(dock: Dock, tmp_path: Path, bar: t.Any):
     run_with_errors(dock, tmp_path)
     assert len(messages(bar)) == 1
 
 
+@both_engines
 def test_the_message_counts_the_errors_and_the_rules(
     dock: Dock, tmp_path: Path, bar: t.Any
 ):
@@ -196,6 +199,7 @@ def test_the_message_counts_the_errors_and_the_rules(
     assert '3 errors in 2 rules' in messages(bar)[0]
 
 
+@both_engines
 def test_a_clean_run_pushes_one_success_message(
     dock: Dock, tmp_path: Path, bar: t.Any
 ):
@@ -207,6 +211,7 @@ def test_a_clean_run_pushes_one_success_message(
     assert len(messages(bar)) == 1
 
 
+@both_engines
 def test_a_message_without_a_failure_stays_five_seconds(
     dock: Dock, tmp_path: Path, bar: t.Any
 ):
@@ -214,6 +219,7 @@ def test_a_message_without_a_failure_stays_five_seconds(
     assert [duration_of(call) for call in bar.calls] == [5]
 
 
+@both_engines
 def test_a_clean_message_stays_five_seconds(
     dock: Dock, tmp_path: Path, bar: t.Any
 ):
@@ -235,6 +241,7 @@ def test_a_new_failure_replaces_the_previous_one(
     assert len(details_buttons(bar)) == 1
 
 
+@both_engines
 def test_the_message_adds_the_invalid_geometries_that_were_skipped(
     dock: Dock, bar: t.Any
 ):
@@ -243,6 +250,7 @@ def test_the_message_adds_the_invalid_geometries_that_were_skipped(
     assert '· 2 invalid geometries skipped' in messages(bar)[0]
 
 
+@both_engines
 def test_the_message_has_a_show_button_for_the_invalid_geometries(
     dock: Dock, bar: t.Any
 ):
@@ -254,6 +262,7 @@ def test_the_message_has_a_show_button_for_the_invalid_geometries(
     assert 'Invalid geometry' in dock.results_view.currentIndex().data()
 
 
+@both_engines
 def test_a_run_without_invalid_geometries_has_no_show_button(
     dock: Dock, tmp_path: Path, bar: t.Any
 ):

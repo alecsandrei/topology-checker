@@ -17,9 +17,9 @@ from qgis.core import (
 )
 
 from ..exceptions import RunError
-from ..utils import not_none
+from ..utils import tr
 from .inputs import not_finite
-from .layers import wkb_kind
+from .layers import geometry_word, private_layer, wkb_kind
 
 # The columns of the tool, as a memory layer defines them
 FIELDS = (
@@ -34,9 +34,10 @@ MULTI = {
     'line': 'MultiLineString',
     'polygon': 'MultiPolygon',
 }
-# How the tool names the feature that it rejects
+# How the tool names the feature that it rejects; the Python package names
+# no layer where it refuses the data that it is given
 FAILURE = re.compile(
-    r'^layer (?P<layer>.+?), FID (?P<fid>-?\d+)'
+    r'^(?:layer (?P<layer>.+?), )?FID (?P<fid>-?\d+)'
     r'(?:, part \d+, ring [^:]+)?: (?P<reason>.*)$',
     re.DOTALL,
 )
@@ -59,12 +60,12 @@ class Rejected(RunError):
         self.key = key
         # What the tool said, for the features it can be told to skip
         self.skippable = reason.startswith(REJECTED)
-        # Whether the tool read the layer from its own file, where the
-        # number of the feature is not told apart from the export's
-        self.direct = False
+        # Whether the tool read the input as it is, without leaving out what
+        # it would reject: the executable from the layer's own file
+        self.as_is = False
 
 
-def parse_failure(message: str) -> tuple[str, int, str] | None:
+def parse_failure(message: str) -> tuple[str | None, int, str] | None:
     """The layer, feature and reason in a message of the tool about a
     feature."""
     found = FAILURE.match(message.strip())
@@ -119,13 +120,20 @@ def append_invalid(
         if not found:
             continue
         name = f'errors_{kind}'
-        layer = QgsVectorLayer(f'{path}|layername={name}', name, 'ogr')
+        layer = private_layer(f'{path}|layername={name}', name)
         if layer.isValid():
-            added, _ = not_none(layer.dataProvider()).addFeatures(
-                [item.feature(layer.fields()) for item in found]
-            )
-            if not added:
-                raise RunError(f'Could not write the {kind} errors')
+            if not (
+                layer.startEditing()
+                and layer.addFeatures(
+                    [item.feature(layer.fields()) for item in found]
+                )
+                and layer.commitChanges()
+            ):
+                raise RunError(
+                    tr('Could not write the {kind} errors').format(
+                        kind=geometry_word(kind)
+                    )
+                )
             continue
         features = [item.feature(fields) for item in found]
         options = QgsVectorFileWriter.SaveVectorOptions()
@@ -144,6 +152,10 @@ def append_invalid(
             context.transformContext(),
             options,
         )
-        if writer is None or not all(map(writer.addFeature, features)):
-            raise RunError(f'Could not write the {kind} errors')
+        if writer is None or not writer.addFeatures(features):
+            raise RunError(
+                tr('Could not write the {kind} errors').format(
+                    kind=geometry_word(kind)
+                )
+            )
         del writer

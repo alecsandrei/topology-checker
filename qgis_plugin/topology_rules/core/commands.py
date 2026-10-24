@@ -8,6 +8,7 @@ from pathlib import Path
 
 from ..enums import ExitCode
 from ..exceptions import RunError
+from ..utils import tr
 from .binary import Rule
 from .layers import Dataset
 from .runner import Completed, error_message, execute
@@ -46,6 +47,17 @@ def shown_path(source: str, config: Path, relative: bool) -> str:
         return source
 
 
+def unique(base: str, taken: set[str]) -> str:
+    """The name, or the first of `name_2`, `name_3` and so on that is not
+    taken, which it takes."""
+    name, index = base, 1
+    while name in taken:
+        index += 1
+        name = f'{base}_{index}'
+    taken.add(name)
+    return name
+
+
 def write_config(
     path: Path,
     checks: t.Sequence[Check],
@@ -65,15 +77,9 @@ def write_config(
         for source in (check.layer, check.other):
             if source is None or source in aliases:
                 continue
-            base = (names or {}).get(source) or (
-                source.layer or Path(source.path).stem
+            aliases[source] = unique(
+                (names or {}).get(source) or source.name, taken
             )
-            alias, index = base, 1
-            while alias in taken:
-                index += 1
-                alias = f'{base}_{index}'
-            taken.add(alias)
-            aliases[source] = alias
     lines = [] if tolerance is None else [f'tolerance = {tolerance!r}', '']
     lines.append('[layers]')
     for source, alias in aliases.items():
@@ -169,7 +175,9 @@ def rule_counts(completed: Completed) -> list[int]:
         return [sum(rule['counts'].values()) for rule in report['rules']]
     except (ValueError, KeyError, TypeError) as error:
         raise RunError(
-            f'Could not read the report: {completed.stdout[:200]!r}'
+            tr('Could not read the report: {report}').format(
+                report=repr(completed.stdout[:200])
+            )
         ) from error
 
 

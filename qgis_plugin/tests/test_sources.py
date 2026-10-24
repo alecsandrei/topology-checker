@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 
 import pytest
@@ -12,17 +13,24 @@ from qgis.core import (
     QgsFeature,
     QgsGeometry,
     QgsProcessingFeatureSourceDefinition,
+    QgsProcessingFeedback,
     QgsProcessingParameterDistance,
     QgsProject,
     QgsVectorLayer,
+    QgsVectorLayerFeatureSource,
 )
 
 from topology_rules.algorithms.rule import COUNT
+from topology_rules.core.engine import Engine
+from topology_rules.core.inputs import chosen
+from topology_rules.core.layers import Input, layer_file
 from topology_rules.enums import PROVIDER_ID
 
 from .helpers import (
+    Ran,
     add_features,
     errors_layer,
+    line_layer,
     run_algorithm,
     saved_layer,
 )
@@ -37,8 +45,9 @@ FAR = 'LINESTRING(0 50, 10 50)'
 
 
 @pytest.fixture(autouse=True)
-def ready(executable: str, provider: object) -> None:
-    """The real executable and the provider, as in a QGIS session."""
+def ready(run_engine: Engine, executable: str, provider: object) -> None:
+    """The real executable and the provider, as in a QGIS session, and
+    each of the two engines in turn."""
 
 
 def project_layer(tmp_path: Path, *wkts: str) -> QgsVectorLayer:
@@ -114,6 +123,51 @@ def test_error_ids_of_the_selected_features(tmp_path: Path):
     assert_errors_point_at_features(layer, source, 2)
 
 
+def origin_ids(ran: Ran) -> list[int]:
+    """The ids of the features of the point errors, in the order of the
+    layer."""
+    errors = errors_layer(ran, 'ERRORS_POINT')
+    return [int(error['origin_fid']) for error in errors.getFeatures()]
+
+
+def test_the_errors_of_a_selection_are_in_the_order_of_the_ids():
+    """QGIS gives the selection of a memory layer in an order of its own,
+    which changes from one session to the next."""
+    layer = line_layer(
+        *(f'LINESTRING({x} 0, {x} 5)' for x in range(0, 400, 10))
+    )
+    QgsProject.instance().addMapLayer(layer)
+    layer.selectByIds(list(range(5, 35)))
+    ran = run_algorithm(
+        DANGLES,
+        {'INPUT': QgsProcessingFeatureSourceDefinition(layer.id(), True)},
+    )
+    assert ran.ok, ran.log
+    assert origin_ids(ran) == sorted(2 * list(range(5, 35)))
+
+
+def test_the_errors_of_new_features_are_in_the_order_of_the_ids(
+    tmp_path: Path,
+):
+    layer = project_layer(tmp_path, *CHAIN)
+    assert layer.startEditing()
+    try:
+        for y in (100, 200, 300):
+            feature = QgsFeature(layer.fields())
+            feature.setGeometry(
+                QgsGeometry.fromWkt(f'LINESTRING(0 {y}, 10 {y})')
+            )
+            assert layer.addFeature(feature)
+        ran = run_algorithm(DANGLES, {'INPUT': layer.id()})
+    finally:
+        layer.rollBack()
+    assert ran.ok, ran.log
+    found = origin_ids(ran)
+    assert found == sorted(found)
+    # Two dangles of the chain, and two of each new line
+    assert len(found) == 8
+
+
 def test_error_ids_of_an_edited_layer(tmp_path: Path):
     layer = project_layer(tmp_path, *CHAIN)
     assert layer.startEditing()
@@ -132,6 +186,66 @@ def test_error_ids_of_a_layer_with_a_hole_in_its_ids(tmp_path: Path):
     assert layer.deleteFeature(1)
     assert layer.commitChanges()
     assert_errors_point_at_features(layer, layer.id(), 2)
+
+
+# Windows can refuse to write a file that a loaded layer has open
+rewrites_open_files = pytest.mark.skipif(
+    sys.platform == 'win32',
+    reason='rewrites the file of a loaded layer',
+)
+
+
+def fail_to_open(layer: QgsVectorLayer) -> None:
+    """Has QGIS fail once to open the GeoPackage of the layer, as it can
+    where it opens the file while an edit session starts or ends. It keeps
+    the connection and reads no feature of the file through it."""
+    path = Path(str(layer_file(layer)))
+    data = path.read_bytes()
+    path.write_bytes(b'not a GeoPackage' * 64)
+    reader = QgsVectorLayerFeatureSource(layer)
+    list(reader.getFeatures())
+    path.write_bytes(data)
+
+
+@rewrites_open_files
+def test_a_geopackage_that_qgis_failed_to_open(tmp_path: Path):
+    layer = project_layer(tmp_path, *CHAIN, FAR)
+    fail_to_open(layer)
+    assert_errors_point_at_features(layer, layer.id(), 4)
+
+
+@rewrites_open_files
+def test_an_edited_geopackage_that_qgis_failed_to_open(tmp_path: Path):
+    layer = project_layer(tmp_path, *CHAIN)
+    assert layer.startEditing()
+    feature = QgsFeature(layer.fields())
+    feature.setGeometry(QgsGeometry.fromWkt(FAR))
+    assert layer.addFeature(feature)
+    layer.selectByIds([1])
+    try:
+        fail_to_open(layer)
+        assert_errors_point_at_features(layer, layer.id(), 4)
+        # QGIS opens the file again, for the layer as it is
+        assert layer.selectedFeatureIds() == [1]
+        assert layer.isModified()
+    finally:
+        layer.rollBack()
+
+
+@rewrites_open_files
+def test_a_read_that_gives_no_saved_feature_is_done_again(tmp_path: Path):
+    layer = project_layer(tmp_path, *CHAIN)
+    assert layer.startEditing()
+    feature = QgsFeature(layer.fields())
+    feature.setGeometry(QgsGeometry.fromWkt(FAR))
+    assert layer.addFeature(feature)
+    try:
+        item = Input(layer.name(), layer, layer)
+        fail_to_open(layer)
+        ids = [found.id() for found in chosen(item, QgsProcessingFeedback())]
+    finally:
+        layer.rollBack()
+    assert ids == [feature.id(), 1, 2]
 
 
 def crs_pair(

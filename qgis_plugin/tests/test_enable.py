@@ -11,6 +11,7 @@ from topology_rules.panel.dock import Dock
 
 from .helpers import (
     add,
+    both_engines,
     checked,
     click_run,
     queue_column,
@@ -20,6 +21,8 @@ from .helpers import (
     set_checked,
     shown,
 )
+
+pytestmark = both_engines
 
 DANGLES = 'line/must-not-have-dangles'
 CHAIN = ('LINESTRING(0 0, 10 0)', 'LINESTRING(10 0, 20 0)')

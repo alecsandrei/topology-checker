@@ -13,8 +13,8 @@ from pathlib import Path
 from qgis.core import QgsSettings
 
 from ..enums import EXECUTABLE_NAME, ExitCode, Group, Setting
-from ..exceptions import ExecutableError, RunError
-from ..utils import title
+from ..exceptions import ExecutableError, MissingError, RunError
+from ..utils import title, tr
 from .runner import error_message, run
 
 if t.TYPE_CHECKING:
@@ -152,7 +152,10 @@ def find_executable() -> Path:
         path = Path(configured)
         if path.is_dir():
             raise ExecutableError(
-                f'This is a folder, not the topology-checker executable: {path}'
+                tr(
+                    'This is a folder, not the topology-checker executable: '
+                    '{path}'
+                ).format(path=path)
             )
         # A path pasted without the extension that Windows hides
         program = Path(f'{configured}.exe')
@@ -165,23 +168,29 @@ def find_executable() -> Path:
             return program
         if not path.is_file():
             raise ExecutableError(
-                f'The topology-checker executable does not exist: {path}'
+                tr(
+                    'The topology-checker executable does not exist: {path}'
+                ).format(path=path)
             )
         return path
     found = shutil.which(EXECUTABLE_NAME)
     if found is None:
-        raise ExecutableError(
-            'topology-checker was not found. Install it, then set its path '
-            'under Settings > Options > Processing > Providers > '
-            'Topology Rules.'
+        # Said where nothing else offers a way: the panel has its own
+        raise MissingError(
+            tr(
+                'topology-checker was not found. Install the Python package '
+                'from the Topology Rules panel, or set the path of the '
+                'executable under Settings > Options > Processing > '
+                'Providers > Topology Rules.'
+            )
         )
     return Path(found)
 
 
-def known(entry: RuleJson) -> bool:
+def known(name: str) -> bool:
     """Whether the plugin can list the rule, which has a name of the shape
     `group/rule` and a group of the plugin."""
-    parts = str(entry['name']).split('/')
+    parts = name.split('/')
     return (
         len(parts) == 2
         and all(parts)
@@ -189,11 +198,12 @@ def known(entry: RuleJson) -> bool:
     )
 
 
-# What to do about an executable that cannot be used
-CHOOSE = (
-    "Choose a newer build with 'Choose topology-checker…' or under "
-    'Settings > Options > Processing > Providers > Topology Rules.'
-)
+def choose_newer() -> str:
+    """What to do about an executable that cannot be used."""
+    return tr(
+        "Choose a newer build with 'Choose executable…' or under "
+        'Settings > Options > Processing > Providers > Topology Rules.'
+    )
 
 
 def parse_rules(text: str, path: str = '') -> tuple[Rule, ...]:
@@ -210,24 +220,30 @@ def parse_rules(text: str, path: str = '') -> tuple[Rule, ...]:
                 entry['other'],
             )
             for entry in entries
-            if known(entry)
+            if known(str(entry['name']))
         )
     except (ValueError, KeyError, TypeError) as error:
         raise ExecutableError(
-            f'{who(path)} is too old for the plugin, which needs '
-            'topology-checker 0.2.0 or newer: it does not list the layers '
-            f'each rule needs. {CHOOSE}'
+            tr(
+                '{who} is too old for the plugin, which needs '
+                'topology-checker 0.2.0 or newer: it does not list the layers '
+                'each rule needs. {choose}'
+            ).format(who=who(path), choose=choose_newer())
         ) from error
     if not rules:
-        raise ExecutableError(f'{who(path)} lists no rules. {CHOOSE}')
+        raise ExecutableError(
+            tr('{who} lists no rules. {choose}').format(
+                who=who(path), choose=choose_newer()
+            )
+        )
     return rules
 
 
 def who(path: str) -> str:
     """The executable, by its path where it is known."""
-    return (
-        f'The topology-checker at {path}' if path else 'This topology-checker'
-    )
+    if path:
+        return tr('The topology-checker at {path}').format(path=path)
+    return tr('This topology-checker')
 
 
 class Probe:
@@ -242,6 +258,8 @@ class Probe:
         self.done: dict[tuple[str, int], tuple[Rule, ...]] = {}
         # The file extensions that each version reads, asked with the rules
         self.readable: dict[tuple[str, int], frozenset[str]] = {}
+        # The version number that each one says it is, for the log of a run
+        self.versions: dict[tuple[str, int], str] = {}
         # The versions that are being asked, for a second request to share
         self.pending: dict[tuple[str, int], Future[tuple[Rule, ...]]] = {}
         # The answers are read on the main thread and written by the thread
@@ -276,12 +294,13 @@ class Probe:
                 gone = next(iter(self.done))
                 del self.done[gone]
                 self.readable.pop(gone, None)
+                self.versions.pop(gone, None)
         future.set_result(found)
-        # The formats are asked on the side: they are not needed to list the
-        # rules, and a tool that is slow to answer must not hold them up
-        threading.Thread(
-            target=self.learn_formats, args=(key,), daemon=True
-        ).start()
+        # The formats and the version are asked on the side: they are not
+        # needed to list the rules, and a tool that is slow to answer must not
+        # hold them up
+        for learn in (self.learn_formats, self.learn_version):
+            threading.Thread(target=learn, args=(key,), daemon=True).start()
         return found
 
     def learn_formats(self, key: tuple[str, int]) -> None:
@@ -289,6 +308,12 @@ class Probe:
         with self.lock:
             if formats is not None and key in self.done:
                 self.readable[key] = formats
+
+    def learn_version(self, key: tuple[str, int]) -> None:
+        version = self.ask_version(key[0])
+        with self.lock:
+            if version is not None and key in self.done:
+                self.versions[key] = version
 
     def peek(self, path: str, modified: int) -> tuple[Rule, ...] | None:
         with self.lock:
@@ -298,10 +323,15 @@ class Probe:
         with self.lock:
             return self.readable.get((path, modified))
 
+    def version(self, path: str, modified: int) -> str | None:
+        with self.lock:
+            return self.versions.get((path, modified))
+
     def cache_clear(self) -> None:
         with self.lock:
             self.done.clear()
             self.readable.clear()
+            self.versions.clear()
 
     @staticmethod
     def ask_formats(path: str) -> frozenset[str] | None:
@@ -324,15 +354,31 @@ class Probe:
             return None
 
     @staticmethod
+    def ask_version(path: str) -> str | None:
+        """The version number that the executable prints, as `0.2.1`, or
+        none if it does not say."""
+        try:
+            completed = run([path, '--version'], timeout=PROBE_TIMEOUT)
+        except RunError:
+            return None
+        words = completed.stdout.split()
+        if completed.exit_code != ExitCode.VALID.value or not words:
+            return None
+        return words[-1]
+
+    @staticmethod
     def ask(path: str) -> tuple[Rule, ...]:
         try:
             completed = run([path, '--json', 'rules'], timeout=PROBE_TIMEOUT)
         except RunError as error:
-            raise ExecutableError(f'{error} {CHOOSE}') from error
+            raise ExecutableError(f'{error} {choose_newer()}') from error
         if completed.exit_code != ExitCode.VALID.value:
             raise ExecutableError(
-                f'{who(path)} does not work: '
-                f'{error_message(completed)} {CHOOSE}'
+                tr('{who} does not work: {error} {choose}').format(
+                    who=who(path),
+                    error=error_message(completed),
+                    choose=choose_newer(),
+                )
             )
         return parse_rules(completed.stdout, path)
 
@@ -354,7 +400,9 @@ def locate() -> tuple[str, int]:
     try:
         modified = path.stat().st_mtime_ns
     except OSError as error:
-        raise ExecutableError(f'Could not read {path}: {error}') from error
+        raise ExecutableError(
+            tr('Could not read {path}: {error}').format(path=path, error=error)
+        ) from error
     return str(path), modified
 
 
@@ -389,3 +437,13 @@ def readable_extensions() -> frozenset[str]:
 def rules() -> tuple[Rule, ...]:
     """The rules of the executable, read again when it changes."""
     return _rules(*locate())
+
+
+def version(path: str) -> str:
+    """The version number of the executable, which it was asked with its
+    rules, or empty where it has not said."""
+    try:
+        modified = Path(path).stat().st_mtime_ns
+    except OSError:
+        return ''
+    return _rules.version(path, modified) or ''

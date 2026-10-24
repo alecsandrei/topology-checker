@@ -1,5 +1,5 @@
-"""Fixtures of the tests: the executable, the provider, the dock, the
-message bar, and a clean project and settings for each test."""
+"""Fixtures of the tests: the executable, the Python package, the provider,
+the dock, the message bar, and a clean project and settings for each test."""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ import os
 import shutil
 import sys
 import tempfile
+import threading
 import traceback
 import types
 import typing as t
@@ -18,23 +19,31 @@ from pathlib import Path
 import pytest
 from qgis.core import QgsApplication, QgsProject, QgsSettings
 from qgis.gui import QgisInterface
-from qgis.PyQt.QtCore import QSettings
+from qgis.PyQt.QtCore import QCoreApplication, QSettings, QTranslator
 from qgis.PyQt.QtGui import QFontDatabase, QFontInfo
 from qgis.PyQt.QtWidgets import QApplication, QMainWindow
 
-from topology_rules.core import binary
+from topology_rules.core import binary, engine, install
+from topology_rules.core.engine import Engine, Package
 from topology_rules.enums import Setting
 from topology_rules.exceptions import ExecutableError
 from topology_rules.panel.dock import Dock
 from topology_rules.panel.rules_page import COLLAPSED
 from topology_rules.provider import Provider
+from topology_rules.utils import not_none
 
-from .helpers import real_executable, wait_for
+from .helpers import (
+    isolate_network_cache,
+    real_executable,
+    usable_package,
+    wait_for,
+)
 
 
 @pytest.hookimpl(trylast=True)
 def pytest_configure(config: pytest.Config) -> None:
-    """Gives the settings of QGIS a folder for this run alone.
+    """Gives the settings of QGIS a folder for this run alone, with the
+    network cache in it.
 
     pytest-qgis keeps them in `.qgis-settings` of the project, which every
     run from the project shares, and so shares the path of the executable
@@ -45,6 +54,35 @@ def pytest_configure(config: pytest.Config) -> None:
     QSettings.setPath(
         QSettings.Format.IniFormat, QSettings.Scope.UserScope, folder
     )
+    isolate_network_cache(Path(folder) / 'cache')
+
+
+# Whether the fixtures of a test were all set up
+SET_UP = pytest.StashKey[bool]()
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_makereport(
+    item: pytest.Item, call: pytest.CallInfo[None]
+) -> c.Generator[None, t.Any, None]:
+    outcome = yield
+    if call.when == 'setup':
+        item.stash[SET_UP] = outcome.get_result().passed
+
+
+@pytest.hookimpl(hookwrapper=True, tryfirst=True)
+def pytest_runtest_teardown(item: pytest.Item) -> c.Generator[None, None, None]:
+    """Keeps pytest-qgis from asking again for the fixtures of a test that
+    skipped or failed in its set-up.
+
+    Before the teardown, pytest-qgis asks for each fixture with 'layer' in
+    its name. One that skipped or failed raises again there, the test is not
+    torn down, and each later test errors. One that was not reached is set
+    up, which may run a check.
+    """
+    if isinstance(item, pytest.Function) and not item.stash.get(SET_UP, True):
+        item.funcargs.pop('request', None)
+    yield
 
 
 # The size of the text of a user interface, in pixels: 9 points at 96 dpi,
@@ -122,10 +160,12 @@ def forget_tools() -> None:
     with probe.lock:
         rules = {k: v for k, v in probe.done.items() if k[0] == real}
         formats = {k: v for k, v in probe.readable.items() if k[0] == real}
+        versions = {k: v for k, v in probe.versions.items() if k[0] == real}
     probe.cache_clear()
     with probe.lock:
         probe.done.update(rules)
         probe.readable.update(formats)
+        probe.versions.update(versions)
 
 
 @pytest.fixture(autouse=True)
@@ -143,6 +183,44 @@ def no_executable(monkeypatch: pytest.MonkeyPatch) -> c.Iterator[None]:
     settings.remove(Setting.EXECUTABLE.value)
     forget_options_box(settings)
     forget_tools()
+
+
+@pytest.fixture(autouse=True)
+def executable_engine() -> c.Iterator[None]:
+    """Runs the checks with the executable, which most tests are about. The
+    tests of the package, and those of both engines, choose theirs."""
+    engine.choose(Engine.EXECUTABLE)
+    yield
+    QgsSettings().remove(Setting.ENGINE.value)
+
+
+@pytest.fixture
+def package() -> Package:
+    """The Python package, skipping, with the reason, where QGIS cannot use
+    it, unless TOPOLOGY_CHECKER_PACKAGE is 1."""
+    return usable_package()
+
+
+def executable_unused() -> Path:
+    raise ExecutableError('The package runs the checks, not the executable')
+
+
+@pytest.fixture(
+    params=[Engine.EXECUTABLE, Engine.PACKAGE],
+    ids=[Engine.EXECUTABLE.value, Engine.PACKAGE.value],
+)
+def run_engine(
+    request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch
+) -> Engine:
+    """Runs the checks of a test once with the executable and once with the
+    package. With the package no executable is found, as for a user who has
+    only the package."""
+    chosen = t.cast(Engine, request.param)
+    if chosen is Engine.PACKAGE:
+        request.getfixturevalue('package')
+        monkeypatch.setattr(binary, 'find_executable', executable_unused)
+    engine.choose(chosen)
+    return chosen
 
 
 @pytest.fixture(autouse=True)
@@ -164,6 +242,33 @@ def unhandled(monkeypatch: pytest.MonkeyPatch) -> c.Iterator[list[str]]:
     monkeypatch.setattr(sys, 'excepthook', hook)
     yield errors
     assert not errors, '\n'.join(errors)
+
+
+def installing() -> list[install.Task]:
+    tasks = not_none(QgsApplication.taskManager()).activeTasks()
+    return [task for task in tasks if isinstance(task, install.Task)]
+
+
+@pytest.fixture(autouse=True)
+def installs_end() -> c.Iterator[None]:
+    """Stops the run when a cancelled install keeps running. Its thread
+    stays, and every later test that waits for the tasks of QGIS would fail
+    after its timeout, which takes longer than the jobs may run."""
+    yield
+    for task in installing():
+        task.cancel()
+    try:
+        wait_for(lambda: not installing(), 30)
+    except AssertionError:
+        names = ', '.join(task.description() for task in installing())
+        stacks = '\n'.join(
+            ''.join(traceback.format_stack(frame))
+            for ident, frame in sys._current_frames().items()
+            if ident != threading.get_ident()
+        )
+        pytest.exit(
+            f'Cancelled, but still running: {names}\n{stacks}', returncode=1
+        )
 
 
 @pytest.fixture(autouse=True)
@@ -276,3 +381,28 @@ def bare(
     dock.refresh()
     yield dock
     dock.deleteLater()
+
+
+class Marked(QTranslator):
+    """Gives each text of the plugin a translation that shows the text."""
+
+    def translate(
+        self,
+        context: str | None,
+        source: str | None,
+        disambiguation: str | None = None,
+        n: int = -1,
+    ) -> str:
+        if context == 'TopologyRules':
+            return f'<{source}>'
+        return source or ''
+
+
+@pytest.fixture
+def marked() -> c.Iterator[None]:
+    """Translates each text of the plugin as itself in <>, which shows what
+    is translated and what is put together around it."""
+    translator = Marked()
+    QCoreApplication.installTranslator(translator)
+    yield
+    QCoreApplication.removeTranslator(translator)

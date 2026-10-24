@@ -7,6 +7,7 @@ last groups read the widgets of the dock the way a user sees them.
 
 from __future__ import annotations
 
+import collections.abc as c
 import dataclasses
 import faulthandler
 import json
@@ -16,6 +17,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import threading
 import time
 import typing as t
 from pathlib import Path
@@ -26,17 +28,22 @@ from qgis.core import (
     QgsApplication,
     QgsFeature,
     QgsGeometry,
+    QgsNetworkAccessManager,
     QgsProcessingAlgRunnerTask,
     QgsProcessingContext,
     QgsProcessingFeedback,
     QgsProject,
+    QgsSettings,
     QgsVectorFileWriter,
     QgsVectorLayer,
 )
 from qgis.PyQt.QtCore import QItemSelectionModel, QModelIndex, Qt
 from qgis.PyQt.QtWidgets import QApplication, QLabel, QTreeWidgetItem
 
+from topology_rules.core import engine
+from topology_rules.core.engine import Engine, Package
 from topology_rules.enums import PROVIDER_ID
+from topology_rules.exceptions import PackageError
 
 if t.TYPE_CHECKING:
     from topology_rules.panel.dock import Dock
@@ -287,17 +294,95 @@ def gated_executable(
     return script_executable(directory, body, name)
 
 
-# As a path from here, as some tests run the tool from another folder
-NAMED = os.environ.get('TOPOLOGY_CHECKER')
-NAMED_PATH = str(Path(NAMED).absolute()) if NAMED else None
+# As a path from here, as some tests run the tool from another folder. It is
+# looked up once: `which` fails in a test that fakes Windows
+REAL = os.environ.get('TOPOLOGY_CHECKER') or shutil.which('topology-checker')
+REAL_PATH = str(Path(REAL).absolute()) if REAL else None
 
 
 def real_executable() -> str | None:
     """The tool named by TOPOLOGY_CHECKER, or the one on the PATH."""
-    return NAMED_PATH or shutil.which('topology-checker')
+    return REAL_PATH
+
+
+# Set to 1 where the tests must run with the Python package, as in CI where
+# it is installed: a test of the package fails without it rather than skip
+NEEDS_PACKAGE = 'TOPOLOGY_CHECKER_PACKAGE'
+
+
+def usable_package() -> Package:
+    """The Python package, skipping, with the reason, where QGIS cannot use
+    it, and failing so where the run needs the package."""
+    try:
+        return engine.find_package()
+    except PackageError as error:
+        reason = str(error)
+    if os.environ.get(NEEDS_PACKAGE) == '1':
+        pytest.fail(f'{NEEDS_PACKAGE} is 1: {reason}', pytrace=False)
+    pytest.skip(reason)
+
+
+# The folder of the network cache of QGIS, a setting at the root of the tree
+NETWORK_CACHE = 'cache/directory'
+
+
+def isolate_network_cache(folder: Path) -> None:
+    """Points the network cache of QGIS at the folder, so that what the tests
+    download stays out of the cache of the user.
+
+    The network managers of all the threads share one disk cache, which
+    takes its folder from the settings as a manager is set up. QGIS set up
+    the one of the main thread as it started, with the folder of the user,
+    so a manager is set up on a thread of its own to move the cache now.
+    """
+    settings = QgsSettings()
+    settings.setValue(NETWORK_CACHE, str(folder))
+    settings.sync()
+    thread = threading.Thread(target=QgsNetworkAccessManager.instance)
+    thread.start()
+    thread.join()
+
+
+# Runs a test, or each test of a module, once with the executable and once
+# with the Python package
+both_engines = pytest.mark.usefixtures('run_engine')
+# Runs a test of such a module with the executable alone, as it is about the
+# executable
+executable_only = pytest.mark.parametrize(
+    'run_engine', [Engine.EXECUTABLE], ids=['executable'], indirect=True
+)
 
 
 # Layers
+
+
+# CRSs that QGIS takes for neither geographic nor projected: bound to
+# WGS 84 by a datum shift, made of a horizontal and a vertical part, or
+# local to a site
+ED50 = (
+    'GEOGCS["ED50",DATUM["European_Datum_1950",'
+    'SPHEROID["International 1924",6378388,297],'
+    'TOWGS84[-87,-98,-121,0,0,0,0]],PRIMEM["Greenwich",0],'
+    'UNIT["degree",0.0174532925199433]]'
+)
+ED50_FEET = (
+    f'PROJCS["ED50 / TM 15 ftUS",{ED50},'
+    'PROJECTION["Transverse_Mercator"],PARAMETER["latitude_of_origin",0],'
+    'PARAMETER["central_meridian",15],PARAMETER["scale_factor",1],'
+    'PARAMETER["false_easting",0],PARAMETER["false_northing",0],'
+    'UNIT["US survey foot",0.304800609601219]]'
+)
+NAVD88 = (
+    'VERT_CS["NAVD88 height",'
+    'VERT_DATUM["North American Vertical Datum 1988",2005,'
+    'AUTHORITY["EPSG","5103"]],UNIT["metre",1],'
+    'AXIS["Gravity-related height",UP],AUTHORITY["EPSG","5703"]]'
+)
+ED50_FEET_NAVD88 = f'COMPD_CS["ED50 ftUS + NAVD88",{ED50_FEET},{NAVD88}]'
+SITE = (
+    'LOCAL_CS["site",LOCAL_DATUM["site",0],UNIT["metre",1],'
+    'AXIS["X",EAST],AXIS["Y",NORTH]]'
+)
 
 
 def line_layer(*lines: str, name: str = 'lines') -> QgsVectorLayer:
@@ -414,10 +499,14 @@ class Started:
 
 
 def start_algorithm(
-    name: str, parameters: dict[str, t.Any], invalid_check: t.Any = None
+    name: str,
+    parameters: dict[str, t.Any],
+    invalid_check: t.Any = None,
+    prepared: c.Callable[[], None] | None = None,
 ) -> Started:
     """Starts a provider algorithm in a task thread, as the dock and the
-    Processing dialog do, and returns at once."""
+    Processing dialog do, and returns at once. `prepared` is called once the
+    task has prepared the algorithm on the main thread, before it starts."""
     algorithm = QgsApplication.processingRegistry().createAlgorithmById(
         f'{PROVIDER_ID}:{name}'
     )
@@ -430,6 +519,8 @@ def start_algorithm(
     task = QgsProcessingAlgRunnerTask(algorithm, parameters, context, feedback)
     outcome: list[tuple[bool, dict[str, t.Any]]] = []
     task.executed.connect(lambda ok, results: outcome.append((ok, results)))
+    if prepared is not None:
+        prepared()
     QgsApplication.taskManager().addTask(task)
     return Started(outcome, context, feedback, task)
 

@@ -12,8 +12,17 @@ from qgis.gui import QgisInterface
 
 from topology_rules.panel.dock import Dock
 
-from .helpers import add, cli_counts, click_run, queue_column, saved_layer
+from .helpers import (
+    add,
+    both_engines,
+    cli_counts,
+    click_run,
+    queue_column,
+    saved_layer,
+)
 from .test_scope import AROUND_CHAIN, look_at
+
+pytestmark = both_engines
 
 DANGLES = 'line/must-not-have-dangles'
 # Two lines that meet, and one far from them

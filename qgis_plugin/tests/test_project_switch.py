@@ -11,7 +11,7 @@ import pytest
 from qgis.core import QgsApplication, QgsProject, QgsVectorLayer
 
 from topology_rules.panel.dock import Dock
-from topology_rules.panel.groups import GROUP_NAME
+from topology_rules.panel.groups import group_name
 
 from .helpers import (
     add,
@@ -95,7 +95,7 @@ def test_the_group_of_errors_is_not_added_to_the_new_project(
 ):
     run_and_switch(dock, held, QgsProject.instance().clear, tmp_path)
     root = QgsProject.instance().layerTreeRoot()
-    assert root.findGroup(GROUP_NAME) is None
+    assert root.findGroup(group_name()) is None
 
 
 def test_the_results_are_empty_after_the_project_was_cleared(

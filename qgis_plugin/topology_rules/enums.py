@@ -20,6 +20,13 @@ class Setting(Enum):
     # Processing stores its provider settings under this prefix
     EXECUTABLE = f'Processing/Configuration/{SETTING_NAME}'
     GEOMETRY = 'TopologyRules/geometry'
+    # What runs the checks: 'automatic', 'package' or 'executable'
+    ENGINE = 'TopologyRules/engine'
+    # How the errors are drawn, for every project: what gives them their
+    # colours, how big they are, and the colour ramp as XML
+    COLOUR_BY = 'TopologyRules/colour_by'
+    SIZE = 'TopologyRules/size'
+    RAMP = 'TopologyRules/colour_ramp'
 
 
 class Group(Enum):
@@ -27,15 +34,6 @@ class Group(Enum):
     LINE = 'line'
     POLYGON = 'polygon'
     GEOMETRY = 'geometry'
-
-    @property
-    def label(self) -> str:
-        return {
-            Group.POINT: 'Points',
-            Group.LINE: 'Lines',
-            Group.POLYGON: 'Polygons',
-            Group.GEOMETRY: 'All geometries',
-        }[self]
 
     @property
     def noun(self) -> str:

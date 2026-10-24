@@ -1,22 +1,27 @@
 from __future__ import annotations
 
 import dataclasses
+import math
 import os
 import typing as t
 from pathlib import Path
 
 from qgis.core import (
+    Qgis,
+    QgsAbstractFeatureSource,
     QgsCoordinateReferenceSystem,
     QgsFeatureSource,
     QgsProject,
     QgsProviderRegistry,
     QgsRectangle,
+    QgsUnitTypes,
     QgsVectorLayer,
+    QgsVectorLayerFeatureSource,
     QgsWkbTypes,
 )
 
 from ..exceptions import RunError
-from ..utils import not_none
+from ..utils import named, not_none, tr
 from .binary import readable_extensions
 
 # Formats with several layers per file, which need the layer name. Their
@@ -28,6 +33,11 @@ CONTAINERS = {'.gpkg', '.sqlite'}
 class Dataset:
     path: str
     layer: str | None = None
+
+    @property
+    def name(self) -> str:
+        """What the dataset is called: its layer, else its file."""
+        return self.layer or Path(self.path).stem
 
     def arguments(self, layer_flag: str) -> list[str]:
         args = [self.path]
@@ -45,8 +55,8 @@ class Input:
     the selection or the limit that was asked for.
 
     An input is made on the main thread, where it asks the layer what a run
-    needs to know. A run in another thread only reads the source, which is
-    made for that, and never the layer.
+    needs to know. A run in another thread never reads the layer, which the
+    main thread can change meanwhile, but the reader.
     """
 
     name: str
@@ -69,7 +79,19 @@ class Input:
     gone: str = dataclasses.field(init=False)
     # The layer in its own file, if the tool can read it from there
     direct: Dataset | None = dataclasses.field(init=False)
+    # The source of a layer in a GeoPackage, which QGIS may have to open
+    # again to read it (see inputs.reconnect)
+    shared: str | None = dataclasses.field(init=False)
     crs: QgsCoordinateReferenceSystem = dataclasses.field(init=False)
+    # The source gives its features in the order of their ids, which a part
+    # of a layer and the new features of an edit session do not
+    ordered: bool = dataclasses.field(init=False)
+    # What the features are read from. The source of the whole layer, or of
+    # the part of it in the ids or the area, reads the layer itself, so the
+    # reader is a copy of the layer as it is now, with its unsaved edits
+    reader: QgsFeatureSource | QgsAbstractFeatureSource = dataclasses.field(
+        init=False
+    )
 
     def __post_init__(self) -> None:
         layer = self.layer
@@ -89,10 +111,20 @@ class Input:
             path=None,
             gone='',
             direct=None,
+            shared=None,
             crs=(layer.crs() if layer is not None else self.source.sourceCrs()),
+            ordered=(
+                self.whole
+                and not self.restricted
+                and (layer is None or not added_features(layer))
+            ),
+            reader=self.source,
         )
         if layer is None or not layer.isValid():
             return
+        keep(shared=geopackage_source(layer))
+        if self.whole or self.restricted:
+            keep(reader=QgsVectorLayerFeatureSource(layer))
         try:
             keep(path=layer_file(layer))
             if self.whole and not self.restricted:
@@ -110,6 +142,39 @@ class Input:
         return wkb_kind(self.source.wkbType())
 
 
+def added_features(layer: QgsVectorLayer) -> bool:
+    """Whether the layer has features that were added and not saved."""
+    buffer = layer.editBuffer()
+    return buffer is not None and bool(buffer.addedFeatures())
+
+
+def geopackage_source(layer: QgsVectorLayer) -> str | None:
+    """The source of the provider of a layer in a GeoPackage."""
+    provider = layer.dataProvider()
+    if (
+        layer.providerType() != 'ogr'
+        or provider is None
+        or provider.storageType() != 'GPKG'
+    ):
+        return None
+    return provider.dataSourceUri()
+
+
+def private_layer(source: str, name: str) -> QgsVectorLayer:
+    """A layer of the OGR source that is not in the project, which a run in
+    another thread owns.
+
+    The run reads and edits the layer and never asks for its provider. When
+    a run deletes an object that QGIS made and Python wrapped, such as a
+    provider, PyQt tells the main thread later. By then another object can
+    be at its address, and Python takes that one for deleted.
+    """
+    options = QgsVectorLayer.LayerOptions(False)
+    # No dialog or message about a missing CRS from another thread
+    options.skipCrsValidation = True
+    return QgsVectorLayer(source, name, 'ogr', options)
+
+
 def wkb_kind(wkb_type: t.Any) -> str:
     """'point', 'line' or 'polygon', and 'none' for a table."""
     return {0: 'point', 1: 'line', 2: 'polygon'}.get(
@@ -117,15 +182,33 @@ def wkb_kind(wkb_type: t.Any) -> str:
     )
 
 
+def geometry_word(kind: str) -> str:
+    """The geometry kind ('point', 'line' or 'polygon') in words."""
+    return {
+        'point': tr('point'),
+        'line': tr('line'),
+        'polygon': tr('polygon'),
+    }.get(kind, kind)
+
+
+def described(kind: str) -> str:
+    """A layer of the geometry kind, as a message names it."""
+    return {
+        'any': tr('a layer with geometries'),
+        'point': tr('a point layer'),
+        'line': tr('a line layer'),
+        'polygon': tr('a polygon layer'),
+    }.get(kind, tr('a layer without geometries'))
+
+
 def require_kind(item: Input, kind: str) -> None:
     """Raises if the input is not of the geometry kind ('any' needs one)."""
     found = item.kind
     if found == 'none' or kind not in ('any', found):
-        wanted = (
-            'a layer with geometries' if kind == 'any' else f'a {kind} layer'
-        )
         raise RunError(
-            f'{item.name} is a {found} layer, but {wanted} is needed.'
+            tr('{layer} is {found}, but {wanted} is needed.').format(
+                layer=item.name, found=described(found), wanted=described(kind)
+            )
         )
 
 
@@ -152,7 +235,11 @@ def layer_file(layer: QgsVectorLayer) -> str | None:
         return None
     path = str(uri_parts(layer).get('path') or '')
     if path and Path(path).suffix and not Path(path).exists():
-        raise RunError(f'The file of the layer {layer.name()} is gone: {path}')
+        raise RunError(
+            tr('The file of the layer {layer} is gone: {path}').format(
+                layer=layer.name(), path=path
+            )
+        )
     return path if path and Path(path).is_file() else None
 
 
@@ -185,7 +272,10 @@ def plain_dataset(layer: QgsVectorLayer) -> Dataset | None:
 
 def file_dataset(layer: QgsVectorLayer) -> Dataset | None:
     """The file behind a layer, if the tool also gives the features the ids
-    of the layer, which it does for the layers of a container."""
+    of the layer, which it does for the layers of a container. Curves are
+    exported as straight segments, which is what the tool reads."""
+    if QgsWkbTypes.isCurvedType(layer.wkbType()):
+        return None
     found = plain_dataset(layer)
     return found if found is not None and found.layer is not None else None
 
@@ -195,3 +285,89 @@ def project_layer(layer_id: str | None) -> QgsVectorLayer | None:
         return None
     layer = not_none(QgsProject.instance()).mapLayer(layer_id)
     return layer if isinstance(layer, QgsVectorLayer) else None
+
+
+# The CRS in which distances are measured
+
+
+def wkt_parts(wkt: str) -> list[str]:
+    """The parts of the outer WKT element, such as the source and target of
+    BOUNDCRS[SOURCECRS[...],TARGETCRS[...],...]."""
+    parts: list[str] = []
+    start = wkt.find('[') + 1
+    depth = 0
+    quoted = False
+    for at in range(start if start else len(wkt), len(wkt)):
+        char = wkt[at]
+        if char == '"':
+            # A quote in a text is doubled, and turns this twice
+            quoted = not quoted
+        elif quoted:
+            continue
+        elif char in '[(':
+            depth += 1
+        elif char in '])' and depth:
+            depth -= 1
+        elif char in '])' or (char == ',' and not depth):
+            parts.append(wkt[start:at].strip())
+            if char != ',':
+                break
+            start = at + 1
+    return parts
+
+
+def horizontal(
+    crs: QgsCoordinateReferenceSystem,
+) -> QgsCoordinateReferenceSystem:
+    """The CRS in which the executable measures distances: the horizontal
+    part of a compound CRS, and the source of a bound CRS, which adds a datum
+    shift to WGS 84 to it. QGIS takes a bound CRS for neither geographic nor
+    projected, and gives no units for a compound CRS with a bound part."""
+    scoped = getattr(Qgis, 'CrsWktVariant', None)
+    variant = (
+        scoped.Wkt2_2019
+        if scoped is not None
+        else named(QgsCoordinateReferenceSystem, 'WKT2_2019')
+    )
+    # A bound CRS can be the horizontal part of a compound one
+    for _ in range(3):
+        if crs.type() == Qgis.CrsType.Bound:
+            # BOUNDCRS[SOURCECRS[...],TARGETCRS[...],...]
+            source = wkt_parts(crs.toWkt(variant))[:1]
+            found = wkt_parts(source[0])[:1] if source else []
+        elif crs.type() == Qgis.CrsType.Compound:
+            # COMPOUNDCRS["name",horizontal,vertical]
+            found = wkt_parts(crs.toWkt(variant))[1:2]
+        else:
+            break
+        part = QgsCoordinateReferenceSystem.fromWkt(found[0]) if found else None
+        if part is None or not part.isValid():
+            break
+        crs = part
+    return crs
+
+
+def geographic(crs: QgsCoordinateReferenceSystem) -> bool:
+    """Whether the executable measures distances in degrees in the CRS.
+    QGIS takes only a geographic CRS of its database for geographic."""
+    found = horizontal(crs)
+    return found.isGeographic() or found.type() in (
+        Qgis.CrsType.Geographic2d,
+        Qgis.CrsType.Geographic3d,
+    )
+
+
+def default_tolerance(crs: QgsCoordinateReferenceSystem) -> float:
+    """The tolerance of a run that names none, as the executable has it:
+    1e-8 in degrees, a millimetre in a projected CRS, and none in another."""
+    if geographic(crs):
+        return 1e-8
+    found = horizontal(crs)
+    units = found.mapUnits()
+    if (
+        found.type() not in (Qgis.CrsType.Projected, Qgis.CrsType.Compound)
+        or QgsUnitTypes.unitType(units) != Qgis.DistanceUnitType.Standard
+    ):
+        return 0.0
+    metres = QgsUnitTypes.fromUnitToUnitFactor(units, Qgis.DistanceUnit.Meters)
+    return 0.001 / metres if math.isfinite(metres) and metres > 0 else 0.0

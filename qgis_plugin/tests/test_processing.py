@@ -29,10 +29,12 @@ from qgis.core import (
 
 import topology_rules
 from topology_rules.algorithms.rule import COUNT
+from topology_rules.core.engine import Engine
 from topology_rules.enums import PROVIDER_ID
 
 from .helpers import (
     Ran,
+    executable_only,
     run_algorithm,
     saved_layer,
     start_algorithm,
@@ -49,8 +51,9 @@ RULE = f'{PROVIDER_ID}:line_must_not_have_dangles'
 
 
 @pytest.fixture(autouse=True)
-def ready(executable: str, provider: object) -> None:
-    """The real executable and the provider, as in a QGIS session."""
+def ready(run_engine: Engine, executable: str, provider: object) -> None:
+    """The real executable and the provider, as in a QGIS session, and
+    each of the two engines in turn."""
 
 
 def project_layer(
@@ -169,6 +172,7 @@ def definition_file(directory: Path, wkts: tuple[str, ...]) -> Path:
     )
 
 
+@executable_only
 def test_a_model_can_start_with_check_definition(tmp_path: Path):
     definition = definition_file(tmp_path, CHAIN)
     ran = run_model(definition_model(), {'DEFINITION': str(definition)})
@@ -176,6 +180,7 @@ def test_a_model_can_start_with_check_definition(tmp_path: Path):
     assert saved_count(ran) == 2
 
 
+@executable_only
 def test_a_model_that_starts_with_check_definition_finishes_when_clean(
     tmp_path: Path,
 ):
@@ -301,6 +306,7 @@ def link_program(folder: Path, executable: str) -> None:
 
 
 @pytest.mark.slow
+@executable_only
 def test_qgis_process_runs_a_rule_of_the_plugin(
     tmp_path: Path, executable: str
 ):

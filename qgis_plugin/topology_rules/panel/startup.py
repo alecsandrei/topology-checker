@@ -5,21 +5,35 @@ import typing as t
 from qgis.PyQt import sip
 
 from .. import probing
-from ..core import binary
+from ..core import binary, engine
 from ..core.binary import Rule
-from ..exceptions import ExecutableError
+from ..core.engine import Engine
+from ..exceptions import ExecutableError, PackageError
+from ..utils import tr
 
 if t.TYPE_CHECKING:
     from .dock import Dock
 
 
 def refresh(dock: Dock) -> None:
-    """Lists the rules of the executable, or says why there are none.
+    """Lists the rules of the engine, or says why there are none, which is
+    also what follows a change of the engine.
 
-    An executable that was asked before answers at once. One that was not can
-    take seconds when it starts for the first time, so the dock says that it
-    is checking and fills in when the answer comes.
+    The package and an executable that was asked before answer at once. An
+    executable that was not can take seconds when it starts for the first
+    time, so the dock says that it is checking and fills in when the answer
+    comes.
     """
+    if engine.resolved() is Engine.PACKAGE:
+        # No answer of an executable that was asked is wanted any more
+        dock.probing = None
+        try:
+            rules = engine.package_rules()
+        except PackageError as error:
+            dock.rules_failed(error)
+            return
+        dock.rules_known(rules)
+        return
     try:
         path, modified = binary.locate()
     except ExecutableError as error:
@@ -63,4 +77,4 @@ def answered(
     elif isinstance(error, ExecutableError):
         dock.rules_failed(error)
     else:
-        dock.rules_failed(ExecutableError(str(error or 'No answer')))
+        dock.rules_failed(ExecutableError(str(error or tr('No answer'))))

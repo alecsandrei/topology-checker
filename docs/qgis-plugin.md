@@ -1,12 +1,35 @@
 # QGIS plugin
 
-**Topology Rules** adds the rules of topology-checker to QGIS. It runs the [CLI](cli.md) and does not include it. Each [rule](rules.md) is a Processing tool, and a panel runs several rules at once and lists their errors.
+**Topology Rules** adds the rules of topology-checker to QGIS. It runs the checks in the Python package or the [CLI](cli.md), and includes neither. Each [rule](rules.md) is a Processing tool, and a panel runs several rules at once and lists their errors.
 
 ## Install
 
-1. Install the [CLI](install.md#cli), 0.2.0 or newer.
-2. In QGIS 3.34 or newer, open **Plugins > Manage and Install Plugins** and install **Topology Rules**.
-3. If `topology-checker` is not on the `PATH`, choose it in the panel, or set its path under **Settings > Options > Processing > Providers > Topology Rules**.
+1. In QGIS 3.34 or newer, open **Plugins > Manage and Install Plugins** and install **Topology Rules**.
+2. Install the Python package or the CLI:
+    - **Install Python package…** in the panel's menu. It first shows the file, its size, URL and SHA-256. Then it downloads the file from PyPI, checks the SHA-256 and unpacks the package into `python/dependencies/topology_rules/<version>` in the QGIS profile. Installs nothing else. Each step goes to the **Topology Rules** log tab and to `install.log`. Needs Python 3.10 or newer, on Windows x64, macOS, or Linux x86_64. A new plugin version offers its package version; QGIS loads it after a restart.
+    - The [CLI](install.md#cli), 0.2.0 or newer. If `topology-checker` is not on the `PATH`, choose it in the panel, or set its path under **Settings > Options > Processing > Providers > Topology Rules**.
+
+### Python package by hand
+
+Use the Python of QGIS. `<profile>` is the folder that **Settings > User Profiles > Open Active Profile Folder** opens, and `<version>` is the plugin version. The panel shows the exact command.
+
+Windows, in the OSGeo4W Shell:
+
+```bat
+python -m pip install --no-deps --target "<profile>\python\dependencies\topology_rules\<version>" topology-checker==<version>
+```
+
+macOS, in Terminal:
+
+```sh
+/Applications/QGIS.app/Contents/MacOS/python -m pip install --no-deps --target "<profile>/python/dependencies/topology_rules/<version>" topology-checker==<version>
+```
+
+Linux, with pip (for example the `python3-pip` package):
+
+```sh
+python3 -m pip install --no-deps --target "<profile>/python/dependencies/topology_rules/<version>" topology-checker==<version>
+```
 
 ## Panel
 
@@ -15,7 +38,11 @@ Open **Topology Rules** from the Vector menu or the toolbar.
 1. Pick a layer and a rule, then **Add rule**. Rules that compare two layers also ask for the other layer. Repeat for more rules.
 2. **Run** checks all the ticked rules in one pass.
 
+The gear button next to **?** sets the engine for the panel and the Processing tools: **Automatic** (the Python package where QGIS can use it, else the CLI), **Python package** or **Executable**. Its menu also installs, updates or removes the Python package, and has **Choose executable…**. With only the CLI, the panel offers the package once.
+
 The errors are a tree by rule and kind. Selecting one zooms to it, highlights it and filters the map to its group. **Select features** selects the features an error is about, and **Ignore error** hides an error until you stop ignoring it, also in later runs.
+
+**Style** in the gear menu sets how errors are drawn in every project, Processing outputs included: **Colour by** rule and layer, rule, layer or one colour; **Size** small, normal or large; **Colour ramp** the default or any saved ramp, with **Invert** and **Edit…**. Invalid geometries stay red; no other group gets a colour near it. **Reset style** restores the default.
 
 Under **Options**, **Selected features only** and **Only the visible extent** limit the layer each rule checks, not the layer it is checked against. **Export…** writes the ticked rules as a `topology.toml` for the [CLI](cli.md#check-a-topology-definition), saving layers that are not files of their own in a GeoPackage next to it. **Import…** reads one. The list, the options and the ignored errors are saved with the project.
 

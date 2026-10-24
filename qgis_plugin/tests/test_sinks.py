@@ -14,6 +14,7 @@ from qgis.core import (
 )
 
 from topology_rules.algorithms.rule import COUNT
+from topology_rules.core.engine import Engine
 from topology_rules.enums import PROVIDER_ID
 
 from .helpers import (
@@ -43,8 +44,9 @@ RING = ('LINESTRING(0 0, 10 0, 10 10, 0 0)',)
 
 
 @pytest.fixture(autouse=True)
-def ready(executable: str, provider: object) -> None:
-    """The real executable and the provider, as in a QGIS session."""
+def ready(run_engine: Engine, executable: str, provider: object) -> None:
+    """The real executable and the provider, as in a QGIS session, and
+    each of the two engines in turn."""
 
 
 def project_layer(wkts: tuple[str, ...]) -> QgsVectorLayer:

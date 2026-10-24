@@ -23,17 +23,22 @@ from qgis.core import (
 )
 
 from .._typing import Parameters
-from ..core import binary
+from ..core import engine
 from ..core.checks import Job, renumber_errors, run_jobs
 from ..core.invalid import append_invalid
 from ..core.layers import Input, require_kind
-from ..utils import QgsProcessingException, double_type, named, not_none
+from ..utils import (
+    QgsProcessingException,
+    double_type,
+    named,
+    not_none,
+    tr,
+)
 from .base import (
     COUNT,
     OUTPUT,
     TOLERANCE,
     Planned,
-    executable_path,
     failures,
     free_file,
     geopackage_name,
@@ -65,14 +70,14 @@ def hidden_flags() -> t.Any:
 class Plan:
     """What the main thread found out for the run."""
 
-    executable: str
+    tool: engine.Tool
     jobs: list[Job]
     tolerance: float | None
     output: str
 
 
 class CheckRulesAlgorithm(Planned):
-    """Runs several rules on project layers in one pass of the executable.
+    """Runs several rules on project layers in one pass of the engine.
 
     The rules are a JSON list of {"rule": name, "layer": id, "other": id or
     null}, which the dock builds, so the algorithm is not in the toolbox. The
@@ -91,10 +96,10 @@ class CheckRulesAlgorithm(Planned):
         return 'check_rules'
 
     def displayName(self) -> str:
-        return 'Check rules'
+        return tr('Check rules')
 
     def group(self) -> str:
-        return 'Utilities'
+        return tr('Utilities')
 
     def groupId(self) -> str:
         return 'utilities'
@@ -103,19 +108,22 @@ class CheckRulesAlgorithm(Planned):
         return super().flags() | hidden_flags()
 
     def shortHelpString(self) -> str:
-        return 'Runs several topology rules on layers in one pass.'
+        return tr('Runs several topology rules on layers in one pass.')
 
     def initAlgorithm(self, configuration: Parameters | None = None):
         self.addParameter(
-            QgsProcessingParameterString(RULES, 'Rules', multiLine=True)
+            QgsProcessingParameterString(RULES, tr('Rules'), multiLine=True)
         )
         self.addParameter(
-            QgsProcessingParameterString(SCOPE, 'Scope', optional=True)
+            QgsProcessingParameterString(SCOPE, tr('Scope'), optional=True)
         )
         self.addParameter(
             QgsProcessingParameterNumber(
                 TOLERANCE,
-                'Tolerance in layer units (empty for the default of the CRS)',
+                tr(
+                    'Tolerance in layer units (empty for the default of the '
+                    'CRS)'
+                ),
                 double_type(),
                 optional=True,
                 minValue=0,
@@ -123,17 +131,19 @@ class CheckRulesAlgorithm(Planned):
         )
         self.addParameter(
             QgsProcessingParameterFileDestination(
-                OUTPUT, 'Errors', 'GeoPackage (*.gpkg)'
+                OUTPUT, tr('Errors'), tr('GeoPackage (*.gpkg)')
             )
         )
-        self.addOutput(QgsProcessingOutputNumber(COUNT, 'Number of errors'))
+        self.addOutput(QgsProcessingOutputNumber(COUNT, tr('Number of errors')))
         self.addOutput(
-            QgsProcessingOutputString(COUNTS, 'Errors of each rule as JSON')
+            QgsProcessingOutputString(COUNTS, tr('Errors of each rule as JSON'))
         )
         self.addOutput(
-            QgsProcessingOutputString(LAYERS, 'Layer ids by name as JSON')
+            QgsProcessingOutputString(LAYERS, tr('Layer ids by name as JSON'))
         )
-        self.addOutput(QgsProcessingOutputNumber(INVALID, 'Invalid features'))
+        self.addOutput(
+            QgsProcessingOutputNumber(INVALID, tr('Invalid features'))
+        )
 
     def prepareAlgorithm(
         self,
@@ -145,12 +155,16 @@ class CheckRulesAlgorithm(Planned):
         main thread, so that the run only has to use them."""
 
         def prepare() -> None:
-            executable = executable_path()
-            known = {rule.name: rule for rule in binary.rules()}
+            tool = engine.tool()
+            known = {rule.name: rule for rule in engine.rules(tool)}
             requested = self.parameterAsFileOutput(parameters, OUTPUT, context)
             output = geopackage_name(requested)
             if output != requested and feedback is not None:
-                feedback.pushInfo(f'The errors are written to {output}')
+                feedback.pushInfo(
+                    tr('The errors are written to {output}').format(
+                        output=output
+                    )
+                )
             scope = self.read_scope(parameters, context)
             inputs: dict[str, Input] = {}
             jobs = []
@@ -160,12 +174,14 @@ class CheckRulesAlgorithm(Planned):
                 rule = known.get(entry['rule'])
                 if rule is None:
                     raise QgsProcessingException(
-                        f'Unknown rule: {entry["rule"]}'
+                        tr('Unknown rule: {rule}').format(rule=entry['rule'])
                     )
                 other = entry.get('other')
                 if (other is None) != (rule.other is None):
                     raise QgsProcessingException(
-                        f'Wrong number of layers for {rule.name}'
+                        tr('Wrong number of layers for {rule}').format(
+                            rule=rule.name
+                        )
                     )
                 # The scope limits the layer a rule checks, not the layer it
                 # checks it against
@@ -181,7 +197,7 @@ class CheckRulesAlgorithm(Planned):
             refuse_overwrite([requested, output], inputs.values())
             release_files([output])
             self.plan = Plan(
-                executable,
+                tool,
                 jobs,
                 tolerance_of(self, parameters, context),
                 output,
@@ -204,13 +220,14 @@ class CheckRulesAlgorithm(Planned):
             output = free_file(plan.output)
             if output != plan.output:
                 feedback.pushInfo(
-                    f'{plan.output} is in use: the errors are written to '
-                    f'{output}'
+                    tr(
+                        '{file} is in use: the errors are written to {output}'
+                    ).format(file=plan.output, output=output)
                 )
             with scratch() as tmp:
                 outcome = run_jobs(
                     plan.jobs,
-                    plan.executable,
+                    plan.tool,
                     plan.tolerance,
                     output,
                     Path(tmp),
@@ -220,7 +237,7 @@ class CheckRulesAlgorithm(Planned):
             renumber_errors(output, outcome.ids)
             append_invalid(output, outcome.invalid, outcome.crs, context)
         total = sum(outcome.counts) + len(outcome.invalid)
-        feedback.pushInfo(f'{total} topology errors')
+        feedback.pushInfo(tr('{count} topology errors').format(count=total))
         return {
             OUTPUT: output,
             COUNT: total,
@@ -236,7 +253,9 @@ class CheckRulesAlgorithm(Planned):
         try:
             scope = json.loads(text) if text else {}
         except ValueError as error:
-            raise QgsProcessingException(f'Invalid scope: {error}') from error
+            raise QgsProcessingException(
+                tr('Invalid scope: {error}').format(error=error)
+            ) from error
         return scope if isinstance(scope, dict) else {}
 
     @staticmethod
@@ -264,9 +283,11 @@ class CheckRulesAlgorithm(Planned):
                 and isinstance(entry['layer'], str)
                 for entry in entries
             ):
-                raise ValueError('Expected a list of rules')
+                raise ValueError(tr('Expected a list of rules'))
         except (ValueError, KeyError, TypeError) as error:
-            raise QgsProcessingException(f'Invalid rules: {error}') from error
+            raise QgsProcessingException(
+                tr('Invalid rules: {error}').format(error=error)
+            ) from error
         return t.cast('list[dict[str, t.Any]]', entries)
 
     def read(
@@ -290,11 +311,15 @@ class CheckRulesAlgorithm(Planned):
                 # QGIS raises a bare exception for a layer it cannot read
                 name = layer.name() if layer is not None else layer_id
                 raise QgsProcessingException(
-                    f'QGIS cannot read the layer {name}; it may contain '
-                    f'infinite coordinates ({error})'
+                    tr(
+                        'QGIS cannot read the layer {name}; it may contain '
+                        'infinite coordinates ({error})'
+                    ).format(name=name, error=error)
                 ) from error
             if not isinstance(layer, QgsVectorLayer) or source is None:
-                raise QgsProcessingException(f'The layer is gone: {layer_id}')
+                raise QgsProcessingException(
+                    tr('The layer is gone: {layer}').format(layer=layer_id)
+                )
             ids, area = None, None
             if scope.get('selected') is not None:
                 ids = frozenset(

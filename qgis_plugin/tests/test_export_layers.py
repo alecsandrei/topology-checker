@@ -17,6 +17,7 @@ from topology_rules.panel.dock import Dock
 
 from .helpers import (
     add,
+    both_engines,
     cli_counts,
     click_run,
     line_layer,
@@ -32,6 +33,8 @@ from .test_definition_files import (
     filtered_layer,
     memory_layer,
 )
+
+pytestmark = both_engines
 
 
 def narrowed(data: Path) -> QgsVectorLayer:

@@ -20,6 +20,7 @@ from topology_rules.panel.dock import Dock
 
 from .helpers import (
     add,
+    both_engines,
     click_run,
     message_text,
     node_text,
@@ -29,6 +30,8 @@ from .helpers import (
     saved_layer,
     shown,
 )
+
+pytestmark = both_engines
 
 DANGLES = 'line/must-not-have-dangles'
 # Two lines meeting at a node, 1 and 2, and a line far from them, 3

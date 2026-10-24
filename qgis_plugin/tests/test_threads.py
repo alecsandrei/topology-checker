@@ -23,9 +23,11 @@ from qgis.PyQt.QtCore import QThread
 from qgis.PyQt.QtWidgets import QApplication
 
 from topology_rules.core import binary
+from topology_rules.core.engine import Engine
 from topology_rules.enums import Setting
 
 from .helpers import (
+    executable_only,
     line_layer,
     refresh_to_fake_tool,
     run_algorithm,
@@ -43,8 +45,9 @@ Call = tuple[str, bool]
 
 
 @pytest.fixture(autouse=True)
-def ready(executable: str, provider: object) -> None:
-    """The real executable and the provider, as in a QGIS session."""
+def ready(run_engine: Engine, executable: str, provider: object) -> None:
+    """The real executable and the provider, as in a QGIS session, and
+    each of the two engines in turn."""
 
 
 @pytest.fixture
@@ -85,7 +88,7 @@ def calls(monkeypatch: pytest.MonkeyPatch) -> list[Call]:
     original_value = QgsSettings.value
 
     def value(self: QgsSettings, key: str, *args: t.Any, **kwargs: t.Any):
-        if key == Setting.EXECUTABLE.value:
+        if key in (Setting.EXECUTABLE.value, Setting.ENGINE.value):
             recorded.append(('settings', on_main()))
         return original_value(self, key, *args, **kwargs)
 
@@ -133,10 +136,10 @@ def run_utility(tmp_path: Path):
     )
 
 
+# The runs of both engines; the executable alone runs a definition
 RUNS: dict[str, c.Callable[[Path], t.Any]] = {
     'rule': run_rule,
     'check_rules': run_check_rules,
-    'check_definition': run_check_definition,
     'utility': run_utility,
 }
 
@@ -151,7 +154,17 @@ def test_a_task_calls_qgis_only_on_the_main_thread(
     assert off_thread == []
 
 
-@pytest.mark.parametrize('kind', ['rule', 'check_rules', 'utility'])
+@executable_only
+def test_a_check_of_a_definition_calls_qgis_only_on_the_main_thread(
+    tmp_path: Path, calls: list[Call]
+):
+    ran = run_check_definition(tmp_path)
+    assert ran.ok, ran.log
+    off_thread = [label for label, main in calls if not main]
+    assert off_thread == []
+
+
+@pytest.mark.parametrize('kind', RUNS)
 def test_a_task_does_take_its_layers_while_it_is_prepared(
     kind: str, tmp_path: Path, calls: list[Call]
 ):
@@ -175,6 +188,7 @@ def marker(directory: Path, name: str) -> Path:
 
 
 @pytest.mark.parametrize('kind', ['rule', 'check_rules'])
+@executable_only
 def test_a_run_uses_the_executable_set_just_before_it_starts(
     kind: str,
     tmp_path: Path,

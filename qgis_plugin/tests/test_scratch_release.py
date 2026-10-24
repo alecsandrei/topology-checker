@@ -15,6 +15,7 @@ from qgis.core import QgsProject, QgsVectorLayer
 from qgis.PyQt import sip
 
 from topology_rules.algorithms import utilities
+from topology_rules.core.engine import Engine
 from topology_rules.provider import Provider
 
 from .helpers import line_layer, run_algorithm
@@ -24,8 +25,9 @@ CHAIN = ('LINESTRING(0 0, 10 0)', 'LINESTRING(10 0, 20 0)')
 
 
 @pytest.fixture(autouse=True)
-def ready(executable: str, provider: Provider) -> None:
-    """The real executable and the provider, as in a QGIS session."""
+def ready(run_engine: Engine, executable: str, provider: Provider) -> None:
+    """The real executable and the provider, as in a QGIS session, and
+    each of the two engines in turn."""
 
 
 @pytest.fixture

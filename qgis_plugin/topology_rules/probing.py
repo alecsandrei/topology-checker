@@ -34,7 +34,7 @@ def ask_in_task(
     ) -> None:
         failure = error or (result if isinstance(result, Exception) else None)
         if failure is None and result is None:
-            failure = ExecutableError('No answer')
+            failure = ExecutableError(tr('No answer'))
         rules = None if failure is not None else result
         answered(rules if isinstance(rules, tuple) else None, failure)
 

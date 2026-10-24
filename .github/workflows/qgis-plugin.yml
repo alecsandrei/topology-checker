@@ -4,9 +4,9 @@ on:
   push:
     branches: [master]
     tags: ['v*']
-    paths: ['qgis_plugin/**', 'crates/cli/**', 'crates/core/**', 'crates/io/**', 'Cargo.toml', 'Cargo.lock', '.cargo/**', '.github/workflows/qgis-plugin.yml']
+    paths: ['qgis_plugin/**', 'crates/cli/**', 'crates/core/**', 'crates/io/**', 'crates/python/**', 'python/**', 'pyproject.toml', 'Cargo.toml', 'Cargo.lock', '.cargo/**', '.github/workflows/qgis-plugin.yml']
   pull_request:
-    paths: ['qgis_plugin/**', 'crates/cli/**', 'crates/core/**', 'crates/io/**', 'Cargo.toml', 'Cargo.lock', '.cargo/**', '.github/workflows/qgis-plugin.yml']
+    paths: ['qgis_plugin/**', 'crates/cli/**', 'crates/core/**', 'crates/io/**', 'crates/python/**', 'python/**', 'pyproject.toml', 'Cargo.toml', 'Cargo.lock', '.cargo/**', '.github/workflows/qgis-plugin.yml']
 
 permissions:
   contents: read
@@ -117,6 +117,29 @@ jobs:
           path: target/release/topology-checker
           if-no-files-found: error
 
+  # The Python package of this commit, built as python.yml builds it, which
+  # the tests in the ltr and stable images also run the checks with
+  wheel:
+    name: Build the Python package
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: PyO3/maturin-action@v1
+        with:
+          command: build
+          maturin-version: '1.15.0'
+          target: x86_64
+          args: --release --locked --out dist
+          manylinux: '2014'
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: topology-checker-wheel
+          path: dist/*.whl
+          if-no-files-found: error
+
   # The QGIS images: 3.34 is the oldest that the plugin supports, `ltr` is the
   # long term release (3.44 now, Qt5), and `stable` is the newest release
   # (4.2 now, Qt6). `expected` is the major version that the tag must ship,
@@ -159,9 +182,11 @@ jobs:
       - name: Pyright
         run: uv run pyright
 
+  # The 3.34 image tests the plugin without the Python package, as Windows
+  # does, and the others with it
   test:
     name: Pytest (QGIS ${{ matrix.qgis }})
-    needs: cli
+    needs: [cli, wheel]
     runs-on: ubuntu-latest
     # A task that never ends should fail the run, not hold it for hours
     timeout-minutes: 30
@@ -173,10 +198,13 @@ jobs:
         include:
           - qgis: 3.34-noble
             expected: '3'
+            package: false
           - qgis: ltr
             expected: ''
+            package: true
           - qgis: stable
             expected: '4'
+            package: true
     env:
       UV_LINK_MODE: copy
       QT_QPA_PLATFORM: offscreen
@@ -202,11 +230,29 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked
 
+      - uses: actions/download-artifact@v4
+        if: matrix.package
+        with:
+          name: topology-checker-wheel
+          path: wheel
+
+      # Into a folder on the path, as the plugin installs it, without
+      # dependencies. The plugin must find it, or its tests fail
+      - name: Install the Python package
+        if: matrix.package
+        run: |
+          uv pip install --no-deps --target "$GITHUB_WORKSPACE/package" "$GITHUB_WORKSPACE"/wheel/*.whl
+          echo "PYTHONPATH=$GITHUB_WORKSPACE/package${PYTHONPATH:+:$PYTHONPATH}" >> "$GITHUB_ENV"
+          PYTHONPATH="$GITHUB_WORKSPACE/package${PYTHONPATH:+:$PYTHONPATH}" uv run python -c "from topology_rules.core import engine; print(engine.describe(engine.find_package()))"
+
       # All the tests, the slow ones too (`-m ""` replaces the default of
       # pyproject.toml). `-ra` lists why each test failed or was skipped, the
       # slowest tests are shown, and a test stuck for ten minutes dumps the
-      # stacks of all the threads
+      # stacks of all the threads. With the package installed, its tests fail
+      # rather than skip where the plugin cannot use it
       - name: Pytest
+        env:
+          TOPOLOGY_CHECKER_PACKAGE: ${{ matrix.package && '1' || '' }}
         run: |
           chmod +x "$GITHUB_WORKSPACE/bin/topology-checker"
           TOPOLOGY_CHECKER="$GITHUB_WORKSPACE/bin/topology-checker" uv run pytest -m "" -ra --durations=30 -o faulthandler_timeout=600

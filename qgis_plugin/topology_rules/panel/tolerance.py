@@ -3,6 +3,7 @@ from __future__ import annotations
 from qgis.core import QgsVectorLayer
 from qgis.gui import QgsDoubleSpinBox
 
+from ..core.layers import default_tolerance, geographic
 from ..utils import tr
 from .entries import Entry, project_layer
 
@@ -42,15 +43,13 @@ def tolerance_box() -> QgsDoubleSpinBox:
 def show_unit(box: QgsDoubleSpinBox, first: Entry | None) -> None:
     """Distances are in the units of the first layer of the list."""
     box.setSuffix(f' {first.unit}' if first and first.unit else '')
-    box.setSpecialValueText(
-        default_tolerance(first and project_layer(first.layer))
-    )
+    box.setSpecialValueText(default_text(first and project_layer(first.layer)))
 
 
-def default_tolerance(layer: QgsVectorLayer | None) -> str:
+def default_text(layer: QgsVectorLayer | None) -> str:
     """What the tool does without a tolerance, for the CRS of the layer."""
-    if layer is None or not layer.crs().isValid():
+    if layer is None or not default_tolerance(layer.crs()):
         return tr('Default')
-    if layer.crs().isGeographic():
+    if geographic(layer.crs()):
         return tr('Default (1e-8°)')
     return tr('Default (1 mm)')
