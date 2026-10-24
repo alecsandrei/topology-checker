@@ -7,10 +7,13 @@ import typing as t
 from pathlib import Path
 
 import pytest
-from qgis.core import Qgis, QgsProject
+from qgis.core import Qgis, QgsApplication, QgsProject
 from qgis.PyQt.QtWidgets import QProgressBar, QTabWidget
 
+from topology_rules.core import binary, engine, folders
+from topology_rules.core.engine import Package
 from topology_rules.panel.dock import Dock
+from topology_rules.utils import not_none
 
 from .helpers import (
     add,
@@ -48,6 +51,35 @@ def running(
     dock.run_button.click()
     assert dock.task is not None
     return dock
+
+
+@pytest.fixture
+def logged() -> c.Iterator[list[str]]:
+    """What reaches the Topology Rules tab of the Log Messages panel."""
+    found: list[str] = []
+
+    def received(message: str, tag: str, *rest: object) -> None:
+        if tag == folders.TAG:
+            found.append(message)
+
+    log = not_none(QgsApplication.messageLog())
+    # The signal that the panel listens to, which QGIS 4 renamed
+    signal = getattr(log, 'messageReceivedWithFormat', log.messageReceived)
+    signal.connect(received)
+    yield found
+    signal.disconnect(received)
+
+
+def test_a_run_logs_its_engine(dock: Dock, tmp_path: Path, logged: list[str]):
+    add(dock, DANGLES, lines(tmp_path, CHAIN))
+    click_run(dock)
+    used = engine.tool()
+    line = engine.describe(used)
+    assert logged.count(line) == 1
+    if isinstance(used, Package):
+        assert f' {used.version} ({used.location})' in line
+    else:
+        assert line.endswith(f'{used} {binary.version(used)}')
 
 
 def test_the_dock_opens_on_rules_with_a_plain_errors_tab(dock: Dock):

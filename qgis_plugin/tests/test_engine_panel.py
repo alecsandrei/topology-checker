@@ -42,7 +42,7 @@ from topology_rules.panel.menu import PanelMenu
 from topology_rules.provider import Provider
 from topology_rules.utils import not_none
 
-from .helpers import message_text, real_executable, wait_for
+from .helpers import fake_executable, message_text, real_executable, wait_for
 from .test_install import Index, load_from, trickle, version_folder
 from .test_wrapping import NARROW
 from .wheel_helpers import (
@@ -348,7 +348,7 @@ def test_a_package_that_qgis_can_use_can_be_chosen(usable: Package):
     menu.fill()
     package = menu.engines[Engine.PACKAGE]
     assert package.isEnabled()
-    assert package.text() == 'Python package'
+    assert package.text() == f'Python package ({VERSION})'
     assert package.toolTip() == (
         f'topology-checker {VERSION} in {usable.location}'
     )
@@ -363,7 +363,17 @@ def test_why_the_package_could_not_be_chosen_goes_once_it_can(
     menu.aboutToShow.emit()
     package = menu.engines[Engine.PACKAGE]
     assert package.isEnabled()
-    assert package.text() == 'Python package'
+    assert package.text() == f'Python package ({VERSION})'
+
+
+def test_a_package_without_a_version_shows_its_name(
+    monkeypatch: pytest.MonkeyPatch, home: Path
+):
+    found = Package('', home / VERSION / 'topology_checker')
+    monkeypatch.setattr(engine, 'find_package', lambda: found)
+    menu = PanelMenu()
+    menu.fill()
+    assert menu.engines[Engine.PACKAGE].text() == 'Python package'
 
 
 def test_the_executable_cannot_be_chosen_without_one(
@@ -379,12 +389,90 @@ def test_the_executable_cannot_be_chosen_without_one(
 
 
 def test_the_executable_can_be_chosen_with_one(executable: str):
+    # The version is asked after the rules
+    binary.rules()
+    wait_for(lambda: binary.version(executable) != '')
     menu = PanelMenu()
     menu.fill()
     action = menu.engines[Engine.EXECUTABLE]
     assert action.isEnabled()
-    assert action.text() == 'Executable'
+    version = binary.version(executable)
+    assert action.text().startswith(f'Executable ({version}, ')
     assert action.toolTip() == str(Path(executable))
+
+
+@pytest.fixture
+def user_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A home folder of the test, on POSIX and on Windows."""
+    folder = tmp_path / 'home'
+    folder.mkdir()
+    monkeypatch.setenv('HOME', str(folder))
+    monkeypatch.setenv('USERPROFILE', str(folder))
+    return folder
+
+
+def executable_item(
+    folder: Path, configure: c.Callable[[str | Path], None]
+) -> tuple[Path, str, str]:
+    """A tool in the folder that has not said its version, and the text and
+    the tip of its item in the menu."""
+    folder.mkdir(parents=True, exist_ok=True)
+    path = fake_executable(folder)
+    configure(path)
+    menu = PanelMenu()
+    menu.fill()
+    action = menu.engines[Engine.EXECUTABLE]
+    return path, action.text(), action.toolTip()
+
+
+@pytest.fixture
+def wide(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A menu wide enough for the whole path of a test."""
+    monkeypatch.setattr('topology_rules.panel.menu.PATH_WIDTH', 1000)
+
+
+@pytest.mark.usefixtures('wide')
+def test_the_executable_shows_its_path(
+    user_home: Path,
+    tmp_path: Path,
+    configure: c.Callable[[str | Path], None],
+):
+    path, text, tip = executable_item(tmp_path / 'tools', configure)
+    assert text == f'Executable ({path})'
+    assert tip == str(path)
+
+
+def test_the_path_of_the_executable_starts_at_home(
+    user_home: Path, configure: c.Callable[[str | Path], None]
+):
+    path, text, tip = executable_item(user_home / 'bin', configure)
+    shown = Path('~', 'bin', path.name)
+    assert text == f'Executable ({shown})'
+    assert tip == str(path)
+
+
+def test_a_long_path_of_the_executable_is_cut_in_the_middle(
+    user_home: Path,
+    tmp_path: Path,
+    configure: c.Callable[[str | Path], None],
+):
+    path, text, tip = executable_item(tmp_path / ('long' * 40), configure)
+    assert '…' in text
+    assert len(text) < len(str(path))
+    assert text.startswith(f'Executable ({str(path)[:4]}')
+    assert text.endswith(f'{path.name})')
+    assert tip == str(path)
+
+
+@pytest.mark.usefixtures('wide')
+def test_an_ampersand_in_the_path_is_shown(
+    user_home: Path,
+    tmp_path: Path,
+    configure: c.Callable[[str | Path], None],
+):
+    path, text, _ = executable_item(tmp_path / 'R&D', configure)
+    shown = str(path).replace('&', '&&')
+    assert text == f'Executable ({shown})'
 
 
 def test_automatic_is_always_there_to_choose(
@@ -536,6 +624,37 @@ def test_the_executable_can_be_chosen_from_the_menu(
     wait_for(lambda: bare.probing is None)
     assert QgsSettings().value(Setting.EXECUTABLE.value) == executable
     assert bare.setup_page.isHidden()
+
+
+def asked_folder(dock: Dock, monkeypatch: pytest.MonkeyPatch) -> str:
+    """The folder that Choose executable… opens, which is cancelled."""
+    asked: list[tuple[t.Any, ...]] = []
+    monkeypatch.setattr(
+        QFileDialog,
+        'getOpenFileName',
+        lambda *args, **kwargs: asked.append(args) or ('', ''),
+    )
+    dock.menu.choose_action.trigger()
+    (folder,) = [args[2] for args in asked]
+    return folder
+
+
+def test_choose_executable_opens_in_the_folder_of_the_one_in_use(
+    bare: Dock,
+    tmp_path: Path,
+    configure: c.Callable[[str | Path], None],
+    monkeypatch: pytest.MonkeyPatch,
+):
+    folder = tmp_path / 'tools'
+    folder.mkdir()
+    configure(fake_executable(folder))
+    assert asked_folder(bare, monkeypatch) == str(folder)
+
+
+def test_choose_executable_opens_anywhere_without_one(
+    bare: Dock, monkeypatch: pytest.MonkeyPatch
+):
+    assert asked_folder(bare, monkeypatch) == ''
 
 
 def test_remove_deletes_the_package_and_refreshes(

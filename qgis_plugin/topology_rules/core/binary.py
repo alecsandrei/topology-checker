@@ -145,8 +145,40 @@ def configured_path() -> str:
     return os.path.expanduser(text)
 
 
+def cargo_bin() -> Path | None:
+    """The folder that `cargo install` puts programs in, under the root that
+    Cargo installs to: CARGO_INSTALL_ROOT, else CARGO_HOME, else `~/.cargo`.
+    QGIS started from the macOS Dock has no PATH of the shell, so the folder
+    is not on its PATH."""
+    for name in ('CARGO_INSTALL_ROOT', 'CARGO_HOME'):
+        root = os.environ.get(name)
+        if root:
+            return Path(root) / 'bin'
+    try:
+        return Path.home() / '.cargo' / 'bin'
+    except RuntimeError:
+        # No home folder to be found
+        return None
+
+
+def cargo_installed() -> Path | None:
+    """The executable that `cargo install` put in Cargo's bin folder, if
+    there is one that can be run."""
+    folder = cargo_bin()
+    if folder is None:
+        return None
+    name = EXECUTABLE_NAME
+    if sys.platform == 'win32':
+        name = f'{name}.exe'
+    path = folder / name
+    if path.is_file() and os.access(path, os.X_OK):
+        return path
+    return None
+
+
 def find_executable() -> Path:
-    """The configured executable, or the one on the PATH."""
+    """The configured executable, else the one on the PATH, else the one in
+    Cargo's bin folder."""
     configured = configured_path()
     if configured:
         path = Path(configured)
@@ -174,17 +206,21 @@ def find_executable() -> Path:
             )
         return path
     found = shutil.which(EXECUTABLE_NAME)
-    if found is None:
+    if found is not None:
+        return Path(found)
+    installed = cargo_installed()
+    if installed is None:
         # Said where nothing else offers a way: the panel has its own
         raise MissingError(
             tr(
                 'topology-checker was not found. Install the Python package '
-                'from the Topology Rules panel, or set the path of the '
+                "from the Topology Rules panel, run 'cargo install "
+                "topology-checker --locked', or set the path of the "
                 'executable under Settings > Options > Processing > '
                 'Providers > Topology Rules.'
             )
         )
-    return Path(found)
+    return installed
 
 
 def known(name: str) -> bool:

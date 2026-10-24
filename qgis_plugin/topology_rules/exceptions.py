@@ -6,7 +6,8 @@ class ExecutableError(Exception):
 
 
 class MissingError(ExecutableError):
-    """No topology-checker executable is set, and none is on the PATH."""
+    """No topology-checker executable is set, and none is on the PATH or in
+    Cargo's bin folder."""
 
 
 class PackageError(ExecutableError):
