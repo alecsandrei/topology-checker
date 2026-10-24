@@ -104,6 +104,32 @@ def hand_over(real: str) -> str:
     return f'os.execv({real!r}, [{real!r}, *sys.argv[1:]])\n'
 
 
+# The end of a script that prints, as `--json validate` does, the report of
+# a run of the definition that is in `config` which finds no errors
+NO_ERRORS_REPORT = r"""
+import json, re
+checked = re.findall(
+    r'^rule = "([^"]*)"\nlayer = "([^"]*)"(?:\nother = "([^"]*)")?$',
+    config,
+    re.M,
+)
+print(json.dumps({
+    'tolerance': 0.0,
+    'rules': [
+        {
+            'spec': {'rule': rule, 'layer': 0, 'other': 1 if other else None},
+            'layer': layer,
+            'other': other or None,
+            'counts': {},
+            'errors': [],
+        }
+        for rule, layer, other in checked
+    ],
+    'warnings': [],
+}))
+"""
+
+
 def fake_executable(directory: Path, rules: object = None) -> Path:
     """A script that prints the rules for `--json rules` and fails otherwise."""
     path = directory / 'topology-checker'
@@ -272,7 +298,14 @@ def process_alive(number: int) -> bool:
         return False
     except PermissionError:
         return True
-    return True
+    # A process that has ended is there until its parent reaps it. One whose
+    # parent ended first is reaped by the first process of the system, which
+    # in a container may never do it
+    try:
+        stat = Path(f'/proc/{number}/stat').read_text()
+    except OSError:
+        return True
+    return stat.rpartition(')')[2].split()[:1] != ['Z']
 
 
 def gated_executable(

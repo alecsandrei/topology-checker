@@ -15,6 +15,7 @@ from topology_rules.core import inputs
 from topology_rules.panel.dock import Dock
 
 from .helpers import (
+    NO_ERRORS_REPORT,
     RULES,
     add,
     click_run,
@@ -51,7 +52,6 @@ for alias, path, name in entries:
         error += 'invalid polygon: self-intersection'
         print(json.dumps({'error': error}), file=sys.stderr)
         sys.exit(2)
-print(json.dumps({'rules': [{'counts': {}}] * config.count('[[rules]]')}))
 """
 
 
@@ -80,7 +80,11 @@ def rejecting(
     which is checked against `other`, a layer in a file."""
     wait_for(lambda: dock.probing is None)
     configure(
-        script_executable(tmp_path, 'import json\n' + REJECTING, rules=[RULE])
+        script_executable(
+            tmp_path,
+            'import json\n' + REJECTING + NO_ERRORS_REPORT,
+            rules=[RULE],
+        )
     )
     dock.refresh()
     wait_for(lambda: dock.probing is None and dock.available)

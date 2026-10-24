@@ -22,6 +22,7 @@ from qgis.core import (
 from topology_rules.panel.dock import Dock
 
 from .helpers import (
+    NO_ERRORS_REPORT,
     add,
     both_engines,
     calls,
@@ -180,7 +181,6 @@ for number, (blob,) in enumerate(rows, start=1):
         error += ': coordinates must be finite'
         print(json.dumps({'error': error}), file=sys.stderr)
         sys.exit(2)
-print(json.dumps({'rules': [{'counts': {}}] * config.count('[[rules]]')}))
 """
 
 
@@ -191,7 +191,7 @@ def counted(
     """A dock whose tool writes each call to a log, which is returned."""
     wait_for(lambda: dock.probing is None)
     log = tmp_path / 'calls'
-    body = f'import json\nLOG = {str(log)!r}\n{CHECKING}'
+    body = f'import json\nLOG = {str(log)!r}\n{CHECKING}{NO_ERRORS_REPORT}'
     configure(script_executable(tmp_path, body, rules=TOOL_RULES))
     dock.refresh()
     wait_for(lambda: dock.probing is None and dock.available)
