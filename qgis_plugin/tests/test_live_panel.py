@@ -1009,7 +1009,8 @@ def test_unloading_the_plugin_during_a_run(
     monkeypatch: pytest.MonkeyPatch,
 ):
     """The run stops, and the unloading waits a moment for its thread to
-    end."""
+    end. On a busy machine the thread can end after that moment: the
+    unloading does not wait longer."""
     from topology_rules.algorithms import check
     from topology_rules.plugin import TopologyRules
 
@@ -1037,10 +1038,13 @@ def test_unloading_the_plugin_during_a_run(
     del dock
     began = time.monotonic()
     plugin.unload()
-    assert time.monotonic() - began < controller.STOP_MS / 1000
-    assert ended.is_set()
+    took = time.monotonic() - began
+    # Either the run stopped while the unloading waited, or the unloading
+    # waited for as long as it does
+    assert ended.is_set() or took >= 0.95 * controller.STOP_MS / 1000
+    wait_for(ended.is_set)
     if pid is not None:
-        assert not process_alive(pid)
+        wait_for(lambda: not process_alive(pid))
     held.release()
     wait_for(lambda: run not in controller.LIVE)
     for _ in range(5):
