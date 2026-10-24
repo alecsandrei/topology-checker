@@ -23,23 +23,23 @@ from qgis.core import (
 )
 from qgis.gui import QgisInterface
 
-from topology_rules.core import binary, engine
+from topology_rules.core import binary, engine, folders
 from topology_rules.core.checks import Job, run_jobs
 from topology_rules.core.engine import Engine, Package
 from topology_rules.core.layers import Input
 from topology_rules.enums import Setting
 from topology_rules.exceptions import ExecutableError, PackageError, RunError
-from topology_rules.panel import startup
 from topology_rules.panel.dock import Dock
 from topology_rules.provider import Provider
 
 from .helpers import (
+    NEEDS_PACKAGE,
     Ran,
-    choose_engine,
     errors_layer,
     line_layer,
     run_algorithm,
     start_algorithm,
+    usable_package,
     wait_for,
 )
 
@@ -142,6 +142,23 @@ def test_the_choice_is_kept(chosen: Engine):
     assert QgsSettings().value(Setting.ENGINE.value) == chosen.value
 
 
+def test_the_choice_is_written_for_the_tasks():
+    """A task reads the settings on a thread of its own."""
+    engine.choose(Engine.PACKAGE)
+    text = Path(QgsSettings().fileName()).read_text(encoding='utf-8')
+    assert 'engine=package' in text
+
+
+def test_choosing_no_engine_lists_the_rules_again(provider: Provider):
+    """As after what the engine runs changed."""
+    engine.choose(Engine.AUTOMATIC)
+    loaded: list[bool] = []
+    provider.algorithmsLoaded.connect(lambda: loaded.append(True))
+    engine.choose()
+    assert loaded == [True]
+    assert engine.chosen() is Engine.AUTOMATIC
+
+
 def test_automatic_is_the_default():
     QgsSettings().remove(Setting.ENGINE.value)
     assert engine.chosen() is Engine.AUTOMATIC
@@ -153,7 +170,7 @@ def test_a_choice_that_is_not_known_is_automatic():
 
 
 def test_the_executable_is_kept_with_the_package(package: Package):
-    choose_engine(Engine.EXECUTABLE)
+    engine.choose(Engine.EXECUTABLE)
     assert engine.resolved() is Engine.EXECUTABLE
 
 
@@ -161,7 +178,7 @@ def test_the_executable_is_kept_with_the_package(package: Package):
 
 
 def test_automatic_is_the_package_where_it_can_be_imported(package: Package):
-    choose_engine(Engine.AUTOMATIC)
+    engine.choose(Engine.AUTOMATIC)
     assert engine.resolved() is Engine.PACKAGE
     assert engine.package() == package
 
@@ -170,7 +187,7 @@ def test_automatic_is_the_executable_without_the_package(
     monkeypatch: pytest.MonkeyPatch,
 ):
     without_package(monkeypatch)
-    choose_engine(Engine.AUTOMATIC)
+    engine.choose(Engine.AUTOMATIC)
     assert engine.package() is None
     assert engine.resolved() is Engine.EXECUTABLE
 
@@ -181,7 +198,7 @@ def test_automatic_is_the_executable_with_a_package_that_is_too_old(
     old = types.ModuleType(engine.MODULE)
     old.__file__ = str(Path('somewhere', engine.MODULE, '__init__.py'))
     monkeypatch.setitem(sys.modules, engine.MODULE, old)
-    choose_engine(Engine.AUTOMATIC)
+    engine.choose(Engine.AUTOMATIC)
     assert engine.resolved() is Engine.EXECUTABLE
     with pytest.raises(
         PackageError, match=r'too old .* no Topology\.add_layer'
@@ -201,6 +218,129 @@ def test_a_package_that_gives_no_wkb_of_the_errors_is_too_old(
     monkeypatch.setitem(sys.modules, engine.MODULE, package_module(Violation))
     with pytest.raises(PackageError, match=r'too old .* no Violation\.wkb'):
         engine.find_package()
+
+
+def too_old(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A package that has none of what the plugin uses."""
+    old = types.ModuleType(engine.MODULE)
+    old.__file__ = str(Path('somewhere', engine.MODULE, '__init__.py'))
+    monkeypatch.setitem(sys.modules, engine.MODULE, old)
+
+
+def restart_to_load(monkeypatch: pytest.MonkeyPatch, version: str) -> None:
+    """The plugin installed the version while QGIS runs an older one."""
+    monkeypatch.setattr(folders, 'installed', lambda: version)
+    monkeypatch.setattr(folders, 'restart_needed', lambda: True)
+
+
+def broken(monkeypatch: pytest.MonkeyPatch, folder: Path) -> None:
+    """A package whose native part is not there, as a wheel of another
+    platform."""
+    package = folder / engine.MODULE
+    package.mkdir(parents=True)
+    (package / '__init__.py').write_text('from . import _native\n')
+    for name in list(sys.modules):
+        if name.split('.')[0] == engine.MODULE:
+            monkeypatch.delitem(sys.modules, name)
+    monkeypatch.setattr(sys, 'path', [str(folder), *sys.path])
+
+
+def brief(error: pytest.ExceptionInfo[PackageError]) -> str:
+    return error.value.brief
+
+
+def test_a_package_that_is_not_there_is_not_installed(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    without_package(monkeypatch)
+    with pytest.raises(PackageError) as raised:
+        engine.find_package()
+    assert brief(raised) == 'not installed'
+
+
+def test_a_package_that_fails_to_import_does_not_load(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    broken(monkeypatch, tmp_path)
+    with pytest.raises(PackageError, match='cannot be imported') as raised:
+        engine.find_package()
+    assert brief(raised) == 'does not load'
+
+
+def test_a_package_without_what_the_plugin_uses_is_too_old(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    too_old(monkeypatch)
+    with pytest.raises(PackageError) as raised:
+        engine.find_package()
+    assert brief(raised) == 'too old'
+
+
+def test_an_old_package_with_a_new_one_installed_needs_a_restart(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    too_old(monkeypatch)
+    restart_to_load(monkeypatch, '9.9.9')
+    with pytest.raises(
+        PackageError, match=r'Restart QGIS to load 9\.9\.9'
+    ) as raised:
+        engine.find_package()
+    assert brief(raised) == 'restart QGIS'
+
+
+@pytest.mark.usefixtures('marked')
+def test_why_the_package_cannot_be_imported_is_translated(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    without_package(monkeypatch)
+    with pytest.raises(PackageError) as raised:
+        engine.find_package()
+    assert str(raised.value).startswith(
+        '<The topology-checker Python package cannot be imported: import of '
+    )
+    assert str(raised.value).endswith('>')
+    assert brief(raised) == '<not installed>'
+
+
+@pytest.mark.usefixtures('marked')
+def test_why_the_package_is_too_old_is_translated(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    too_old(monkeypatch)
+    restart_to_load(monkeypatch, '9.9.9')
+    with pytest.raises(PackageError) as raised:
+        engine.find_package()
+    folder = Path('somewhere', engine.MODULE)
+    assert str(raised.value) == (
+        f'<<The topology-checker Python package at {folder} is too old for '
+        'the plugin: it has no Topology.add_layer.> Restart QGIS to load '
+        '9.9.9.>'
+    )
+    assert brief(raised) == '<restart QGIS>'
+
+
+@pytest.mark.parametrize('needed', [False, True], ids=['skips', 'fails'])
+@pytest.mark.parametrize('old', [False, True], ids=['missing', 'too old'])
+def test_the_tests_of_the_package_fail_without_it_where_they_need_it(
+    monkeypatch: pytest.MonkeyPatch, needed: bool, old: bool
+):
+    """A run that is to test the package cannot pass by skipping them."""
+    if old:
+        module = types.ModuleType(engine.MODULE)
+        module.__file__ = str(Path('somewhere', engine.MODULE, '__init__.py'))
+        monkeypatch.setitem(sys.modules, engine.MODULE, module)
+    else:
+        without_package(monkeypatch)
+    if needed:
+        monkeypatch.setenv(NEEDS_PACKAGE, '1')
+    else:
+        monkeypatch.delenv(NEEDS_PACKAGE, raising=False)
+    reason = 'too old' if old else 'cannot be imported'
+    with pytest.raises(
+        pytest.fail.Exception if needed else pytest.skip.Exception,
+        match=reason,
+    ):
+        usable_package()
 
 
 @pytest.mark.parametrize('field', [True, False], ids=['field', 'property'])
@@ -230,7 +370,7 @@ def test_the_package_chosen_without_it_says_why(
     monkeypatch: pytest.MonkeyPatch,
 ):
     without_package(monkeypatch)
-    choose_engine(Engine.PACKAGE)
+    engine.choose(Engine.PACKAGE)
     assert engine.resolved() is Engine.PACKAGE
     with pytest.raises(PackageError, match='cannot be imported'):
         engine.tool()
@@ -263,7 +403,7 @@ def test_a_package_installed_while_qgis_runs_is_used(
     hide_package(monkeypatch, package)
     folder = tmp_path / 'dependencies'
     monkeypatch.setattr(sys, 'path', [str(folder), *sys.path])
-    choose_engine(Engine.AUTOMATIC)
+    engine.choose(Engine.AUTOMATIC)
     assert engine.package() is None
     before = dangles()
     assert before.ok, before.log
@@ -300,7 +440,7 @@ def test_the_log_names_the_executable_and_the_command(
 def test_the_log_names_the_package(
     executable: str, provider: Provider, package: Package
 ):
-    choose_engine(Engine.PACKAGE)
+    engine.choose(Engine.PACKAGE)
     ran = dangles()
     assert ran.ok, ran.log
     assert ran.log.splitlines()[0] == (
@@ -320,7 +460,7 @@ def test_no_executable_is_looked_for_with_the_package(
         raise ExecutableError('The executable was looked for')
 
     monkeypatch.setattr(binary, 'find_executable', unused)
-    choose_engine(Engine.PACKAGE)
+    engine.choose(Engine.PACKAGE)
     ran = dangles()
     assert ran.ok, ran.log
     assert ran.results['COUNT'] == 2
@@ -344,7 +484,7 @@ def test_the_package_runs_without_shapely_and_pyproj(
             monkeypatch.delitem(sys.modules, module)
     monkeypatch.setitem(sys.modules, 'shapely', None)
     monkeypatch.setitem(sys.modules, 'pyproj', None)
-    choose_engine(Engine.PACKAGE)
+    engine.choose(Engine.PACKAGE)
     layer = line_layer(*CHAIN)
     QgsProject.instance().addMapLayer(layer)
     ran = run_algorithm(name, {'INPUT': layer.id(), output: 'memory:'})
@@ -361,7 +501,7 @@ def package_only(
 ) -> Package:
     """The package, and no executable to be found."""
     monkeypatch.setenv('PATH', str(tmp_path / 'nothing'))
-    choose_engine(Engine.PACKAGE)
+    engine.choose(Engine.PACKAGE)
     return package
 
 
@@ -404,11 +544,11 @@ def test_switching_the_engine_lists_its_rules(
         dock.refresh()
         assert dock.available
         # There is no executable to switch to
-        startup.switch(dock, Engine.EXECUTABLE)
+        dock.reload(Engine.EXECUTABLE)
         assert engine.chosen() is Engine.EXECUTABLE
         assert not dock.available
         assert not provider.algorithms()
-        startup.switch(dock, Engine.AUTOMATIC)
+        dock.reload(Engine.AUTOMATIC)
         assert dock.available
         assert provider.algorithms()
     finally:
@@ -454,7 +594,7 @@ def test_a_run_of_the_package_stops_between_two_errors(
 def test_a_canceled_run_of_the_package_ends(
     executable: str, provider: Provider, package: Package
 ):
-    choose_engine(Engine.PACKAGE)
+    engine.choose(Engine.PACKAGE)
     lines = line_layer(*segments(20000))
     QgsProject.instance().addMapLayer(lines)
     started = start_algorithm(DANGLES, {'INPUT': lines.id()})

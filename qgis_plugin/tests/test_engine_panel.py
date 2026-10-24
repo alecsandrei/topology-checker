@@ -42,7 +42,7 @@ from topology_rules.panel.menu import PanelMenu
 from topology_rules.provider import Provider
 from topology_rules.utils import not_none
 
-from .helpers import choose_engine, message_text, real_executable, wait_for
+from .helpers import message_text, real_executable, wait_for
 from .test_install import Index, load_from, trickle, version_folder
 from .test_wrapping import NARROW
 from .wheel_helpers import (
@@ -107,7 +107,7 @@ def no_package(monkeypatch: pytest.MonkeyPatch) -> None:
     """QGIS cannot import the package."""
 
     def missing() -> Package:
-        raise PackageError(MISSING)
+        raise PackageError(MISSING, 'not installed')
 
     monkeypatch.setattr(engine, 'find_package', missing)
 
@@ -258,14 +258,17 @@ def row_of(layout: QLayout, widget: QWidget) -> list[QWidget | None]:
 # The menu
 
 
-def test_the_menu_has_the_engines_then_the_installs_then_the_style():
+def test_the_menu_has_the_engines_then_the_installs_then_the_style(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    monkeypatch.setenv('PATH', str(tmp_path / 'nothing'))
     menu = PanelMenu()
     menu.fill()
     assert texts(menu) == [
         'Engine',
         'Automatic',
-        'Python package',
-        'Executable',
+        'Python package (not installed)',
+        'Executable (not found)',
         '---',
         'Install Python package…',
         'Choose executable…',
@@ -299,7 +302,7 @@ def test_the_engines_have_a_title_where_the_style_draws_no_sections(
 
 @pytest.mark.parametrize('chosen', list(Engine), ids=[e.value for e in Engine])
 def test_the_chosen_engine_is_checked(chosen: Engine):
-    choose_engine(chosen)
+    engine.choose(chosen)
     menu = PanelMenu()
     menu.fill()
     assert [action.isChecked() for action in menu.engines.values()] == [
@@ -313,8 +316,31 @@ def test_the_package_cannot_be_chosen_where_qgis_cannot_use_it():
     menu.fill()
     package = menu.engines[Engine.PACKAGE]
     assert not package.isEnabled()
+    assert package.text() == 'Python package (not installed)'
     assert package.toolTip() == MISSING
     assert package.statusTip() == MISSING
+
+
+@pytest.mark.parametrize(
+    ('brief', 'text'),
+    [
+        ('too old', 'Python package (too old)'),
+        ('restart QGIS', 'Python package (restart QGIS)'),
+        ('', 'Python package (unavailable)'),
+    ],
+)
+def test_the_menu_says_briefly_why_the_package_cannot_be_chosen(
+    monkeypatch: pytest.MonkeyPatch, brief: str, text: str
+):
+    def unusable() -> Package:
+        raise PackageError('The whole reason', brief)
+
+    monkeypatch.setattr(engine, 'find_package', unusable)
+    menu = PanelMenu()
+    menu.fill()
+    package = menu.engines[Engine.PACKAGE]
+    assert package.text() == text
+    assert package.toolTip() == 'The whole reason'
 
 
 def test_a_package_that_qgis_can_use_can_be_chosen(usable: Package):
@@ -322,9 +348,22 @@ def test_a_package_that_qgis_can_use_can_be_chosen(usable: Package):
     menu.fill()
     package = menu.engines[Engine.PACKAGE]
     assert package.isEnabled()
+    assert package.text() == 'Python package'
     assert package.toolTip() == (
         f'topology-checker {VERSION} in {usable.location}'
     )
+
+
+def test_why_the_package_could_not_be_chosen_goes_once_it_can(
+    monkeypatch: pytest.MonkeyPatch, home: Path
+):
+    menu = PanelMenu()
+    menu.fill()
+    make_usable(monkeypatch, home)
+    menu.aboutToShow.emit()
+    package = menu.engines[Engine.PACKAGE]
+    assert package.isEnabled()
+    assert package.text() == 'Python package'
 
 
 def test_the_executable_cannot_be_chosen_without_one(
@@ -335,6 +374,7 @@ def test_the_executable_cannot_be_chosen_without_one(
     menu.fill()
     action = menu.engines[Engine.EXECUTABLE]
     assert not action.isEnabled()
+    assert action.text() == 'Executable (not found)'
     assert action.toolTip() == 'topology-checker was not found.'
 
 
@@ -343,6 +383,7 @@ def test_the_executable_can_be_chosen_with_one(executable: str):
     menu.fill()
     action = menu.engines[Engine.EXECUTABLE]
     assert action.isEnabled()
+    assert action.text() == 'Executable'
     assert action.toolTip() == str(Path(executable))
 
 
@@ -363,7 +404,24 @@ def test_the_install_says_why_this_qgis_cannot_use_the_package(
     menu.fill()
     assert menu.install_action.isVisible()
     assert not menu.install_action.isEnabled()
+    assert menu.install_action.text() == (
+        'Install Python package (needs Python 3.10)'
+    )
     assert menu.install_action.toolTip() == old_python
+
+
+def test_the_install_can_be_offered_again_once_this_qgis_can_use_it(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    menu = PanelMenu()
+    with monkeypatch.context() as patched:
+        patched.setattr(platform, 'python_version', lambda: '3.9.18')
+        menu.fill()
+    menu.fill()
+    assert menu.install_action.isEnabled()
+    assert menu.install_action.text() == 'Install Python package…'
+    # Without a tip of its own, an item has its text as one
+    assert 'Needs Python' not in menu.install_action.toolTip()
 
 
 def test_an_installed_package_can_be_removed_and_not_installed(home: Path):
@@ -438,6 +496,16 @@ def test_choosing_an_engine_saves_it_and_refreshes(
     assert refreshes == ['toolbox', 'panel']
 
 
+def test_the_menu_tells_only_of_another_engine():
+    menu = PanelMenu()
+    menu.fill()
+    chosen: list[Engine] = []
+    menu.engine_chosen.connect(chosen.append)
+    menu.group.triggered.emit(menu.engines[Engine.EXECUTABLE])
+    menu.group.triggered.emit(menu.engines[Engine.AUTOMATIC])
+    assert chosen == [Engine.AUTOMATIC]
+
+
 def test_choosing_the_engine_that_is_chosen_changes_nothing(
     dock: Dock, refreshes: list[str]
 ):
@@ -499,7 +567,7 @@ def test_removing_the_chosen_package_goes_back_to_automatic(
     dock: Dock, home: Path, bar: t.Any, refreshes: list[str]
 ):
     version_folder(home, VERSION)
-    choose_engine(Engine.PACKAGE)
+    engine.choose(Engine.PACKAGE)
     refreshes.clear()
     dock.menu.fill()
     dock.menu.remove_action.trigger()
@@ -531,7 +599,7 @@ def test_an_install_refreshes_the_toolbox_and_the_panel(
 def test_an_install_that_keeps_the_engine_refreshes_the_toolbox(
     dock: Dock, published: tuple[Index, bytes], refreshes: list[str]
 ):
-    choose_engine(Engine.AUTOMATIC)
+    engine.choose(Engine.AUTOMATIC)
     refreshes.clear()
     dock.menu.fill()
     dock.menu.install_action.trigger()
@@ -748,15 +816,19 @@ def test_an_install_over_a_loaded_package_needs_a_restart(
 
 
 def test_installing_uses_the_package_instead_of_the_chosen_executable(
-    published: tuple[Index, bytes],
+    bare: Dock, published: tuple[Index, bytes]
 ):
-    install_in(open_dialog())
+    bare.install_package()
+    install_in(not_none_dialog(bare))
     assert engine.chosen() is Engine.AUTOMATIC
 
 
-def test_installing_keeps_the_package_chosen(published: tuple[Index, bytes]):
-    choose_engine(Engine.PACKAGE)
-    install_in(open_dialog())
+def test_installing_keeps_the_package_chosen(
+    bare: Dock, published: tuple[Index, bytes]
+):
+    engine.choose(Engine.PACKAGE)
+    bare.install_package()
+    install_in(not_none_dialog(bare))
     assert engine.chosen() is Engine.PACKAGE
 
 
@@ -895,7 +967,7 @@ def test_closing_the_panel_stops_the_install(
 
 
 def offered_dock(dock: Dock) -> Dock:
-    choose_engine(Engine.AUTOMATIC)
+    engine.choose(Engine.AUTOMATIC)
     dock.refresh()
     return dock
 
@@ -921,21 +993,21 @@ def test_a_chosen_executable_is_not_offered_the_package(dock: Dock):
 
 
 def test_the_package_is_offered_only_where_it_can_be_installed(home: Path):
-    choose_engine(Engine.AUTOMATIC)
+    engine.choose(Engine.AUTOMATIC)
     assert offer.wanted()
     version_folder(home, VERSION)
     assert not offer.wanted()
 
 
 def test_a_package_that_qgis_has_is_not_offered(usable: Package):
-    choose_engine(Engine.AUTOMATIC)
+    engine.choose(Engine.AUTOMATIC)
     assert not offer.wanted()
 
 
 def test_a_qgis_that_cannot_use_the_package_is_not_offered_it(
     old_python: str,
 ):
-    choose_engine(Engine.AUTOMATIC)
+    engine.choose(Engine.AUTOMATIC)
     assert not offer.wanted()
 
 
@@ -1019,7 +1091,7 @@ def test_the_setup_page_says_what_is_missing(bare: Dock):
 
 
 def test_the_setup_page_says_why_the_package_cannot_run(bare: Dock):
-    choose_engine(Engine.PACKAGE)
+    engine.choose(Engine.PACKAGE)
     bare.refresh()
     assert bare.setup_page.status.text() == MISSING
 

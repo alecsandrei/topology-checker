@@ -4,6 +4,7 @@ import collections.abc as c
 from pathlib import Path
 
 from qgis.core import (
+    QgsCoordinateReferenceSystem,
     QgsFeatureRequest,
     QgsLayerTreeGroup,
     QgsProject,
@@ -12,12 +13,16 @@ from qgis.core import (
 
 from ..core.commands import ERROR_LAYERS
 from ..core.style import STYLED, ColourBy, Legend, style_layer
-from ..utils import not_none
+from ..utils import not_none, tr
 
-GROUP_NAME = 'Topology errors'
 # Marks the group and the layers that the plugin added, so that a group of
 # the user with the same name is left alone
 PROPERTY = 'topology_rules/errors'
+
+
+def group_name() -> str:
+    """The name of the group of the error layers in the layer tree."""
+    return tr('Topology errors')
 
 
 def remove_errors() -> None:
@@ -39,13 +44,16 @@ def remove_errors() -> None:
 
 
 def add_errors(
-    path: Path, legends: c.Mapping[ColourBy, Legend]
+    path: Path,
+    legends: c.Mapping[ColourBy, Legend],
+    crs: QgsCoordinateReferenceSystem,
 ) -> list[QgsVectorLayer]:
     """Adds the error layers of a run that have errors, in a group on top,
-    drawn by the groups of the run."""
+    drawn by the groups of the run. They are in the CRS of the run, which the
+    executable may write to the file as another one."""
     project = not_none(QgsProject.instance())
     group = not_none(
-        not_none(project.layerTreeRoot()).insertGroup(0, GROUP_NAME)
+        not_none(project.layerTreeRoot()).insertGroup(0, group_name())
     )
     group.setCustomProperty(PROPERTY, True)
     layers: list[QgsVectorLayer] = []
@@ -57,6 +65,8 @@ def add_errors(
         # A copy in memory, which the map can filter and count, and which
         # does not point into a folder that Processing empties
         layer = not_none(found.materialize(QgsFeatureRequest()))
+        if crs.isValid():
+            layer.setCrs(crs)
         layer.setName(f'{kind.capitalize()} errors')
         layer.setCustomProperty(PROPERTY, True)
         style_layer(layer, legends)

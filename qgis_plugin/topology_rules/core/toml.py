@@ -4,6 +4,8 @@ import importlib
 import types
 import typing as t
 
+from ..utils import tr
+
 
 class TomlUnavailable(Exception):
     """The Python of QGIS has no TOML reader: it is older than 3.11."""
@@ -18,8 +20,10 @@ def parser() -> types.ModuleType:
         except ImportError:
             continue
     raise TomlUnavailable(
-        'Reading topology.toml needs Python 3.11 or newer. '
-        'The Python of this QGIS is older.'
+        tr(
+            'Reading topology.toml needs Python 3.11 or newer. '
+            'The Python of this QGIS is older.'
+        )
     )
 
 

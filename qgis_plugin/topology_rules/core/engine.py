@@ -19,7 +19,8 @@ from qgis.core import QgsApplication, QgsSettings
 
 from ..enums import PROVIDER_ID, Setting
 from ..exceptions import PackageError
-from . import binary
+from ..utils import tr
+from . import binary, folders
 
 if t.TYPE_CHECKING:
     from .binary import Rule
@@ -71,10 +72,17 @@ def chosen() -> Engine:
         return Engine.AUTOMATIC
 
 
-def choose(engine: Engine) -> None:
-    """Has the engine run the checks from now on, and the toolbox list its
-    rules."""
-    QgsSettings().setValue(Setting.ENGINE.value, engine.value)
+def choose(engine: Engine | None = None) -> None:
+    """What follows a change of the engine, or of what it runs: keeps the
+    engine that is given for the checks from now on, then has the toolbox
+    list the rules of the engine. The panel does this with Dock.reload, which
+    lists them in the panel too."""
+    if engine is not None:
+        settings = QgsSettings()
+        settings.setValue(Setting.ENGINE.value, engine.value)
+        # A task reads the setting on a thread of its own, which sees only
+        # what is in the file
+        settings.sync()
     registry = QgsApplication.processingRegistry()
     provider = None if registry is None else registry.providerById(PROVIDER_ID)
     if provider is not None:
@@ -114,16 +122,30 @@ def find_package() -> Package:
     try:
         module = importlib.import_module(MODULE)
     except ImportError as error:
+        absent = isinstance(error, ModuleNotFoundError) and error.name == MODULE
         raise PackageError(
-            f'The topology-checker Python package cannot be imported: {error}'
+            tr(
+                'The topology-checker Python package cannot be imported: '
+                '{error}'
+            ).format(error=error),
+            tr('not installed') if absent else tr('does not load'),
         ) from error
     location = Path(str(module.__file__)).parent
     lacking = missing(module)
     if lacking is not None:
-        raise PackageError(
-            f'The topology-checker Python package at {location} is too old '
-            f'for the plugin: it has no {lacking}.'
-        )
+        message = tr(
+            'The topology-checker Python package at {folder} is too old for '
+            'the plugin: it has no {name}.'
+        ).format(folder=location, name=lacking)
+        brief = tr('too old')
+        # The one that was installed while QGIS runs loads at the next start
+        installed = folders.installed()
+        if installed is not None and folders.restart_needed():
+            message = tr('{message} Restart QGIS to load {version}.').format(
+                message=message, version=installed
+            )
+            brief = tr('restart QGIS')
+        raise PackageError(message, brief)
     return Package(version_at(location), location)
 
 
@@ -170,9 +192,9 @@ def rules(used: Tool) -> tuple[Rule, ...]:
 def describe(used: Tool) -> str:
     """The engine of a run, as the log names it."""
     if isinstance(used, Package):
-        version = f' {used.version}' if used.version else ''
-        return (
-            f'Engine: Python package {DISTRIBUTION}{version} ({used.location})'
+        package = ' '.join(filter(None, (DISTRIBUTION, used.version)))
+        return tr('Engine: Python package {package} ({location})').format(
+            package=package, location=used.location
         )
-    version = binary.version(used)
-    return f'Engine: executable {used}{f" {version}" if version else ""}'
+    executable = ' '.join(filter(None, (used, binary.version(used))))
+    return tr('Engine: executable {executable}').format(executable=executable)

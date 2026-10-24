@@ -24,11 +24,12 @@ from pathlib import Path
 import pytest
 from qgis.core import Qgis, QgsApplication, QgsNetworkAccessManager
 from qgis.gui import QgisInterface
-from qgis.PyQt.QtCore import QCoreApplication
+from qgis.PyQt.QtCore import QCoreApplication, QUrl
 from qgis.PyQt.QtNetwork import QNetworkReply, QNetworkRequest
 
 import topology_rules
-from topology_rules.core import folders, install, wheels
+from topology_rules.core import engine, folders, install, wheels
+from topology_rules.exceptions import PackageError
 from topology_rules.utils import not_none
 
 from .helpers import wait_for
@@ -421,6 +422,21 @@ def test_a_server_error_after_an_answer_fails_with_its_status(pypi: Index):
         f'Cannot fetch {pypi.url}/pypi/topology-checker/{VERSION}/json: '
         'HTTP 503 Service Unavailable'
     ]
+
+
+def test_downloads_are_kept_out_of_the_network_cache(
+    published: tuple[Index, bytes],
+):
+    pypi, _ = published
+    release = find()
+    outcome = run(install.InstallTask(release))
+    assert outcome.done == [VERSION]
+    cache = not_none(QgsNetworkAccessManager.instance().cache())
+    for url in (
+        f'{pypi.url}/pypi/topology-checker/{VERSION}/json',
+        release.url,
+    ):
+        assert not cache.metaData(QUrl(url)).isValid(), url
 
 
 def test_no_network_fails_with_the_error(
@@ -904,6 +920,25 @@ def test_a_package_from_elsewhere_needs_no_restart(
     assert not install.restart_needed()
     version_folder(home, VERSION)
     assert install.restart_needed()
+
+
+def test_a_package_too_old_that_is_loaded_says_to_restart(
+    home: Path, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    """The package that QGIS loaded stays loaded when another is installed,
+    until QGIS restarts."""
+    loaded = fake_module('topology_checker', '0.2.1')
+    loaded.__file__ = str(tmp_path / 'site-packages' / 'topology_checker.py')
+    monkeypatch.setitem(sys.modules, 'topology_checker', loaded)
+    with pytest.raises(PackageError) as before:
+        engine.find_package()
+    assert str(before.value).endswith('it has no Topology.add_layer.')
+    version_folder(home, VERSION)
+    with pytest.raises(PackageError) as after:
+        engine.find_package()
+    assert str(after.value) == (
+        f'{before.value} Restart QGIS to load {VERSION}.'
+    )
 
 
 # Remove

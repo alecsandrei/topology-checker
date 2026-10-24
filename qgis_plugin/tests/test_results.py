@@ -22,6 +22,7 @@ from topology_rules.panel.dock import Dock
 
 from .helpers import (
     add,
+    add_features,
     both_engines,
     cell,
     click_run,
@@ -273,6 +274,17 @@ def test_there_is_no_cap_on_the_errors(dock: Dock, tmp_path: Path):
 
 
 # The map follows the selection in the tree
+
+
+@pytest.mark.parametrize('crs', ['EPSG:32633', 'ESRI:102100'])
+def test_the_errors_are_in_the_crs_of_the_layer(dock: Dock, crs: str):
+    """The executable writes some CRSs to its file as others."""
+    roads = QgsVectorLayer(f'LineString?crs={crs}', 'roads', 'memory')
+    add_features(roads, CHAIN)
+    QgsProject.instance().addMapLayer(roads)
+    add(dock, DANGLES, roads)
+    click_run(dock)
+    assert error_layer('point').crs() == roads.crs()
 
 
 def visible(geometry: str) -> int:

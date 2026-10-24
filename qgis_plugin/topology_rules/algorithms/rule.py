@@ -18,7 +18,8 @@ from ..core.binary import Rule
 from ..core.checks import Job, run_jobs
 from ..core.layers import Input, require_kind
 from ..core.style import ErrorStyle
-from ..utils import QgsProcessingException, not_none, source_type
+from ..enums import Group
+from ..utils import QgsProcessingException, not_none, source_type, tr
 from .base import (
     COUNT,
     INPUT,
@@ -89,17 +90,21 @@ class RuleAlgorithm(SinkAlgorithm):
         return self.rule.display_name
 
     def group(self) -> str:
-        return self.rule.group.label
+        return {
+            Group.POINT: tr('Points'),
+            Group.LINE: tr('Lines'),
+            Group.POLYGON: tr('Polygons'),
+            Group.GEOMETRY: tr('All geometries'),
+        }[self.rule.group]
 
     def groupId(self) -> str:
         return self.rule.group.value
 
     def shortHelpString(self) -> str:
-        return (
-            f'{self.rule.description}\n\nTakes {self.needs()}. The tolerance '
-            'is in the units of the input layer; leave it empty for the '
-            'default of its CRS.'
-        )
+        return tr(
+            '{description}\n\nTakes {layers}. The tolerance is in the units '
+            'of the input layer; leave it empty for the default of its CRS.'
+        ).format(description=self.rule.description, layers=self.needs())
 
     def helpUrl(self) -> str:
         return HELP_URL
@@ -115,35 +120,41 @@ class RuleAlgorithm(SinkAlgorithm):
         """The layers that the rule takes, as the help says it."""
 
         def layer(kind: str) -> str:
-            return 'layer' if kind == 'any' else f'{kind} layer'
+            return {
+                'point': tr('point layer'),
+                'line': tr('line layer'),
+                'polygon': tr('polygon layer'),
+            }.get(kind, tr('layer'))
 
         if self.rule.other is None:
-            return f'one {layer(self.rule.layer)}'
-        return f'a {layer(self.rule.layer)} and a {layer(self.rule.other)}'
+            return tr('one {layer}').format(layer=layer(self.rule.layer))
+        return tr('a {layer} and a {other}').format(
+            layer=layer(self.rule.layer), other=layer(self.rule.other)
+        )
 
     def initAlgorithm(self, configuration: Parameters | None = None):
         self.addParameter(
             QgsProcessingParameterFeatureSource(
-                INPUT, 'Input layer', layer_types(self.rule.layer)
+                INPUT, tr('Input layer'), layer_types(self.rule.layer)
             )
         )
         if self.rule.other is not None:
             self.addParameter(
                 QgsProcessingParameterFeatureSource(
-                    OTHER, 'Other layer', layer_types(self.rule.other)
+                    OTHER, tr('Other layer'), layer_types(self.rule.other)
                 )
             )
         self.addParameter(
             QgsProcessingParameterDistance(
                 TOLERANCE,
-                'Tolerance (empty for the default of the CRS)',
+                tr('Tolerance (empty for the default of the CRS)'),
                 parentParameterName=INPUT,
                 optional=True,
                 minValue=0,
             )
         )
         self.add_sinks()
-        self.addOutput(QgsProcessingOutputNumber(COUNT, 'Number of errors'))
+        self.addOutput(QgsProcessingOutputNumber(COUNT, tr('Number of errors')))
 
     def prepareAlgorithm(
         self,
@@ -205,7 +216,7 @@ class RuleAlgorithm(SinkAlgorithm):
                     self.rule.display_name,
                 )
         count = sum(outcome.counts) + len(outcome.invalid)
-        feedback.pushInfo(f'{count} topology errors')
+        feedback.pushInfo(tr('{count} topology errors').format(count=count))
         return {**results, COUNT: count}
 
     def read(

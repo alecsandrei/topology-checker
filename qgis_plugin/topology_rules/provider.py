@@ -24,6 +24,7 @@ from .core.binary import Rule
 from .core.engine import Engine
 from .enums import PROVIDER_ID, SETTING_NAME, Asset
 from .exceptions import ExecutableError, PackageError
+from .utils import tr
 
 
 class Provider(QgsProcessingProvider):
@@ -47,7 +48,7 @@ class Provider(QgsProcessingProvider):
             Setting(
                 self.name(),
                 SETTING_NAME,
-                'Path to the topology-checker executable',
+                tr('Path to the topology-checker executable'),
                 '',
                 valuetype=Setting.FILE,
             )
@@ -125,6 +126,6 @@ class Provider(QgsProcessingProvider):
             return
         self.probing = self.task = None
         if rules is None:
-            self.log(str(error or 'topology-checker gave no answer'))
+            self.log(str(error or tr('topology-checker gave no answer')))
             return
         self.refreshAlgorithms()

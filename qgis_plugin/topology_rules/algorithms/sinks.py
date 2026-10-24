@@ -16,42 +16,51 @@ from qgis.core import (
 from .._typing import Parameters
 from ..core.checks import ID_COLUMNS, IdMap, source_id
 from ..core.invalid import Invalid, error_fields
+from ..core.layers import geometry_word
 from ..core.style import ErrorStyle
-from ..utils import QgsProcessingException, source_type
+from ..utils import QgsProcessingException, source_type, tr
 from .base import Planned
 
 # What Processing calls a layer that is not saved
 TEMPORARY_OUTPUT = 'TEMPORARY_OUTPUT'
 
 # The sink of each geometry the errors can have: its name, the layer of the
-# tool and the geometry that is written, with the type and label for Processing
+# tool and the geometry that is written, with the type for Processing
 SINKS = (
-    ('ERRORS_POINT', 'point', 'MultiPoint', 'VectorPoint', 'Point errors'),
-    (
-        'ERRORS_LINE',
-        'line',
-        'MultiLineString',
-        'VectorLine',
-        'Line errors',
-    ),
-    (
-        'ERRORS_POLYGON',
-        'polygon',
-        'MultiPolygon',
-        'VectorPolygon',
-        'Polygon errors',
-    ),
+    ('ERRORS_POINT', 'point', 'MultiPoint', 'VectorPoint'),
+    ('ERRORS_LINE', 'line', 'MultiLineString', 'VectorLine'),
+    ('ERRORS_POLYGON', 'polygon', 'MultiPolygon', 'VectorPolygon'),
 )
+
+
+def sink_label(kind: str) -> str:
+    """The name of the sink of the errors of the geometry, in Processing."""
+    return {
+        'point': tr('Point errors'),
+        'line': tr('Line errors'),
+        'polygon': tr('Polygon errors'),
+    }[kind]
+
+
+def loaded_name(title: str, kind: str) -> str:
+    """The name of the layer of the errors of the geometry that a run of
+    the tool loads, such as 'Lines must not have dangles (line)'."""
+    return tr('{title} ({geometry})').format(
+        title=title, geometry=geometry_word(kind)
+    )
 
 
 class SinkAlgorithm(Planned):
     """An algorithm whose errors come out as a sink for each geometry."""
 
     def add_sinks(self) -> None:
-        for name, _, _, sink_type, label in SINKS:
+        for name, kind, _, sink_type in SINKS:
             self.addParameter(
                 QgsProcessingParameterFeatureSink(
-                    name, label, source_type(sink_type), TEMPORARY_OUTPUT
+                    name,
+                    sink_label(kind),
+                    source_type(sink_type),
+                    TEMPORARY_OUTPUT,
                 )
             )
 
@@ -80,7 +89,7 @@ class SinkAlgorithm(Planned):
         names = fields.names()
         results: dict[str, t.Any] = {}
         destinations: list[tuple[str, int]] = []
-        for name, kind, geometry, _, _ in SINKS:
+        for name, kind, geometry, _ in SINKS:
             sink, destination = self.parameterAsSink(
                 parameters,
                 name,
@@ -115,7 +124,9 @@ class SinkAlgorithm(Planned):
                         copy, QgsFeatureSink.Flag.FastInsert
                     ):
                         raise QgsProcessingException(
-                            f'Could not write the {kind} errors'
+                            tr('Could not write the {kind} errors').format(
+                                kind=geometry_word(kind)
+                            )
                         )
                     written += 1
             for item in invalid:
@@ -154,7 +165,7 @@ class SinkAlgorithm(Planned):
             context.addLayerToLoadOnCompletion(
                 destination,
                 QgsProcessingContext.LayerDetails(
-                    f'{title} ({kind})', context.project(), name
+                    loaded_name(title, kind), context.project(), name
                 ),
             )
             # The details of the context own the style, so the style is

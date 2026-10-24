@@ -22,12 +22,13 @@ from qgis.core import (
     QgsProcessingContext,
     QgsProcessingFeatureSource,
     QgsProcessingFeedback,
+    QgsProviderRegistry,
     QgsVectorFileWriter,
     QgsWkbTypes,
 )
 
 from ..exceptions import RunError
-from ..utils import QgsCsException, named, not_none
+from ..utils import QgsCsException, named, not_none, tr
 from .layers import Dataset, Input, wkb_kind
 
 # How many features are read by their ids, or written, at once
@@ -145,6 +146,46 @@ def features(
     return t.cast('c.Iterable[QgsFeature]', source.getFeatures(request))
 
 
+def reconnect(item: Input) -> bool:
+    """Makes QGIS open the GeoPackage of the input again, and says whether
+    it did.
+
+    QGIS keeps the connection of a read that could not open a GeoPackage
+    and reads no feature through it from then on, without an error. A read
+    fails so when it opens the file while an edit session starts or ends, as
+    the map does when it draws the layer. A provider of its own reloads the
+    file, which drops those connections and leaves the layer, its selection
+    and its edits as they are.
+    """
+    if item.shared is None:
+        return False
+    provider = not_none(QgsProviderRegistry.instance()).createProvider(
+        'ogr', item.shared
+    )
+    if provider is None or not provider.isValid():
+        return False
+    provider.reloadData()
+    return True
+
+
+def read_features(
+    item: Input, request: QgsFeatureRequest, saved: bool = True
+) -> c.Iterator[QgsFeature]:
+    """The features of the reader for the request, read again after a
+    reconnect where none of the saved ones came and the request can give
+    some (saved). The new features of an edit session, whose ids are
+    negative, are in QGIS and not in the file, so they come once."""
+    found = False
+    for feature in features(item.reader, request):
+        found = found or feature.id() >= 0
+        yield feature
+    if found or not saved or not reconnect(item):
+        return
+    for feature in features(item.reader, request):
+        if feature.id() >= 0:
+            yield feature
+
+
 def aborts_on_invalid(context: QgsProcessingContext) -> bool:
     """Whether the user asked to stop at the first invalid geometry."""
     scoped = getattr(Qgis, 'InvalidGeometryCheck', None)
@@ -172,7 +213,9 @@ def require_readable(item: Input) -> None:
     """Raises if the data of the input cannot be read."""
     if not item.valid:
         raise RunError(
-            f'The layer {item.name} is not valid, its data cannot be read.'
+            tr(
+                'The layer {layer} is not valid, its data cannot be read.'
+            ).format(layer=item.name)
         )
     if item.gone:
         raise RunError(item.gone)
@@ -199,7 +242,9 @@ def reprojection(
     if target is None or not moves(crs, target):
         return None
     feedback.pushInfo(
-        f'Reprojecting {item.name} from {crs.authid()} to {target.authid()}'
+        tr('Reprojecting {layer} from {source} to {target}').format(
+            layer=item.name, source=crs.authid(), target=target.authid()
+        )
     )
     return QgsCoordinateTransform(crs, target, context.transformContext())
 
@@ -218,7 +263,9 @@ def geometries(
                 geometry.transform(transform)
             except QgsCsException as error:
                 raise RunError(
-                    f'Could not reproject {item.name}: {error}'
+                    tr('Could not reproject {layer}: {error}').format(
+                        layer=item.name, error=error
+                    )
                 ) from error
         yield feature.id(), geometry
 
@@ -242,13 +289,17 @@ def chosen(
         request = QgsFeatureRequest()
         request.setSubsetOfAttributes([])
         if batch is None:
-            found = features(item.reader, request)
+            found = read_features(item, request)
         else:
             request.setFilterFids(batch)
-            found = sorted(features(item.reader, request), key=QgsFeature.id)
+            # The ids are in order, so the last is saved if any one is
+            found = sorted(
+                read_features(item, request, batch[-1] >= 0),
+                key=QgsFeature.id,
+            )
         for feature in found:
             if feedback.isCanceled():
-                raise RunError('Canceled')
+                raise RunError(tr('Canceled'))
             yield feature
 
 
@@ -272,7 +323,7 @@ def wanted(item: Input) -> list[int] | None:
     )
     return sorted(
         feature.id()
-        for feature in features(item.reader, request)
+        for feature in read_features(item, request)
         if item.ids is None or feature.id() in item.ids
     )
 
@@ -296,7 +347,11 @@ def write(
 ) -> None:
     """Writes the features of the batch to the export, and empties it."""
     if batch and not writer.addFeatures(batch):
-        raise RunError(f'Could not export {name}: {writer.errorMessage()}')
+        raise RunError(
+            tr('Could not export {layer}: {error}').format(
+                layer=name, error=writer.errorMessage()
+            )
+        )
     batch.clear()
 
 
@@ -348,7 +403,11 @@ def export_dataset(
         writer.hasError() != QgsVectorFileWriter.WriterError.NoError
     ):
         message = '' if writer is None else writer.errorMessage()
-        raise RunError(f'Could not export {item.name}: {message}')
+        raise RunError(
+            tr('Could not export {layer}: {error}').format(
+                layer=item.name, error=message
+            )
+        )
     ids: list[int] = []
     skipped: list[Skipped] = []
     batch: list[QgsFeature] = []
@@ -384,6 +443,9 @@ def prepare(
     """The file for the tool: the layer's own file where that serves, else an
     export of the features, which leaves out those the tool would reject."""
     require_readable(item)
+    # A connection that QGIS broke earlier hides features from the run, and
+    # from the map
+    reconnect(item)
     found = own_file(item, target)
     if direct and not skip and found is not None:
         return Prepared(found)

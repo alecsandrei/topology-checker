@@ -36,15 +36,6 @@ class Group(Enum):
     GEOMETRY = 'geometry'
 
     @property
-    def label(self) -> str:
-        return {
-            Group.POINT: 'Points',
-            Group.LINE: 'Lines',
-            Group.POLYGON: 'Polygons',
-            Group.GEOMETRY: 'All geometries',
-        }[self]
-
-    @property
     def noun(self) -> str:
         """What the rules of the group are about, to start their names."""
         return {

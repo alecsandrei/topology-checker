@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import typing as t
 
-from qgis.core import QgsApplication, QgsSettings
 from qgis.PyQt.QtCore import pyqtSignal
 from qgis.PyQt.QtWidgets import (
     QAction,
@@ -16,10 +15,9 @@ from qgis.PyQt.QtWidgets import (
     QWidget,
 )
 
-from ..core import binary, engine, install
+from ..core import binary, engine, install, wheels
 from ..core.engine import Engine, Package
 from ..core.wheels import PACKAGE
-from ..enums import PROVIDER_ID
 from ..exceptions import ExecutableError, MissingError, PackageError
 from ..utils import not_none, tr
 from .style_menu import StyleMenu
@@ -32,28 +30,6 @@ def engine_names() -> dict[Engine, str]:
         Engine.PACKAGE: tr('Python package'),
         Engine.EXECUTABLE: tr('Executable'),
     }
-
-
-def choose(chosen: Engine) -> None:
-    """Has the engine run the checks from now on, and the toolbox list its
-    rules."""
-    engine.choose(chosen)
-    # A task reads the setting on a thread of its own, which sees only what
-    # is in the file
-    QgsSettings().sync()
-
-
-def relist(chosen: Engine | None = None) -> None:
-    """Has the toolbox list the rules of the engine, after it or what it runs
-    changed, and first chooses the engine if one is given."""
-    if chosen is not None and chosen is not engine.chosen():
-        # Which lists them
-        choose(chosen)
-        return
-    registry = not_none(QgsApplication.processingRegistry())
-    provider = registry.providerById(PROVIDER_ID)
-    if provider is not None:
-        provider.refreshAlgorithms()
 
 
 def installable() -> bool:
@@ -143,11 +119,10 @@ class PanelMenu(QMenu):
         try:
             found = engine.find_package()
         except PackageError as error:
-            self.offer(self.engines[Engine.PACKAGE], str(error))
+            self.unusable(Engine.PACKAGE, str(error), error.brief)
         else:
-            self.offer(
-                self.engines[Engine.PACKAGE],
-                None,
+            self.usable(
+                Engine.PACKAGE,
                 tr('{package} {version} in {folder}').format(
                     package=PACKAGE,
                     version=found.version,
@@ -157,13 +132,23 @@ class PanelMenu(QMenu):
         try:
             path = binary.find_executable()
         except ExecutableError as error:
-            self.offer(self.engines[Engine.EXECUTABLE], reason(error))
+            self.unusable(Engine.EXECUTABLE, reason(error), tr('not found'))
         else:
-            self.offer(self.engines[Engine.EXECUTABLE], None, str(path))
+            self.usable(Engine.EXECUTABLE, str(path))
 
         version = install.installed()
         self.install_action.setVisible(version is None and found is None)
-        self.offer(self.install_action, install.unsupported())
+        refusal = wheels.refusal()
+        if refusal is None:
+            self.install_action.setText(tr('Install Python package…'))
+            self.offer(self.install_action, None)
+        else:
+            self.refuse(
+                self.install_action,
+                tr('Install Python package'),
+                str(refusal),
+                refusal.brief,
+            )
         self.update_action.setVisible(install.outdated())
         self.update_action.setText(
             tr('Update Python package to {version}…').format(
@@ -172,6 +157,24 @@ class PanelMenu(QMenu):
         )
         self.remove_action.setVisible(version is not None)
 
+    def usable(self, choice: Engine, tip: str) -> None:
+        action = self.engines[choice]
+        action.setText(engine_names()[choice])
+        self.offer(action, None, tip)
+
+    def unusable(self, choice: Engine, reason: str, brief: str) -> None:
+        self.refuse(self.engines[choice], engine_names()[choice], reason, brief)
+
+    def refuse(self, action: t.Any, name: str, reason: str, brief: str) -> None:
+        """Greys out the item, with why in a few words after its name: a tip
+        shows only to a pointer that rests on the item."""
+        action.setText(
+            tr('{name} ({why})').format(
+                name=name, why=brief or tr('unavailable')
+            )
+        )
+        self.offer(action, reason)
+
     def offer(self, action: t.Any, reason: str | None, tip: str = '') -> None:
         """Lets the item be chosen, with a tip, or says why it cannot be."""
         action.setEnabled(reason is None)
@@ -179,4 +182,8 @@ class PanelMenu(QMenu):
         action.setStatusTip(reason or tip)
 
     def engine_triggered(self, action: t.Any) -> None:
-        self.engine_chosen.emit(Engine(action.data()))
+        """Says that the user chose another engine. The one that is chosen
+        already changes nothing."""
+        chosen = Engine(action.data())
+        if chosen is not engine.chosen():
+            self.engine_chosen.emit(chosen)

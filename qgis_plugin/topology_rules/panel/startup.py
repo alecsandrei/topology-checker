@@ -9,16 +9,10 @@ from ..core import binary, engine
 from ..core.binary import Rule
 from ..core.engine import Engine
 from ..exceptions import ExecutableError, PackageError
+from ..utils import tr
 
 if t.TYPE_CHECKING:
     from .dock import Dock
-
-
-def switch(dock: Dock, chosen: Engine) -> None:
-    """Has the engine run the checks from now on, and the toolbox and the
-    dock list its rules."""
-    engine.choose(chosen)
-    refresh(dock)
 
 
 def refresh(dock: Dock) -> None:
@@ -83,4 +77,4 @@ def answered(
     elif isinstance(error, ExecutableError):
         dock.rules_failed(error)
     else:
-        dock.rules_failed(ExecutableError(str(error or 'No answer')))
+        dock.rules_failed(ExecutableError(str(error or tr('No answer'))))
