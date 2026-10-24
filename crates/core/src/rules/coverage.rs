@@ -7,7 +7,6 @@ use crate::{
     model::{Part, Parts},
 };
 use geo::{Line, Point};
-use rayon::prelude::*;
 
 /// Secondary-layer features that cover a point within tolerance.
 #[derive(Debug, Clone, Copy)]
@@ -69,17 +68,13 @@ fn uncovered(
     endpoints: Option<&cross::Endpoints>,
 ) -> Result<Vec<Violation>, Error> {
     let b = t.parts(other)?;
-    let violations = sources
-        .par_iter()
-        .with_min_len(super::min_len())
-        .enumerate()
-        .filter(|(i, p)| {
-            t.cancellable(|| {
-                endpoints.is_none_or(|ends| ends.is_open(*i, t.tolerance()))
-                    && !covered(&p.geometry, target, b, t.tolerance())
-            })
+    let violations = super::flat_map(sources.len(), |i| {
+        let p = &sources[i];
+        t.cancellable(|| {
+            endpoints.is_none_or(|ends| ends.is_open(i, t.tolerance()))
+                && !covered(&p.geometry, target, b, t.tolerance())
         })
-        .map(|(_, p)| {
+        .then(|| {
             violation(
                 spec,
                 ViolationKind::NotCovered,
@@ -88,7 +83,7 @@ fn uncovered(
                 None,
             )
         })
-        .collect();
+    });
     Ok(aggregate(violations, Merge::AllDimensions))
 }
 
@@ -137,9 +132,8 @@ pub(super) fn line_contacts(
             )
         })
     };
-    let violations = super::each_pair(pairs, contact);
     Ok(aggregate(
-        violations.into_iter().flatten().collect(),
+        super::each_pair(pairs, contact),
         Merge::AllDimensions,
     ))
 }

@@ -2,7 +2,6 @@ use crate::{
     Error, LayerId, RuleSpec, Topology, Violation, ViolationKind,
     engine::{index, proximity::coincident},
 };
-use rayon::prelude::*;
 
 pub(crate) fn overlap(t: &Topology, spec: RuleSpec) -> Result<Vec<Violation>, Error> {
     let mut errors = Vec::new();
@@ -22,29 +21,26 @@ pub(crate) fn inside(
     let a = t.parts(spec.layer)?;
     let b = t.parts(other)?;
     let locations = crate::engine::location::locations(b);
-    Ok(a.points
-        .par_iter()
-        .with_min_len(super::min_len())
-        .filter_map(|p| {
-            t.cancellable(|| {
-                let inside = b
-                    .polygon_index()
-                    .locate_in_envelope_intersecting(&index::at(p.geometry.0, t.tolerance()))
-                    .any(|item| {
-                        let polygon = &locations[item.data];
-                        polygon.position(p.geometry.0) == 1
-                            && !polygon.near(p.geometry.0, t.tolerance())
-                    });
-                (!inside).then_some(Violation {
-                    rule: spec.rule,
-                    kind: ViolationKind::Outside,
-                    geometry: p.geometry.into(),
-                    origin: Some(p.reference.at(spec.layer)),
-                    destination: None,
-                })
+    Ok(super::flat_map(a.points.len(), |i| {
+        let p = &a.points[i];
+        t.cancellable(|| {
+            let inside = b
+                .polygon_index()
+                .locate_in_envelope_intersecting(&index::at(p.geometry.0, t.tolerance()))
+                .any(|item| {
+                    let polygon = &locations[item.data];
+                    polygon.position(p.geometry.0) == 1
+                        && !polygon.near(p.geometry.0, t.tolerance())
+                });
+            (!inside).then_some(Violation {
+                rule: spec.rule,
+                kind: ViolationKind::Outside,
+                geometry: p.geometry.into(),
+                origin: Some(p.reference.at(spec.layer)),
+                destination: None,
             })
         })
-        .collect())
+    }))
 }
 
 /// Aggregate and emit one feature pair at a time, preserving every duplicate pair.

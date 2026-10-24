@@ -45,11 +45,8 @@ pub(super) fn contained(
             Some(b.reference.at(other)),
         )))
     };
-    let violations = super::each_pair(pairs, contained)
+    let violations = super::each_pair(pairs, |pair| contained(pair).transpose())
         .into_iter()
         .collect::<Result<Vec<_>, Error>>()?;
-    Ok(aggregate(
-        violations.into_iter().flatten().collect(),
-        Merge::AllDimensions,
-    ))
+    Ok(aggregate(violations, Merge::AllDimensions))
 }

@@ -196,6 +196,7 @@ static HELPERS: AtomicUsize = AtomicUsize::new(0);
 struct Helpers {
     threads: usize,
     shared: usize,
+    budget: &'static AtomicUsize,
 }
 impl Helpers {
     /// Up to `want` of the helpers free now. All validations together use one helper
@@ -208,19 +209,28 @@ impl Helpers {
             return Self {
                 threads: want,
                 shared: 0,
+                budget: &HELPERS,
             };
         }
         static LIMIT: OnceLock<usize> = OnceLock::new();
         let limit = *LIMIT.get_or_init(|| {
             std::thread::available_parallelism().map_or(1, std::num::NonZero::get) - 1
         });
-        let mut used = HELPERS.load(atomic::Ordering::Relaxed);
+        Self::take_from(&HELPERS, limit, want)
+    }
+    /// Up to `want` of `limit` helpers, `budget` counting those in use.
+    fn take_from(budget: &'static AtomicUsize, limit: usize, want: usize) -> Self {
+        let mut used = budget.load(atomic::Ordering::Relaxed);
         loop {
             let threads = want.min(limit.saturating_sub(used));
             if threads == 0 {
-                return Self { threads, shared: 0 };
+                return Self {
+                    threads,
+                    shared: 0,
+                    budget,
+                };
             }
-            match HELPERS.compare_exchange_weak(
+            match budget.compare_exchange_weak(
                 used,
                 used + threads,
                 atomic::Ordering::Relaxed,
@@ -230,6 +240,7 @@ impl Helpers {
                     return Self {
                         threads,
                         shared: threads,
+                        budget,
                     };
                 }
                 Err(now) => used = now,
@@ -239,7 +250,8 @@ impl Helpers {
 }
 impl Drop for Helpers {
     fn drop(&mut self) {
-        HELPERS.fetch_sub(self.shared, atomic::Ordering::Relaxed);
+        self.budget
+            .fetch_sub(self.shared, atomic::Ordering::Relaxed);
     }
 }
 /// Whether this thread runs one feature of [`per_feature_into`]. Its steps then run on
@@ -247,10 +259,6 @@ impl Drop for Helpers {
 /// validations' jobs, which do not stop when this validation is cancelled.
 pub(super) fn in_feature_task() -> bool {
     parallel::cap().is_some()
-}
-/// Smallest rayon job, in items: whole inputs within a feature task.
-pub(super) fn min_len() -> usize {
-    if in_feature_task() { usize::MAX } else { 1 }
 }
 /// `task` of each item, results in order. A feature task runs them on the threads it
 /// holds, other callers on rayon.
@@ -261,15 +269,43 @@ pub(super) fn each<I: Send, R: Send>(items: Vec<I>, task: impl Fn(I) -> R + Sync
         items.into_par_iter().map(task).collect()
     }
 }
-/// [`each`] for candidate pairs. Outside a feature task, results come in any order.
+/// The items of `task(i)` for each `i` in `0..len`, in order. Runs like [`each`], in
+/// ranges of indices.
+pub(super) fn flat_map<I: IntoIterator<Item: Send>>(
+    len: usize,
+    task: impl Fn(usize) -> I + Sync + Send,
+) -> Vec<I::Item> {
+    if in_feature_task() {
+        Workers::all()
+            .chunks(len, |range| range.flat_map(&task).collect::<Vec<_>>())
+            .into_iter()
+            .flatten()
+            .collect()
+    } else {
+        (0..len).into_par_iter().flat_map_iter(task).collect()
+    }
+}
+/// Candidate pairs a feature task holds at once.
+const PAIRS: usize = 1 << 14;
+/// The results `task` returns for candidate pairs, run like [`each`]. A feature task
+/// takes [`PAIRS`] pairs at a time and keeps their order. On rayon, results come in
+/// any order.
 pub(super) fn each_pair<R: Send>(
-    pairs: impl Iterator<Item = (usize, usize)> + Send,
-    task: impl Fn((usize, usize)) -> R + Sync + Send,
+    mut pairs: impl Iterator<Item = (usize, usize)> + Send,
+    task: impl Fn((usize, usize)) -> Option<R> + Sync + Send,
 ) -> Vec<R> {
     if in_feature_task() {
-        Workers::all().each(pairs.collect(), task)
+        let workers = Workers::all();
+        let mut results = Vec::new();
+        loop {
+            let chunk = pairs.by_ref().take(PAIRS).collect::<Vec<_>>();
+            if chunk.is_empty() {
+                return results;
+            }
+            results.extend(workers.each(chunk, &task).into_iter().flatten());
+        }
     } else {
-        pairs.par_bridge().map(task).collect()
+        pairs.par_bridge().filter_map(task).collect()
     }
 }
 /// Kinds of a per-feature rule in emission order. Empty when each feature emits all
@@ -1498,6 +1534,77 @@ mod tests {
         clear(&a_name);
         clear(&b_name);
         assert_idle(&pool);
+    }
+
+    #[test]
+    fn large_features_split_their_points_and_pairs_without_changing_the_output() {
+        // One feature with more candidate pairs than a feature task holds at once.
+        let count = PAIRS + PAIRS / 2;
+        let points = (0..count)
+            .map(|i| Point::new(i as f64, 0.))
+            .collect::<Vec<_>>();
+        // Even lines cover their points, odd ones only cross their boxes.
+        let lines = (0..count / 64).map(|k| {
+            let x = (k * 64) as f64;
+            let rise = if k % 2 == 0 { 0. } else { 1. };
+            let line = LineString::from(vec![(x - 0.5, -rise), (x + 63.5, rise)]);
+            (k as i64, line.into())
+        });
+        let mut t = Topology::new(0.).unwrap();
+        let a = t.add_layer(Layer::from_features(
+            "large-feature",
+            [(1, MultiPoint::from(points).into())],
+        ));
+        let b = t.add_layer(Layer::from_features("large-feature-lines", lines));
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .unwrap();
+        for rule in [
+            Rule::PointMustNotIntersectLines,
+            Rule::PointMustBeCoveredByLines,
+        ] {
+            let spec = t.add_rule(rule, a, Some(b)).unwrap();
+            let expected = reference(&t, spec).unwrap();
+            assert!(!expected.is_empty(), "{rule:?}");
+            let streamed = pool.install(|| with_threads(4, || streamed(&t, spec, Some(8))));
+            assert_eq!(streamed.unwrap(), expected, "{rule:?}");
+        }
+    }
+
+    #[test]
+    fn feature_batches_share_one_helper_budget() {
+        static BUDGET: AtomicUsize = AtomicUsize::new(0);
+        let used = || BUDGET.load(atomic::Ordering::Relaxed);
+        let first = Helpers::take_from(&BUDGET, 3, 2);
+        let second = Helpers::take_from(&BUDGET, 3, 2);
+        let third = Helpers::take_from(&BUDGET, 3, 2);
+        assert_eq!([first.threads, second.threads, third.threads], [2, 1, 0]);
+        assert_eq!(used(), 3);
+        drop(first);
+        assert_eq!(used(), 1);
+        let fourth = Helpers::take_from(&BUDGET, 3, 5);
+        assert_eq!(fourth.threads, 2);
+        drop((second, third, fourth));
+        assert_eq!(used(), 0);
+        // Batches taking and returning helpers at once never go over the limit.
+        std::thread::scope(|scope| {
+            for _ in 0..8 {
+                scope.spawn(|| {
+                    for want in 0..2000 {
+                        let helpers = Helpers::take_from(&BUDGET, 3, want % 4);
+                        assert!(helpers.threads <= want % 4);
+                        assert!(used() <= 3);
+                    }
+                });
+            }
+        });
+        assert_eq!(used(), 0);
+        // Without a fixed thread count, batches count on the process budget.
+        let helpers = Helpers::take(1);
+        assert!(std::ptr::eq(helpers.budget, &HELPERS));
+        assert_eq!(helpers.shared, helpers.threads);
+        assert!(helpers.threads <= 1);
     }
 
     #[test]

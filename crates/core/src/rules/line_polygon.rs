@@ -76,7 +76,9 @@ pub(super) fn run(
     let bv = location::locations(b);
     let pairs = index::pairs(a.line_index(), b.polygon_index(), t.tolerance(), false);
     let compare = |(i, j): (usize, usize)| {
-        t.cancellable(|| pair(t, spec, other, mode, &a.lines[i], &b.polygons[j], &bv[j]))
+        let found =
+            t.cancellable(|| pair(t, spec, other, mode, &a.lines[i], &b.polygons[j], &bv[j]));
+        (!found.is_empty()).then_some(found)
     };
     let violations = super::each_pair(pairs, compare);
     Ok(aggregate(
