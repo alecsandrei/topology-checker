@@ -213,6 +213,28 @@ class RuleList(QWidget):
         finally:
             self.filling = was
 
+    def set_count(self, entry: Entry) -> None:
+        """Shows the errors of one rule, as they are known, and leaves the
+        rest of the list as it is."""
+        index = next(
+            (i for i, other in enumerate(self.entries) if other is entry), None
+        )
+        if index is None:
+            return
+        was = self.filling
+        self.filling = True
+        try:
+            for top in range(self.tree.topLevelItemCount()):
+                node = not_none(self.tree.topLevelItem(top))
+                for row in range(node.childCount()):
+                    child = not_none(node.child(row))
+                    if child.data(0, ENTRY) == index:
+                        child.setText(
+                            1, '' if entry.errors is None else str(entry.errors)
+                        )
+        finally:
+            self.filling = was
+
     def show_entries(self) -> None:
         """Fills the tree from the entries, marking the layers that have left
         the project."""

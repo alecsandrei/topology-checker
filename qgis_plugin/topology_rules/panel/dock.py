@@ -45,6 +45,7 @@ from .offer import stop_offering
 from .results import ResultsPanel
 from .rules_page import RulesPage
 from .setup import SetupPage
+from .stage import StageLabel
 from .state import ProjectState
 from .tolerance import show_unit
 
@@ -125,6 +126,9 @@ class Dock(QgsDockWidget):
         self.progress = QProgressBar()
         self.progress.setRange(0, 0)
         self.progress.hide()
+        # What the run does now
+        self.stage = StageLabel()
+        self.stage.hide()
 
         self.tabs = QTabWidget()
         shrink_tabs(self.tabs)
@@ -135,6 +139,7 @@ class Dock(QgsDockWidget):
         layout.setContentsMargins(0, 2, 0, 2)
         layout.addWidget(self.setup_page)
         layout.addWidget(self.tabs, 1)
+        layout.addWidget(self.stage)
         layout.addWidget(self.progress)
         bottom = QHBoxLayout()
         bottom.addWidget(self.run_button, 1)

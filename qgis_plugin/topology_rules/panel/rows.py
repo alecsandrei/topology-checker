@@ -5,9 +5,10 @@ import dataclasses
 import hashlib
 import typing as t
 
-from qgis.core import QgsFeature, QgsVectorLayer
+from qgis.core import QgsFeature, QgsGeometry, QgsVectorLayer
 
 from ..core.binary import named_with, plain_name, short_name
+from ..core.progress import Checked
 from ..core.style import INVALID, Grouping, rule_grouping
 
 # The fields of an error that a row is made from
@@ -31,7 +32,10 @@ def field_text(feature: QgsFeature, index: int) -> str:
 
 
 def shape_of(feature: QgsFeature) -> str:
-    geometry = feature.geometry()
+    return shape(feature.geometry())
+
+
+def shape(geometry: QgsGeometry) -> str:
     if geometry.isNull():
         return ''
     # data() is bytes at run time; some stubs type it as str
@@ -88,6 +92,10 @@ class Row:
     # What the error is told by when the user ignores it, worked out once
     # the layers of the run are known
     mark: str = dataclasses.field(default='', compare=False)
+    # The error itself, in the CRS of the run, while it has no error layer
+    geometry: QgsGeometry | None = dataclasses.field(
+        default=None, compare=False, repr=False
+    )
 
     @property
     def group(self) -> str:
@@ -148,4 +156,38 @@ def read_rows(
                     shape_of(feature),
                 )
             )
+    return rows
+
+
+def value_text(value: object) -> str:
+    """A value of an error as field_text reads it from the error layer."""
+    return '' if value is None or str(value) == 'NULL' else str(value)
+
+
+def found_rows(done: Checked, names: c.Mapping[str, str]) -> list[Row]:
+    """The errors of a rule that is done, as read_rows reads them from the
+    error layers later, with the names of the layers of the project by their
+    ids, and the geometry of each error, as there is no layer yet."""
+    rows: list[Row] = []
+    for found in done.errors or ():
+        _, rule, error, origin, fid, _, other, other_fid, _ = (
+            value_text(value) for value in found.values
+        )
+        rows.append(
+            Row(
+                rule,
+                error,
+                names.get(done.layers.get(origin, ''), origin),
+                number(fid),
+                names.get(done.layers.get(other, ''), other),
+                number(other_fid),
+                origin,
+                other,
+                '',
+                -1,
+                f'e{done.index}',
+                shape(found.geometry),
+                geometry=found.geometry,
+            )
+        )
     return rows

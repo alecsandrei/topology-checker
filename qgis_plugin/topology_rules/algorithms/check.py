@@ -240,6 +240,14 @@ class CheckRulesAlgorithm(Planned):
             renumber_errors(output, outcome.ids)
             append_invalid(output, outcome.invalid, outcome.crs, context)
         total = sum(outcome.counts) + len(outcome.invalid)
+        if len(outcome.counts) < len(plan.jobs):
+            # Canceled: what the rules that are done found, which the panel
+            # shows and Processing does not load
+            feedback.pushInfo(
+                tr('Canceled: {done} of {total} rules checked').format(
+                    done=len(outcome.counts), total=len(plan.jobs)
+                )
+            )
         feedback.pushInfo(tr('{count} topology errors').format(count=total))
         return {
             OUTPUT: output,

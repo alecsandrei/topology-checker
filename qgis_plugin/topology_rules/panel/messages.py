@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import collections.abc as c
 import typing as t
 
-from qgis.core import Qgis, QgsProcessingFeedback
+from qgis.core import Qgis
 from qgis.gui import QgsMessageBar, QgsMessageBarItem
-from qgis.PyQt.QtCore import Qt
+from qgis.PyQt.QtCore import Qt, pyqtSignal
 from qgis.PyQt.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -15,7 +16,10 @@ from qgis.PyQt.QtWidgets import (
     QWidget,
 )
 
+from ..core.progress import Checked, Progress, Stage
 from ..utils import not_none, tr
+from .ignored import stamp
+from .rows import Row, found_rows
 
 # How long a message that is not a failure stays
 SECONDS = 5
@@ -23,12 +27,39 @@ SECONDS = 5
 MARK = 'topology_rules/failure'
 
 
-class RunFeedback(QgsProcessingFeedback):
-    """Feedback of a run that remembers the errors that were reported."""
+Staged = tuple[Stage, int | None, int]
+# A rule that is done, with its errors as the tree shows them if the engine
+# has them already
+Done = tuple[Checked, list[Row] | None]
 
-    def __init__(self) -> None:
+
+class RunFeedback(Progress):
+    """Feedback of a run that remembers the errors that were reported, and
+    tells the panel the stage of the run and each rule that is done. The
+    signals come from the thread of the run."""
+
+    stage_changed = pyqtSignal(object)
+    rule_done = pyqtSignal(object)
+
+    def __init__(self, names: c.Mapping[str, str] | None = None) -> None:
         super().__init__()
         self.errors: list[str] = []
+        # The names of the layers of the run, by their ids
+        self.names = dict(names or {})
+
+    def staged(self, stage: Stage, index: int | None, total: int) -> None:
+        staged: Staged = (stage, index, total)
+        self.stage_changed.emit(staged)
+
+    def checked(self, done: Checked) -> None:
+        # The rows are made here, so that the panel only has to show them
+        rows = (
+            None
+            if done.errors is None
+            else stamp(found_rows(done, self.names), done.layers)
+        )
+        found: Done = (done, rows)
+        self.rule_done.emit(found)
 
     def reportError(self, error: str | None, fatalError: bool = False) -> None:
         self.errors.append(str(error))

@@ -28,6 +28,7 @@ from .engine import Package, Tool, describe
 from .inputs import Prepared, prepare
 from .invalid import REJECTED, Invalid, Rejected, parse_failure
 from .layers import Input, private_layer
+from .progress import Checked, Stage, checked, log_rule, staged
 
 # The columns of an error that name a feature, and the layer it is in
 ID_COLUMNS = (
@@ -200,7 +201,9 @@ def run_once(
     made: dict[object, tuple[object, Prepared]],
 ) -> Outcome:
     """Runs the jobs once with the executable, from the layers' own files
-    and from exports."""
+    and from exports. The log and the feedback hear of each rule as soon as
+    the executable says it is done."""
+    staged(feedback, Stage.READING)
     target = jobs[0].layer.source.sourceCrs()
     prepared: dict[object, Prepared] = {}
     names: dict[object, str] = {}
@@ -241,8 +244,21 @@ def run_once(
     ]
     config = directory / 'checks.toml'
     aliases = write_config(config, checks)
+    layers = {
+        aliases[item.dataset]: layer_id
+        for key, item in prepared.items()
+        if (layer_id := inputs[key].layer_id) is not None
+    }
+
+    def done(index: int, total: int, count: int) -> None:
+        if total == len(jobs):
+            log_rule(feedback, jobs, index, count)
+            checked(feedback, Checked(index, total, count, None, layers))
+
+    # Which rule runs is not known until the first is done
+    staged(feedback, Stage.CHECKING, None, len(jobs))
     completed = run_validate(
-        executable, str(config), tolerance, output, feedback
+        executable, str(config), tolerance, output, feedback, done
     )
     try:
         counts = rule_counts(completed)
@@ -286,11 +302,7 @@ def run_once(
             for item in prepared.values()
             if item.ids is not None
         },
-        {
-            aliases[item.dataset]: layer_id
-            for key, item in prepared.items()
-            if (layer_id := inputs[key].layer_id) is not None
-        },
+        layers,
         invalid,
         target,
     )

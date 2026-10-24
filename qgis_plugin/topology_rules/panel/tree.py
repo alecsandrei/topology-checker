@@ -6,6 +6,7 @@ import typing as t
 from qgis.PyQt.QtCore import QModelIndex, Qt
 from qgis.PyQt.QtGui import QBrush, QColor, QStandardItem, QStandardItemModel
 
+from ..utils import not_none
 from .rows import Row, humanize, plural
 
 # What an item of the tree holds: an error, or ('group', rule key, kind)
@@ -47,6 +48,61 @@ class ErrorModel(QStandardItemModel):
         ]
 
 
+Groups = dict[str, dict[str, list[Row]]]
+
+
+def grouped(rows: c.Iterable[Row], order: list[str]) -> Groups:
+    """The errors by group, in the order of the list, and by kind."""
+    groups: Groups = {}
+    for row in sorted(rows, key=lambda r: (rank(r.key, order), r.group)):
+        groups.setdefault(row.key, {}).setdefault(row.error, []).append(row)
+    return groups
+
+
+def in_order(rows: c.Iterable[Row]) -> list[Row]:
+    """The errors of a kind in the order the tree shows them."""
+    return sorted(rows, key=lambda r: (r.layer, r.feature or -1))
+
+
+def group_key(item: QStandardItem) -> str:
+    return t.cast('tuple[str, str, str | None]', item.data(ROLE))[1]
+
+
+def build_group(
+    model: ErrorModel,
+    key: str,
+    kinds: dict[str, list[Row]],
+    labels: c.Mapping[str, str],
+    ignored: c.Callable[[Row], bool],
+) -> QStandardItem:
+    """The item of a group with its kinds and errors, which the model knows
+    the errors of from now on."""
+    grey = QBrush(QColor(Qt.GlobalColor.gray))
+    first = next(iter(next(iter(kinds.values()))))
+    name = labels.get(key) or first.group
+    group_item = QStandardItem(
+        f'{name} ({sum(len(r) for r in kinds.values())})'
+    )
+    group_item.setData(('group', key, None), ROLE)
+    for error, group in sorted(kinds.items()):
+        kind_item = QStandardItem(f'{plural(error)} ({len(group)})')
+        kind_item.setData(('group', key, error), ROLE)
+        ordered = in_order(group)
+        model.kinds[key, error] = ordered
+        items: list[QStandardItem] = []
+        for number, row in enumerate(ordered, start=1):
+            item = QStandardItem(row.features or f'{humanize(error)} {number}')
+            item.setData(row, ROLE)
+            if ignored(row):
+                item.setForeground(grey)
+            items.append(item)
+        # At once, before the kind is in the model: one item at a time
+        # tells the view of each of them
+        kind_item.appendRows(items)
+        group_item.appendRow(kind_item)
+    return group_item
+
+
 def fill(
     model: ErrorModel,
     rows: c.Iterable[Row],
@@ -58,34 +114,46 @@ def fill(
     error. The errors that are ignored are grey."""
     model.removeRows(0, model.rowCount())
     model.kinds = {}
+    for key, kinds in grouped(rows, list(labels)).items():
+        model.appendRow(build_group(model, key, kinds, labels, ignored))
+
+
+def find_group(model: ErrorModel, key: str) -> int:
+    """The row of the group in the model, or -1."""
+    for index in range(model.rowCount()):
+        if group_key(not_none(model.item(index))) == key:
+            return index
+    return -1
+
+
+def drop_group(model: ErrorModel, key: str) -> None:
+    index = find_group(model, key)
+    if index >= 0:
+        model.removeRow(index)
+    for found in [kind for kind in model.kinds if kind[0] == key]:
+        del model.kinds[found]
+
+
+def put_group(
+    model: ErrorModel,
+    key: str,
+    rows: c.Iterable[Row],
+    labels: c.Mapping[str, str],
+    ignored: c.Callable[[Row], bool],
+) -> QStandardItem | None:
+    """Puts the errors of a group where the list has the group, in place of
+    what the group had, and leaves the other groups as they are."""
+    drop_group(model, key)
     order = list(labels)
-    groups: dict[str, dict[str, list[Row]]] = {}
-    for row in sorted(rows, key=lambda r: (rank(r.key, order), r.group)):
-        groups.setdefault(row.key, {}).setdefault(row.error, []).append(row)
-    grey = QBrush(QColor(Qt.GlobalColor.gray))
-    for key, kinds in groups.items():
-        first = next(iter(next(iter(kinds.values()))))
-        name = labels.get(key) or first.group
-        group_item = QStandardItem(
-            f'{name} ({sum(len(r) for r in kinds.values())})'
-        )
-        group_item.setData(('group', key, None), ROLE)
-        for error, group in sorted(kinds.items()):
-            kind_item = QStandardItem(f'{plural(error)} ({len(group)})')
-            kind_item.setData(('group', key, error), ROLE)
-            ordered = sorted(group, key=lambda r: (r.layer, r.feature or -1))
-            model.kinds[key, error] = ordered
-            items: list[QStandardItem] = []
-            for number, row in enumerate(ordered, start=1):
-                item = QStandardItem(
-                    row.features or f'{humanize(error)} {number}'
-                )
-                item.setData(row, ROLE)
-                if ignored(row):
-                    item.setForeground(grey)
-                items.append(item)
-            # At once, before the kind is in the model: one item at a time
-            # tells the view of each of them
-            kind_item.appendRows(items)
-            group_item.appendRow(kind_item)
-        model.appendRow(group_item)
+    kinds = grouped(rows, order).get(key)
+    if not kinds:
+        return None
+    item = build_group(model, key, kinds, labels, ignored)
+    position = model.rowCount()
+    for index in range(model.rowCount()):
+        other = group_key(not_none(model.item(index)))
+        if rank(other, order) > rank(key, order):
+            position = index
+            break
+    model.insertRow(position, item)
+    return item

@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import collections.abc as c
 import dataclasses
+import queue
+import threading
 import typing as t
 
 from qgis.core import (
@@ -29,7 +31,7 @@ from ..exceptions import RunError
 from ..utils import not_none, tr
 from .binary import Rule, known
 from .checks import Job, Outcome
-from .commands import unique
+from .commands import ERROR_LAYERS, unique
 from .inputs import (
     BATCH,
     Skipped,
@@ -47,6 +49,7 @@ from .inputs import (
 )
 from .invalid import FIELDS, Invalid, Rejected, parse_failure
 from .layers import Dataset, Input, default_tolerance, geographic, wkb_kind
+from .progress import Checked, Found, Stage, checked, log_rule, staged
 
 if t.TYPE_CHECKING:
     import topology_checker as tc
@@ -70,6 +73,10 @@ NO_CRS = 'SRID=0'
 # The columns of an error as the executable writes them: texts of any
 # length and 64-bit integers
 COLUMNS = FIELDS.replace(':string', ':string(0)').replace(':integer', ':long')
+# The families of the error layers, in the order the panel reads them
+FAMILIES = tuple(name.removeprefix('errors_') for name in ERROR_LAYERS)
+# How often a run that waits for a rule looks whether it was canceled
+POLL_SECONDS = 0.1
 
 Skips = t.Mapping[object, t.Mapping[int, str]]
 
@@ -301,6 +308,7 @@ def run_once(
     """
     import topology_checker as tc
 
+    staged(feedback, Stage.READING)
     found = snapshots(jobs, skips, exported, made, context, feedback)
     target = jobs[0].layer.source.sourceCrs()
     crs = (
@@ -328,7 +336,12 @@ def run_once(
         by_key[key] = registered[who]
     for job in jobs:
         add_rule(topology, job, by_key)
-    errors = validate(topology, registered.values(), feedback)
+    layers = {
+        entry.name: layer_id
+        for key, entry in by_key.items()
+        if (layer_id := found[key].item.layer_id) is not None
+    }
+    errors = validate(topology, registered.values(), jobs, layers, feedback)
     if errors.rows:
         write_errors(output, errors, crs, context)
     for warning in errors.warnings + [
@@ -343,11 +356,7 @@ def run_once(
     return Outcome(
         errors.counts,
         {},
-        {
-            entry.name: layer_id
-            for key, entry in by_key.items()
-            if (layer_id := found[key].item.layer_id) is not None
-        },
+        layers,
         [
             Invalid(entry.name, skipped.fid, skipped.geometry, skipped.reason)
             for entry in registered.values()
@@ -419,36 +428,133 @@ def members(geometry: QgsGeometry) -> c.Iterator[QgsGeometry]:
         yield geometry
 
 
+class Canceled(Exception):
+    """The run was canceled while a rule was checked."""
+
+
+class Reports:
+    """The report of each rule of the topology as soon as the rule is done.
+
+    The package checks the rules outside the lock of Python, in a thread
+    that waits for them, so that a canceled run stops at once: the rule that
+    is checked then is dropped, and the stream is closed when it is done.
+    """
+
+    def __init__(self, topology: tc.Topology) -> None:
+        self.found: queue.Queue[object] = queue.Queue()
+        self.stopped = threading.Event()
+        self.summary: tc.ReportSummary | None = None
+        self.ended = False
+        stream = topology.iter_reports()
+        self.thread = threading.Thread(
+            target=self.read, args=(stream,), name='topology-reports'
+        )
+        self.thread.daemon = True
+        self.thread.start()
+
+    def read(self, stream: tc.ReportStream) -> None:
+        try:
+            with stream:
+                for report in stream:
+                    if self.stopped.is_set():
+                        return
+                    self.found.put(report)
+                self.found.put(Ended(stream.summary))
+        except BaseException as error:
+            # Raised where the reports are read
+            self.found.put(error)
+
+    def next(self, feedback: QgsProcessingFeedback) -> tc.RuleReport | None:
+        """The next report, or None when all rules are done. Raises
+        Canceled when the run is canceled first."""
+        while not self.ended:
+            if feedback.isCanceled():
+                raise Canceled
+            try:
+                item = self.found.get(timeout=POLL_SECONDS)
+            except queue.Empty:
+                continue
+            if isinstance(item, Ended):
+                self.ended = True
+                self.summary = item.summary
+            elif isinstance(item, BaseException):
+                self.ended = True
+                raise item
+            else:
+                return t.cast('tc.RuleReport', item)
+        return None
+
+    def __enter__(self) -> Reports:
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.stopped.set()
+
+
+@dataclasses.dataclass(frozen=True)
+class Ended:
+    summary: tc.ReportSummary | None
+
+
 def validate(
     topology: tc.Topology,
     registered: c.Iterable[Registered],
+    jobs: t.Sequence[Job],
+    layers: t.Mapping[str, str],
     feedback: QgsProcessingFeedback,
 ) -> Errors:
-    """Runs the rules, which the package does outside the lock of Python, and
-    stops between two errors when the run is canceled."""
+    """Runs the rules, telling the feedback of each as soon as it is done.
+
+    A canceled run stops at once, with the errors of the rules that are
+    done. When none is, it raises.
+    """
     import topology_checker as tc
 
     names = {entry.layer: entry.name for entry in registered}
     rows: dict[str, list[tuple[QgsGeometry, list[object]]]] = {}
+    counts: list[int] = []
     if feedback.isCanceled():
         raise RunError(tr('Canceled'))
+    total = len(jobs)
+    staged(feedback, Stage.CHECKING, 0, total)
+    index = 0
     try:
-        with topology.iter_validate() as stream:
-            for index, violation in enumerate(stream):
-                if feedback.isCanceled():
-                    raise RunError(tr('Canceled'))
-                values = attributes(index, violation, names)
-                for member in members(from_wkb(violation.wkb)):
-                    family = wkb_kind(member.wkbType())
-                    rows.setdefault(family, []).append((member, values))
+        with Reports(topology) as stream:
+            while (report := stream.next(feedback)) is not None:
+                found: list[Found] = []
+                for violation in report.violations:
+                    if feedback.isCanceled():
+                        raise Canceled
+                    values = attributes(index, violation, names)
+                    index += 1
+                    for member in members(from_wkb(violation.wkb)):
+                        family = wkb_kind(member.wkbType())
+                        member.convertToMultiType()
+                        found.append(Found(family, member, values))
+                for item in found:
+                    rows.setdefault(item.family, []).append(
+                        (item.geometry, t.cast('list[object]', item.values))
+                    )
+                count = report.error_count
+                counts.append(count)
+                log_rule(feedback, jobs, len(counts) - 1, count)
+                # The errors in the order the panel reads them from the
+                # layers: by family, then as they were found
+                ordered = sorted(found, key=lambda f: FAMILIES.index(f.family))
+                checked(
+                    feedback,
+                    Checked(
+                        len(counts) - 1, total, count, tuple(ordered), layers
+                    ),
+                )
             summary = not_none(stream.summary)
+    except Canceled:
+        if not counts:
+            raise RunError(tr('Canceled')) from None
+        return Errors(rows, counts, [])
     except (ValueError, tc.PrecisionError) as error:
         raise RunError(str(error)) from error
-    return Errors(
-        rows,
-        [rule.error_count for rule in summary.rules],
-        list(summary.warnings),
-    )
+    return Errors(rows, counts, list(summary.warnings))
 
 
 def attributes(
