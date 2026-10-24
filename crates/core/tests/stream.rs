@@ -579,6 +579,104 @@ fn cancelling_inside_each_rule_drops_its_end_and_every_later_rule() {
     assert!(cancelled > Rule::ALL.len());
 }
 
+/// Line features that report every kind of the per-feature line rules, spread
+/// over more features than one parallel batch holds.
+fn multi_kind_topology() -> Topology {
+    use topology_checker_core::geo::{LineString, MultiLineString};
+    let mut t = Topology::new(0.).unwrap();
+    let features = (0..40).map(|i: i64| {
+        let row = (i / 2) as f64;
+        let x = (i % 10) as f64 + 0.5;
+        let geometry = MultiLineString(vec![
+            // Pairs of features share their row.
+            LineString::from(vec![(0., row), (10., row)]),
+            // Crosses its own row and the next one.
+            LineString::from(vec![(x, row - 0.5), (x, row + 1.5)]),
+            // Ends inside the row after next.
+            LineString::from(vec![(x - 0.25, row + 2.), (x - 0.1, row + 2.5)]),
+            // Retraces part of its own row.
+            LineString::from(vec![(x - 0.4, row), (x - 0.3, row)]),
+        ]);
+        // FID order differs from insertion order.
+        (if i % 2 == 0 { i } else { -i }, geometry.into())
+    });
+    let layer = t.add_layer(Layer::from_features("multi", features));
+    for rule in [
+        Rule::LineMustNotSelfIntersect,
+        Rule::LineMustNotIntersect,
+        Rule::LineMustNotIntersectOrTouchInterior,
+    ] {
+        t.add_rule(rule, layer, None).unwrap();
+    }
+    t
+}
+
+#[test]
+fn rule_end_follows_later_kinds_of_parallel_feature_batches() {
+    use std::collections::BTreeSet;
+    use topology_checker_core::{CancellationToken, Error, ViolationKind};
+    let t = multi_kind_topology();
+    let expected = expected_events(&t);
+    let eager = t.validate().unwrap();
+    let kinds: [&[ViolationKind]; 3] = [
+        &[ViolationKind::SelfOverlap, ViolationKind::SelfCrossing],
+        &[ViolationKind::Overlap, ViolationKind::Crossing],
+        &[
+            ViolationKind::Overlap,
+            ViolationKind::Crossing,
+            ViolationKind::TouchInterior,
+        ],
+    ];
+    // Each kind comes from more features than a one-thread batch of eight holds.
+    for (report, kinds) in eager.rules.iter().zip(kinds) {
+        for &kind in kinds {
+            let features = report
+                .violations
+                .iter()
+                .filter(|v| v.kind == kind)
+                .map(|v| v.origin.unwrap().fid)
+                .collect::<BTreeSet<_>>();
+            assert!(features.len() > 8, "{} {kind:?}", report.spec.rule);
+        }
+    }
+    // Cancel at the first and last violation of each kind of each rule.
+    let mut marks = BTreeSet::new();
+    for (i, event) in expected.iter().enumerate() {
+        let Logged::Violation(rule, v) = event else {
+            continue;
+        };
+        let same =
+            |e: &Logged| matches!(e, Logged::Violation(r, w) if r == rule && w.kind == v.kind);
+        if i == 0 || !same(&expected[i - 1]) {
+            marks.insert(i);
+        }
+        if !same(&expected[i + 1]) {
+            marks.insert(i);
+        }
+    }
+    assert_eq!(marks.len(), 14);
+    for threads in [1, 2, 4] {
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(threads)
+            .build()
+            .unwrap();
+        pool.install(|| {
+            let (log, result) = log_events(&t, CancellationToken::default(), |_| false);
+            assert_eq!(log, expected, "{threads} threads");
+            result.unwrap();
+            for &position in &marks {
+                let mut seen = 0;
+                let (log, result) = log_events(&t, CancellationToken::default(), |_| {
+                    seen += 1;
+                    seen == position + 1
+                });
+                assert_eq!(log[..], expected[..=position], "{threads} threads");
+                assert!(matches!(result, Err(SinkError::Core(Error::Cancelled))));
+            }
+        });
+    }
+}
+
 mod thread_count {
     use proptest::prelude::*;
     use std::convert::Infallible;
