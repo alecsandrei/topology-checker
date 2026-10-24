@@ -267,3 +267,86 @@ fn panics_in_the_sink_propagate_unchanged() {
     .unwrap_err();
     assert_eq!(panic.downcast_ref::<&str>(), Some(&"sink failed"));
 }
+
+mod thread_count {
+    use proptest::prelude::*;
+    use std::convert::Infallible;
+    use topology_checker_core::{
+        GeometryKind, Layer, Rule, Topology,
+        geo::{Geometry, LineString, MultiLineString, coord},
+    };
+
+    /// Multipart lines on a small grid, so features share vertices, segments and
+    /// whole parts, and some parts are closed or have zero-length segments.
+    fn line() -> impl Strategy<Value = Vec<Vec<(i32, i32)>>> {
+        prop::collection::vec(prop::collection::vec((-3i32..4, -3i32..4), 2..5), 1..4)
+    }
+    fn geometry(parts: &[Vec<(i32, i32)>], offset: f64) -> Geometry {
+        let part = |part: &Vec<(i32, i32)>| {
+            LineString(
+                part.iter()
+                    .map(|&(x, y)| coord! { x: offset + x as f64, y: offset + y as f64 })
+                    .collect(),
+            )
+        };
+        MultiLineString(parts.iter().map(part).collect()).into()
+    }
+    fn streamed(t: &Topology, threads: Option<usize>) -> String {
+        let run = || {
+            let mut violations = Vec::new();
+            let summary = t.validate_into(|spec, v| {
+                violations.push((spec, v));
+                Ok::<_, Infallible>(())
+            });
+            format!("{violations:?} {summary:?}")
+        };
+        match threads {
+            Some(n) => rayon::ThreadPoolBuilder::new()
+                .num_threads(n)
+                .build()
+                .unwrap()
+                .install(run),
+            None => run(),
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(64))]
+        #[test]
+        fn line_rule_streams_do_not_depend_on_the_thread_count(
+            a in prop::collection::vec(line(), 0..14),
+            b in prop::collection::vec(line(), 0..6),
+            copies in 0usize..4,
+            tolerance in prop_oneof![Just(0.), Just(0.01), Just(0.6), Just(1.5)],
+            offset in prop_oneof![Just(0.), Just(-250.), Just(1e6), Just(1e9)],
+        ) {
+            let mut t = Topology::new(tolerance).unwrap();
+            let features = |lines: &[Vec<Vec<(i32, i32)>>], step: i64| {
+                lines
+                    .iter()
+                    .enumerate()
+                    .map(|(i, parts)| (i as i64 * step, geometry(parts, offset)))
+                    .collect::<Vec<_>>()
+            };
+            let la = t.add_layer(Layer::from_features("a", features(&a, -3)));
+            // The other layer repeats a few features of the first one.
+            let mut other = a.iter().take(copies).cloned().collect::<Vec<_>>();
+            other.extend(b);
+            let lb = t.add_layer(Layer::from_features("b", features(&other, 7)));
+            for &rule in Rule::ALL {
+                match rule.inputs() {
+                    (GeometryKind::Line, None) => t.add_rule(rule, la, None).unwrap(),
+                    (GeometryKind::Line, Some(GeometryKind::Line)) => {
+                        t.add_rule(rule, la, Some(lb)).unwrap()
+                    }
+                    _ => continue,
+                };
+            }
+            let expected = streamed(&t, Some(1));
+            prop_assert!(expected.contains("Ok("), "{expected}");
+            for threads in [Some(2), Some(4), Some(4), None] {
+                prop_assert_eq!(&streamed(&t, threads), &expected);
+            }
+        }
+    }
+}
