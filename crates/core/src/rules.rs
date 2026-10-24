@@ -202,8 +202,9 @@ impl Helpers {
     /// per CPU but one, and a batch never waits for them: without any it runs on the
     /// calling thread alone.
     fn take(want: usize) -> Self {
+        // Tests that fix the thread count get it whatever runs beside them.
         #[cfg(test)]
-        if tests::threads().is_some() {
+        if tests::threads().is_some() || Workers::forced_here().is_some() {
             return Self {
                 threads: want,
                 shared: 0,

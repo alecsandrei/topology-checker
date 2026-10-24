@@ -64,7 +64,7 @@ impl Workers {
     /// Workers for a step over `work` similar units, decided on the calling thread.
     pub(crate) fn new(work: usize) -> Self {
         #[cfg(test)]
-        if let Some(forced) = FORCED.with(std::cell::Cell::get) {
+        if let Some(forced) = Self::forced_here() {
             return forced;
         }
         if work < INLINE {
@@ -76,10 +76,19 @@ impl Workers {
     /// Every thread a step on this thread may use.
     pub(crate) fn all() -> Self {
         #[cfg(test)]
-        if let Some(forced) = FORCED.with(std::cell::Cell::get) {
+        if let Some(forced) = Self::forced_here() {
             return forced;
         }
         Self::with_threads(rayon::current_num_threads().min(cap().unwrap_or(usize::MAX)))
+    }
+    /// The workers of a [`forced`](Self::forced) call on this thread, within the
+    /// thread limit of a [`capped`] call.
+    #[cfg(test)]
+    pub(crate) fn forced_here() -> Option<Self> {
+        FORCED.with(std::cell::Cell::get).map(|forced| Self {
+            threads: forced.threads.min(cap().unwrap_or(usize::MAX)),
+            ..forced
+        })
     }
     /// Exactly `threads` threads, the calling one included.
     pub(crate) fn with_threads(threads: usize) -> Self {
@@ -89,7 +98,7 @@ impl Workers {
         }
     }
     /// Run `f` with steps split into tasks of `grain` units on `threads`
-    /// threads, whatever their size.
+    /// threads, whatever their size. The threads of its steps do the same.
     #[cfg(test)]
     pub(crate) fn forced<T>(threads: usize, grain: usize, f: impl FnOnce() -> T) -> T {
         struct Restore(Option<Workers>);
@@ -148,6 +157,8 @@ impl Workers {
             })
         };
         let token = cancel::current();
+        #[cfg(test)]
+        let forced = FORCED.with(std::cell::Cell::get);
         let payload = std::thread::scope(|scope| {
             let handles = (1..threads)
                 .filter_map(|_| {
@@ -156,6 +167,8 @@ impl Workers {
                     // Without threads the calling thread does all the work.
                     std::thread::Builder::new()
                         .spawn_scoped(scope, move || {
+                            #[cfg(test)]
+                            FORCED.with(|c| c.set(forced));
                             cancel::scope(token, || {
                                 #[cfg(test)]
                                 let _live = cancel::hooks::Live::start();
