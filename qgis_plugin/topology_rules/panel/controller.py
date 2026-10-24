@@ -34,6 +34,8 @@ if t.TYPE_CHECKING:
     from .dock import Dock
 
 ERRORS_TAB = 1
+# How long the unloading of the plugin waits for a run to stop, in ms
+STOP_MS = 2000
 
 
 @dataclasses.dataclass(eq=False)
@@ -108,7 +110,7 @@ def start(dock: Dock) -> None:
     )
     task.executed.connect(lambda ok, results: done(dock, run, ok, results))
     task.taskTerminated.connect(lambda: LIVE.discard(run))
-    dock.rules_page.setEnabled(False)
+    dock.rules_page.lock(True)
     dock.progress.show()
     dock.stage.show()
     dock.update_buttons()
@@ -156,10 +158,16 @@ def stage_changed(dock: Dock, run: Run, staged: Staged) -> None:
                 entry.errors = None
             dock.rule_list.show_entries()
             begin(dock, run)
+        dock.rule_list.set_running(None)
         dock.stage.say(tr('Reading layers…'))
         return
     if total != len(run.entries):
         return
+    dock.rule_list.set_running(
+        run.entries[index]
+        if stage is Stage.CHECKING and index is not None and 0 <= index < total
+        else None
+    )
     if stage is Stage.WRITING:
         dock.stage.say(tr('Writing errors…'))
     elif index is None:
@@ -206,7 +214,8 @@ def rule_done(dock: Dock, run: Run, found: Done) -> None:
 def settle(dock: Dock) -> None:
     """Lets go of the run and gives the panel back."""
     dock.run = dock.task = dock.feedback = dock.context = None
-    dock.rules_page.setEnabled(True)
+    dock.rules_page.lock(False)
+    dock.rule_list.set_running(None)
     dock.progress.hide()
     dock.progress.setRange(0, 0)
     dock.stage.hide()
@@ -222,6 +231,16 @@ def abandon(dock: Dock) -> None:
         return
     run.feedback.cancel()
     settle(dock)
+
+
+def stop(dock: Dock) -> None:
+    """Abandons the run in progress, and waits a moment for its thread to
+    end, so that it runs no code of a plugin that is gone."""
+    run = dock.run
+    abandon(dock)
+    if run is not None and not sip.isdeleted(run.task):
+        run.task.cancel()
+        run.task.waitForFinished(STOP_MS)
 
 
 def done(dock: Dock, run: Run, ok: bool, results: dict[str, t.Any]) -> None:

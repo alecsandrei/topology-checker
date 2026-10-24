@@ -395,7 +395,7 @@ class Dock(QgsDockWidget):
 
     def dispose(self) -> None:
         """Stops a run and lets go of the project, before the panel goes."""
-        controller.abandon(self)
+        controller.stop(self)
         project = not_none(QgsProject.instance())
         for signal, slot in (
             (project.layersRemoved, self.layers_removed),

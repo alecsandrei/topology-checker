@@ -399,6 +399,15 @@ def at(
         wait_for(held.at_end)
 
 
+def running_rules(dock: Dock) -> list[str]:
+    """The rules that the list marks as the one that the run checks."""
+    return [
+        item.text(0)
+        for item in dock.rule_list.rule_items()
+        if item.font(0).bold()
+    ]
+
+
 def bar_range(dock: Dock) -> tuple[int, int, int]:
     bar = dock.progress
     return bar.minimum(), bar.maximum(), bar.value()
@@ -431,6 +440,11 @@ def test_each_rule_shows_its_count_and_errors_as_soon_as_it_is_done(
         assert now.map == []
         assert now.tree == expected.tree
         assert dock.results.placeholder.text() == 'No errors yet.'
+        # The list reads as usual, and marks the rule that the run checks
+        assert dock.rules_tree.isEnabled()
+        assert running_rules(dock) == [
+            entry.title for entry in dock.entries[done : done + 1]
+        ]
         # The run does not take the user to the errors
         assert dock.tabs.currentIndex() == 0
         assert dock.run_button.text() == 'Cancel'
@@ -439,6 +453,7 @@ def test_each_rule_shows_its_count_and_errors_as_soon_as_it_is_done(
     wait_for(lambda: dock.task is None)
     assert seen_now(dock) == reference
     assert dock.tabs.currentIndex() == ERRORS_TAB
+    assert running_rules(dock) == []
 
 
 def test_the_progress_goes_with_the_rules_after_the_reading(
@@ -842,9 +857,23 @@ def test_unloading_the_plugin_during_a_run(
     qgis_iface: t.Any,
     qgis_processing: None,
     bar: t.Any,
+    monkeypatch: pytest.MonkeyPatch,
 ):
+    """The run stops, and the unloading waits a moment for its thread to
+    end."""
+    from topology_rules.algorithms import check
     from topology_rules.plugin import TopologyRules
 
+    ended = threading.Event()
+    real = check.run_jobs
+
+    def run_jobs(*args: t.Any, **kwargs: t.Any) -> t.Any:
+        try:
+            return real(*args, **kwargs)
+        finally:
+            ended.set()
+
+    monkeypatch.setattr(check, 'run_jobs', run_jobs)
     plugin = TopologyRules(qgis_iface)
     plugin.initGui()
     dock = plugin.dock
@@ -854,9 +883,17 @@ def test_unloading_the_plugin_during_a_run(
     run = held.start(dock)
     held.let(1)
     wait_for(lambda: len(run.done) == 1)
+    pid = None if held.package else held.pid()
     bar.calls.clear()
+    # The canceled run writes the errors of the rule that is done
+    held.writing.armed = False
     del dock
+    began = time.monotonic()
     plugin.unload()
+    assert time.monotonic() - began < controller.STOP_MS / 1000
+    assert ended.is_set()
+    if pid is not None:
+        assert not process_alive(pid)
     held.release()
     wait_for(lambda: run not in controller.LIVE)
     for _ in range(5):

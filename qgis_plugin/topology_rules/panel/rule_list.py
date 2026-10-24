@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import collections.abc as c
 import typing as t
 
 from qgis.PyQt.QtCore import QEvent, Qt, pyqtSignal
@@ -24,6 +25,13 @@ from .narrow import shrink_buttons
 from .wrapping import wrap_long_text
 
 COLUMNS = ('Rule', 'Errors')
+# A rule that can be ticked, and one that a run keeps as it is
+EDITABLE = (
+    Qt.ItemFlag.ItemIsSelectable
+    | Qt.ItemFlag.ItemIsEnabled
+    | Qt.ItemFlag.ItemIsUserCheckable
+)
+READ_ONLY = Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled
 
 
 class RuleList(QWidget):
@@ -40,6 +48,10 @@ class RuleList(QWidget):
         # How many features of each layer a run left out as invalid
         self.invalid: dict[str, int] = {}
         self.filling = False
+        # During a run: the rules stay as they are, and can still be read
+        self.locked = False
+        # The rule that the run checks now
+        self.running: Entry | None = None
         self.tree = QTreeWidget()
         self.tree.setColumnCount(len(COLUMNS))
         self.tree.setHeaderLabels(['', ''])
@@ -130,8 +142,49 @@ class RuleList(QWidget):
         self.show_entries()
 
     def update_buttons(self) -> None:
-        self.remove_button.setEnabled(bool(self.tree.selectedItems()))
-        self.clear_button.setEnabled(bool(self.entries))
+        self.remove_button.setEnabled(
+            not self.locked and bool(self.tree.selectedItems())
+        )
+        self.clear_button.setEnabled(not self.locked and bool(self.entries))
+
+    def rule_items(self) -> c.Iterator[QTreeWidgetItem]:
+        for top in range(self.tree.topLevelItemCount()):
+            node = not_none(self.tree.topLevelItem(top))
+            for row in range(node.childCount()):
+                yield not_none(node.child(row))
+
+    def set_locked(self, locked: bool) -> None:
+        """Keeps the rules as they are while a run checks them: they cannot
+        be ticked or taken off, and read as usual."""
+        self.locked = locked
+        was = self.filling
+        self.filling = True
+        try:
+            for item in self.rule_items():
+                item.setFlags(READ_ONLY if locked else EDITABLE)
+        finally:
+            self.filling = was
+        self.update_buttons()
+
+    def set_running(self, entry: Entry | None) -> None:
+        """Marks the rule that the run checks now, or none."""
+        self.running = entry
+        was = self.filling
+        self.filling = True
+        try:
+            for item in self.rule_items():
+                self.mark_running(item)
+        finally:
+            self.filling = was
+
+    def mark_running(self, item: QTreeWidgetItem) -> None:
+        index = item.data(0, ENTRY)
+        running = index is not None and self.entries[index] is self.running
+        for column in range(len(COLUMNS)):
+            font = item.font(column)
+            if font.bold() != running:
+                font.setBold(running)
+                item.setFont(column, font)
 
     def item_changed(self, item: QTreeWidgetItem, column: int) -> None:
         index = item.data(0, ENTRY)
@@ -193,7 +246,8 @@ class RuleList(QWidget):
         if event.type() == QEvent.Type.KeyPress and t.cast(
             QKeyEvent, event
         ).key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
-            self.remove_selected()
+            if not self.locked:
+                self.remove_selected()
             return True
         return super().eventFilter(*args)
 
@@ -224,14 +278,11 @@ class RuleList(QWidget):
         was = self.filling
         self.filling = True
         try:
-            for top in range(self.tree.topLevelItemCount()):
-                node = not_none(self.tree.topLevelItem(top))
-                for row in range(node.childCount()):
-                    child = not_none(node.child(row))
-                    if child.data(0, ENTRY) == index:
-                        child.setText(
-                            1, '' if entry.errors is None else str(entry.errors)
-                        )
+            for item in self.rule_items():
+                if item.data(0, ENTRY) == index:
+                    item.setText(
+                        1, '' if entry.errors is None else str(entry.errors)
+                    )
         finally:
             self.filling = was
 
@@ -252,7 +303,7 @@ class RuleList(QWidget):
                 [entry.title, '' if entry.errors is None else str(entry.errors)]
             )
             child.setData(0, ENTRY, index)
-            child.setFlags(child.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            child.setFlags(READ_ONLY if self.locked else EDITABLE)
             child.setCheckState(
                 0,
                 Qt.CheckState.Checked
@@ -264,6 +315,8 @@ class RuleList(QWidget):
             child.setTextAlignment(1, Qt.AlignmentFlag.AlignRight)
             child.setToolTip(1, tr('Errors found in the last run'))
             parent.addChild(child)
+            if self.running is not None:
+                self.mark_running(child)
         self.refresh_marks()
         self.tree.expandAll()
         self.placeholder.set_empty(not self.entries)

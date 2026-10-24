@@ -8,7 +8,9 @@ from pathlib import Path
 
 import pytest
 from qgis.core import Qgis, QgsApplication, QgsProject
-from qgis.PyQt.QtWidgets import QProgressBar, QTabWidget
+from qgis.PyQt.QtCore import Qt
+from qgis.PyQt.QtTest import QTest
+from qgis.PyQt.QtWidgets import QProgressBar, QTabWidget, QTreeWidgetItem
 
 from topology_rules.core import binary, engine, folders
 from topology_rules.core.engine import Package
@@ -184,13 +186,46 @@ def test_the_progress_bar_goes_with_the_run(running: Dock):
         'other_box',
         'add_button',
         'tolerance',
-        'rules_tree',
         'remove_button',
         'clear_button',
+        'import_button',
+        'export_button',
     ],
 )
 @executable_only
-def test_the_form_and_the_list_are_disabled_during_a_run(
+def test_the_form_and_the_buttons_of_the_list_are_disabled_during_a_run(
     running: Dock, name: str
 ):
     assert not getattr(running, name).isEnabled()
+
+
+def rule_item(dock: Dock) -> QTreeWidgetItem:
+    return not_none(not_none(dock.rules_tree.topLevelItem(0)).child(0))
+
+
+@executable_only
+def test_the_list_of_rules_stays_readable_during_a_run(running: Dock):
+    """It is not greyed out, as it shows the counts of the rules that are
+    done, and its rules cannot be ticked or taken off."""
+    tree = running.rules_tree
+    assert tree.isEnabled()
+    item = rule_item(running)
+    assert item.flags() & Qt.ItemFlag.ItemIsEnabled
+    assert not item.flags() & Qt.ItemFlag.ItemIsUserCheckable
+    tree.setCurrentItem(item)
+    QTest.keyClick(tree, Qt.Key.Key_Delete)
+    assert len(running.entries) == 1
+    assert rule_item(running).checkState(0) == Qt.CheckState.Checked
+
+
+@executable_only
+def test_the_rules_can_be_ticked_and_taken_off_after_a_run(running: Dock):
+    running.run_button.click()
+    wait_for(lambda: running.task is None, timeout=20)
+    item = rule_item(running)
+    assert item.flags() & Qt.ItemFlag.ItemIsUserCheckable
+    item.setCheckState(0, Qt.CheckState.Unchecked)
+    assert not running.entries[0].checked
+    running.rules_tree.setCurrentItem(item)
+    QTest.keyClick(running.rules_tree, Qt.Key.Key_Delete)
+    assert running.entries == []
