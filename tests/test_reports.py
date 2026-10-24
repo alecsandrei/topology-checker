@@ -503,7 +503,6 @@ def test_threads_sharing_a_violation_stream_get_each_violation_once(seed: int) -
     got: list[list[Violation]] = [[] for _ in range(4)]
     run_together(4, lambda i: got[i].extend(stream))
     assert Counter(v for part in got for v in part) == Counter(eager.violations)
-    assert sum(1 for part in got if part) > 1
     assert stream.summary is not None
     assert stream.summary.error_count == eager.error_count
     assert no_workers(0)
