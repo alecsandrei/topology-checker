@@ -210,7 +210,7 @@ class InstallDialog(QDialog):
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
         self.progress.hide()
-        self.package_label = QLabel(f'{PACKAGE} {self.version}')
+        self.package_field = fact(f'{PACKAGE} {self.version}')
         self.file_field = fact()
         self.source_field = fact()
         self.sha256_field = fact()
@@ -218,14 +218,14 @@ class InstallDialog(QDialog):
         self.folder_field = fact(str(install.folder_of(self.version)))
         self.open_button = QPushButton(tr('Open'))
         # The package needs no other package
-        self.dependencies_label = QLabel(tr('None'))
+        self.dependencies_field = fact(tr('None'))
         self.facts = QWidget()
         self.facts.setSizePolicy(
             QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
         )
         form = QFormLayout(self.facts)
         form.setContentsMargins(0, 0, 0, 0)
-        form.addRow(tr('Package'), self.package_label)
+        form.addRow(tr('Package'), self.package_field)
         form.addRow(tr('File'), self.file_field)
         form.addRow(tr('Source'), self.source_field)
         form.addRow(tr('SHA-256'), self.sha256_field)
@@ -233,7 +233,7 @@ class InstallDialog(QDialog):
         folder_row.addWidget(self.folder_field, 1)
         folder_row.addWidget(self.open_button)
         form.addRow(tr('Folder'), folder_row)
-        form.addRow(tr('Dependencies'), self.dependencies_label)
+        form.addRow(tr('Dependencies'), self.dependencies_field)
 
         self.command_box = CommandBox(
             tr('Command for {terminal}').format(terminal=install.terminal())

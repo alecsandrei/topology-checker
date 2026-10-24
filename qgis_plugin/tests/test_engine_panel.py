@@ -653,14 +653,26 @@ def test_the_dialog_says_what_it_would_install(
     name = wheel_name(LINUX)
     assert dialog.status.isHidden()
     assert shown(dialog.facts)
-    assert dialog.package_label.text() == f'topology-checker {VERSION}'
+    assert dialog.package_field.text() == f'topology-checker {VERSION}'
     assert dialog.file_field.text() == (
         f'{name} ({install.size_text(len(content))})'
     )
     assert dialog.source_field.text() == f'{pypi.url}/files/{name}'
     assert dialog.sha256_field.text() == sha256(content)
     assert dialog.folder_field.text() == str(home / VERSION)
-    assert dialog.dependencies_label.text() == 'None'
+    assert dialog.dependencies_field.text() == 'None'
+    # Each fact is a text box that can be copied but not changed
+    assert all(
+        field.isReadOnly()
+        for field in (
+            dialog.package_field,
+            dialog.file_field,
+            dialog.source_field,
+            dialog.sha256_field,
+            dialog.folder_field,
+            dialog.dependencies_field,
+        )
+    )
     assert dialog.install_button.isEnabled()
     assert dialog.install_button.text() == 'Install'
     assert dialog.copy_log.isHidden()
