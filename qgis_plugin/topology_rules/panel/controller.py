@@ -102,10 +102,10 @@ def start(dock: Dock) -> None:
     begin(dock, run)
     # In the order the run sends them, and before the task says it is done
     queued = Qt.ConnectionType.QueuedConnection
-    feedback.stage_changed.connect(
+    t.cast(t.Any, feedback.stage_changed).connect(
         lambda staged: stage_changed(dock, run, staged), queued
     )
-    feedback.rule_done.connect(
+    t.cast(t.Any, feedback.rule_done).connect(
         lambda found: rule_done(dock, run, found), queued
     )
     task.executed.connect(lambda ok, results: done(dock, run, ok, results))

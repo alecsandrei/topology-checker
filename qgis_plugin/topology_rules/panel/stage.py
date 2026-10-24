@@ -46,6 +46,7 @@ class StageLabel(QLabel):
         )
         self.setText(before + shown + after)
 
-    def resizeEvent(self, *args: t.Any) -> None:
-        super().resizeEvent(*args)
+    # Qt 5 and Qt 6 differ on whether the event can be None
+    def resizeEvent(self, a0: t.Any) -> None:
+        super().resizeEvent(a0)
         self.fit()

@@ -147,6 +147,19 @@ def progress_of(line: str) -> tuple[int, int, int] | None:
     return number - 1, total, count
 
 
+def follower(done: Done) -> Lines:
+    """Takes the lines of --progress out of what the tool says, and tells
+    `done` of the rule each one is about."""
+
+    def lines(line: str) -> bool:
+        found = progress_of(line)
+        if found is not None:
+            done(*found)
+        return found is not None
+
+    return lines
+
+
 def modified(executable: str) -> int:
     try:
         return os.stat(executable).st_mtime_ns
@@ -169,16 +182,7 @@ def run_validate(
     executable can say so. An executable that refuses a flag is asked
     without it, and not with it again.
     """
-    lines: Lines | None = None
-    if done is not None:
-        told = done
-
-        def lines(line: str) -> bool:
-            found = progress_of(line)
-            if found is not None:
-                told(*found)
-            return found is not None
-
+    lines = None if done is None else follower(done)
     version = (executable, modified(executable))
     summary = executable not in WITHOUT_SUMMARY
     progress = lines is not None and version not in WITHOUT_PROGRESS
