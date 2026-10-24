@@ -219,6 +219,9 @@ impl NativeTopology {
             stream::NativeValidationStream::new(core.snapshot(), batch_size)
         })
     }
+    fn iter_reports(&self, py: Python<'_>) -> PyResult<stream::NativeReportStream> {
+        self.access(py, |core| stream::NativeReportStream::new(core.snapshot()))
+    }
 }
 
 #[pyfunction]
@@ -317,6 +320,7 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add("PrecisionError", module.py().get_type::<PrecisionError>())?;
     module.add_class::<NativeTopology>()?;
     module.add_class::<stream::NativeValidationStream>()?;
+    module.add_class::<stream::NativeReportStream>()?;
     module.add_class::<stream::NativeReport>()?;
     module.add_class::<stream::NativeSummary>()?;
     module.add_class::<stream::NativeRuleSummary>()?;
@@ -324,5 +328,6 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(registry, module)?)?;
     module.add_function(wrap_pyfunction!(lines, module)?)?;
     module.add_function(wrap_pyfunction!(prepare, module)?)?;
+    module.add_function(wrap_pyfunction!(stream::live_workers, module)?)?;
     Ok(())
 }

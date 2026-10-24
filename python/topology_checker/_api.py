@@ -11,18 +11,23 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, cast, overload
 
 from . import _native, _optional
-from ._enums import ErrorType, GeometryKind, Rule, resolve
+from ._enums import GeometryKind, Rule, resolve
 from ._input import Prepared, prepare
 from ._models import (
     Layer,
     LayerId,
     Report,
-    RuleReport,
     RuleSpec,
     Violation,
     new_layer_id,
 )
-from ._stream import ValidationStream, decode, warning_messages
+from ._stream import (
+    ReportStream,
+    ValidationStream,
+    all_warnings,
+    decode,
+    rule_report,
+)
 
 if TYPE_CHECKING:
     from pyproj import CRS
@@ -260,11 +265,7 @@ class Topology:
         return known[0] if known else None, ()
 
     def _warnings(self, native: Iterable[_native.NativeWarning]) -> tuple[str, ...]:
-        return (
-            tuple(w for layer in self._layers for w in layer.warnings)
-            + warning_messages(list(native), tuple(self._layers))
-            + self._crs()[1]
-        )
+        return all_warnings(tuple(self._layers), list(native), self._crs()[1])
 
     def warnings(self) -> tuple[str, ...]:
         """Return input, degenerate-part, and combined CRS warnings."""
@@ -291,8 +292,22 @@ class Topology:
                 self._native.iter_validate(batch_size),
                 tuple(self._layers),
                 tuple(self._specs),
-                self._warnings(()),
-                self._crs()[0],
+                self._crs(),
+            )
+
+    def iter_reports(self) -> ReportStream:
+        """Stream a snapshot one rule report at a time, as each rule finishes.
+
+        Returns:
+            A closeable iterator of the reports in `validate().rules`, with
+            final summary after exhaustion.
+        """
+        with self._lock:
+            return ReportStream(
+                self._native.iter_reports(),
+                tuple(self._layers),
+                tuple(self._specs),
+                self._crs(),
             )
 
     def validate(self) -> Report:
@@ -304,20 +319,9 @@ class Topology:
             for error in result.errors:
                 errors[error.rule_index].append(decode(error, layers, specs))
             rules = tuple(
-                RuleReport(
-                    spec.rule,
-                    spec.layer,
-                    spec.other,
-                    self._layers[item.layer].name,
-                    None if item.other is None else self._layers[item.other].name,
-                    MappingProxyType(
-                        {ErrorType(key): count for key, count in item.counts.items()}
-                    ),
-                    tuple(errors[i]),
-                    spec,
-                )
+                rule_report(spec, item, tuple(errors[i]), layers)
                 for i, (spec, item) in enumerate(
-                    zip(self._specs, result.summary.rules, strict=True)
+                    zip(specs, result.summary.rules, strict=True)
                 )
             )
             return Report(

@@ -99,6 +99,9 @@ def check_validate() -> None:
         streamed = [violation.wkb for violation in stream]
     assert streamed == [point(0, 0), point(2, 0)]
     assert stream.summary is not None and stream.summary.error_count == 2
+    with topology.iter_reports() as reports:
+        assert list(reports) == list(report.rules)
+    assert reports.summary is not None and reports.summary.error_count == 2
     valid = Topology()
     valid.add_rule(Rule.MUST_NOT_OVERLAP, [point(0, 0), point(1, 1)])
     assert valid.validate().to_dict()["is_valid"]

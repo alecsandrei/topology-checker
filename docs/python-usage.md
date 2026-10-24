@@ -233,6 +233,15 @@ exhaustion and stays `None` after cancellation or failure. `validate()` and its
 quadratic number of pairs, so stream them when the complete report is too large
 for memory.
 
+```python
+with topology.iter_reports() as reports:
+    for rule in reports:
+        print(rule.resolved_rule.value, len(rule.violations))
+```
+
+`iter_reports()` yields each rule's `RuleReport` as soon as that rule finishes,
+in registration order, and otherwise behaves like `iter_validate()`.
+
 Polygon area and boundary decisions retain exact node identities until output.
 The inclusive area-to-perimeter threshold is certified before geometry emission,
 with exact rational calculations for cancellation and ambiguous thresholds.

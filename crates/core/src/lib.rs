@@ -22,6 +22,6 @@ pub use geo;
 pub use merge::{explode_lines, merge_lines};
 pub use model::{FeatureRef, GeometryKind, Layer, LayerId};
 pub use rule::{ParseRuleError, Rule, RuleId, RuleSpec};
-pub use stream::{ReportSummary, RuleSummary, SinkError};
+pub use stream::{ReportSummary, RuleSummary, SinkError, ValidationEvent};
 pub use topology::{LayerInput, Report, RuleReport, Topology, Warning};
 pub use violation::{Violation, ViolationKind};
