@@ -29,14 +29,12 @@ from topology_rules.core.engine import Engine, Package
 from topology_rules.core.layers import Input
 from topology_rules.enums import Setting
 from topology_rules.exceptions import ExecutableError, PackageError, RunError
-from topology_rules.panel import startup
 from topology_rules.panel.dock import Dock
 from topology_rules.provider import Provider
 
 from .helpers import (
     NEEDS_PACKAGE,
     Ran,
-    choose_engine,
     errors_layer,
     line_layer,
     run_algorithm,
@@ -144,6 +142,23 @@ def test_the_choice_is_kept(chosen: Engine):
     assert QgsSettings().value(Setting.ENGINE.value) == chosen.value
 
 
+def test_the_choice_is_written_for_the_tasks():
+    """A task reads the settings on a thread of its own."""
+    engine.choose(Engine.PACKAGE)
+    text = Path(QgsSettings().fileName()).read_text(encoding='utf-8')
+    assert 'engine=package' in text
+
+
+def test_choosing_no_engine_lists_the_rules_again(provider: Provider):
+    """As after what the engine runs changed."""
+    engine.choose(Engine.AUTOMATIC)
+    loaded: list[bool] = []
+    provider.algorithmsLoaded.connect(lambda: loaded.append(True))
+    engine.choose()
+    assert loaded == [True]
+    assert engine.chosen() is Engine.AUTOMATIC
+
+
 def test_automatic_is_the_default():
     QgsSettings().remove(Setting.ENGINE.value)
     assert engine.chosen() is Engine.AUTOMATIC
@@ -155,7 +170,7 @@ def test_a_choice_that_is_not_known_is_automatic():
 
 
 def test_the_executable_is_kept_with_the_package(package: Package):
-    choose_engine(Engine.EXECUTABLE)
+    engine.choose(Engine.EXECUTABLE)
     assert engine.resolved() is Engine.EXECUTABLE
 
 
@@ -163,7 +178,7 @@ def test_the_executable_is_kept_with_the_package(package: Package):
 
 
 def test_automatic_is_the_package_where_it_can_be_imported(package: Package):
-    choose_engine(Engine.AUTOMATIC)
+    engine.choose(Engine.AUTOMATIC)
     assert engine.resolved() is Engine.PACKAGE
     assert engine.package() == package
 
@@ -172,7 +187,7 @@ def test_automatic_is_the_executable_without_the_package(
     monkeypatch: pytest.MonkeyPatch,
 ):
     without_package(monkeypatch)
-    choose_engine(Engine.AUTOMATIC)
+    engine.choose(Engine.AUTOMATIC)
     assert engine.package() is None
     assert engine.resolved() is Engine.EXECUTABLE
 
@@ -183,7 +198,7 @@ def test_automatic_is_the_executable_with_a_package_that_is_too_old(
     old = types.ModuleType(engine.MODULE)
     old.__file__ = str(Path('somewhere', engine.MODULE, '__init__.py'))
     monkeypatch.setitem(sys.modules, engine.MODULE, old)
-    choose_engine(Engine.AUTOMATIC)
+    engine.choose(Engine.AUTOMATIC)
     assert engine.resolved() is Engine.EXECUTABLE
     with pytest.raises(
         PackageError, match=r'too old .* no Topology\.add_layer'
@@ -256,7 +271,7 @@ def test_the_package_chosen_without_it_says_why(
     monkeypatch: pytest.MonkeyPatch,
 ):
     without_package(monkeypatch)
-    choose_engine(Engine.PACKAGE)
+    engine.choose(Engine.PACKAGE)
     assert engine.resolved() is Engine.PACKAGE
     with pytest.raises(PackageError, match='cannot be imported'):
         engine.tool()
@@ -289,7 +304,7 @@ def test_a_package_installed_while_qgis_runs_is_used(
     hide_package(monkeypatch, package)
     folder = tmp_path / 'dependencies'
     monkeypatch.setattr(sys, 'path', [str(folder), *sys.path])
-    choose_engine(Engine.AUTOMATIC)
+    engine.choose(Engine.AUTOMATIC)
     assert engine.package() is None
     before = dangles()
     assert before.ok, before.log
@@ -326,7 +341,7 @@ def test_the_log_names_the_executable_and_the_command(
 def test_the_log_names_the_package(
     executable: str, provider: Provider, package: Package
 ):
-    choose_engine(Engine.PACKAGE)
+    engine.choose(Engine.PACKAGE)
     ran = dangles()
     assert ran.ok, ran.log
     assert ran.log.splitlines()[0] == (
@@ -346,7 +361,7 @@ def test_no_executable_is_looked_for_with_the_package(
         raise ExecutableError('The executable was looked for')
 
     monkeypatch.setattr(binary, 'find_executable', unused)
-    choose_engine(Engine.PACKAGE)
+    engine.choose(Engine.PACKAGE)
     ran = dangles()
     assert ran.ok, ran.log
     assert ran.results['COUNT'] == 2
@@ -370,7 +385,7 @@ def test_the_package_runs_without_shapely_and_pyproj(
             monkeypatch.delitem(sys.modules, module)
     monkeypatch.setitem(sys.modules, 'shapely', None)
     monkeypatch.setitem(sys.modules, 'pyproj', None)
-    choose_engine(Engine.PACKAGE)
+    engine.choose(Engine.PACKAGE)
     layer = line_layer(*CHAIN)
     QgsProject.instance().addMapLayer(layer)
     ran = run_algorithm(name, {'INPUT': layer.id(), output: 'memory:'})
@@ -387,7 +402,7 @@ def package_only(
 ) -> Package:
     """The package, and no executable to be found."""
     monkeypatch.setenv('PATH', str(tmp_path / 'nothing'))
-    choose_engine(Engine.PACKAGE)
+    engine.choose(Engine.PACKAGE)
     return package
 
 
@@ -430,11 +445,11 @@ def test_switching_the_engine_lists_its_rules(
         dock.refresh()
         assert dock.available
         # There is no executable to switch to
-        startup.switch(dock, Engine.EXECUTABLE)
+        dock.reload(Engine.EXECUTABLE)
         assert engine.chosen() is Engine.EXECUTABLE
         assert not dock.available
         assert not provider.algorithms()
-        startup.switch(dock, Engine.AUTOMATIC)
+        dock.reload(Engine.AUTOMATIC)
         assert dock.available
         assert provider.algorithms()
     finally:
@@ -480,7 +495,7 @@ def test_a_run_of_the_package_stops_between_two_errors(
 def test_a_canceled_run_of_the_package_ends(
     executable: str, provider: Provider, package: Package
 ):
-    choose_engine(Engine.PACKAGE)
+    engine.choose(Engine.PACKAGE)
     lines = line_layer(*segments(20000))
     QgsProject.instance().addMapLayer(lines)
     started = start_algorithm(DANGLES, {'INPUT': lines.id()})

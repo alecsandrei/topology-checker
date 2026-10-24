@@ -71,10 +71,17 @@ def chosen() -> Engine:
         return Engine.AUTOMATIC
 
 
-def choose(engine: Engine) -> None:
-    """Has the engine run the checks from now on, and the toolbox list its
-    rules."""
-    QgsSettings().setValue(Setting.ENGINE.value, engine.value)
+def choose(engine: Engine | None = None) -> None:
+    """What follows a change of the engine, or of what it runs: keeps the
+    engine that is given for the checks from now on, then has the toolbox
+    list the rules of the engine. The panel does this with Dock.reload, which
+    lists them in the panel too."""
+    if engine is not None:
+        settings = QgsSettings()
+        settings.setValue(Setting.ENGINE.value, engine.value)
+        # A task reads the setting on a thread of its own, which sees only
+        # what is in the file
+        settings.sync()
     registry = QgsApplication.processingRegistry()
     provider = None if registry is None else registry.providerById(PROVIDER_ID)
     if provider is not None:

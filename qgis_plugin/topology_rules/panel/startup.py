@@ -14,13 +14,6 @@ if t.TYPE_CHECKING:
     from .dock import Dock
 
 
-def switch(dock: Dock, chosen: Engine) -> None:
-    """Has the engine run the checks from now on, and the toolbox and the
-    dock list its rules."""
-    engine.choose(chosen)
-    refresh(dock)
-
-
 def refresh(dock: Dock) -> None:
     """Lists the rules of the engine, or says why there are none, which is
     also what follows a change of the engine.

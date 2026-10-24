@@ -42,7 +42,7 @@ from topology_rules.panel.menu import PanelMenu
 from topology_rules.provider import Provider
 from topology_rules.utils import not_none
 
-from .helpers import choose_engine, message_text, real_executable, wait_for
+from .helpers import message_text, real_executable, wait_for
 from .test_install import Index, load_from, trickle, version_folder
 from .test_wrapping import NARROW
 from .wheel_helpers import (
@@ -299,7 +299,7 @@ def test_the_engines_have_a_title_where_the_style_draws_no_sections(
 
 @pytest.mark.parametrize('chosen', list(Engine), ids=[e.value for e in Engine])
 def test_the_chosen_engine_is_checked(chosen: Engine):
-    choose_engine(chosen)
+    engine.choose(chosen)
     menu = PanelMenu()
     menu.fill()
     assert [action.isChecked() for action in menu.engines.values()] == [
@@ -438,6 +438,16 @@ def test_choosing_an_engine_saves_it_and_refreshes(
     assert refreshes == ['toolbox', 'panel']
 
 
+def test_the_menu_tells_only_of_another_engine():
+    menu = PanelMenu()
+    menu.fill()
+    chosen: list[Engine] = []
+    menu.engine_chosen.connect(chosen.append)
+    menu.group.triggered.emit(menu.engines[Engine.EXECUTABLE])
+    menu.group.triggered.emit(menu.engines[Engine.AUTOMATIC])
+    assert chosen == [Engine.AUTOMATIC]
+
+
 def test_choosing_the_engine_that_is_chosen_changes_nothing(
     dock: Dock, refreshes: list[str]
 ):
@@ -499,7 +509,7 @@ def test_removing_the_chosen_package_goes_back_to_automatic(
     dock: Dock, home: Path, bar: t.Any, refreshes: list[str]
 ):
     version_folder(home, VERSION)
-    choose_engine(Engine.PACKAGE)
+    engine.choose(Engine.PACKAGE)
     refreshes.clear()
     dock.menu.fill()
     dock.menu.remove_action.trigger()
@@ -531,7 +541,7 @@ def test_an_install_refreshes_the_toolbox_and_the_panel(
 def test_an_install_that_keeps_the_engine_refreshes_the_toolbox(
     dock: Dock, published: tuple[Index, bytes], refreshes: list[str]
 ):
-    choose_engine(Engine.AUTOMATIC)
+    engine.choose(Engine.AUTOMATIC)
     refreshes.clear()
     dock.menu.fill()
     dock.menu.install_action.trigger()
@@ -748,15 +758,19 @@ def test_an_install_over_a_loaded_package_needs_a_restart(
 
 
 def test_installing_uses_the_package_instead_of_the_chosen_executable(
-    published: tuple[Index, bytes],
+    bare: Dock, published: tuple[Index, bytes]
 ):
-    install_in(open_dialog())
+    bare.install_package()
+    install_in(not_none_dialog(bare))
     assert engine.chosen() is Engine.AUTOMATIC
 
 
-def test_installing_keeps_the_package_chosen(published: tuple[Index, bytes]):
-    choose_engine(Engine.PACKAGE)
-    install_in(open_dialog())
+def test_installing_keeps_the_package_chosen(
+    bare: Dock, published: tuple[Index, bytes]
+):
+    engine.choose(Engine.PACKAGE)
+    bare.install_package()
+    install_in(not_none_dialog(bare))
     assert engine.chosen() is Engine.PACKAGE
 
 
@@ -895,7 +909,7 @@ def test_closing_the_panel_stops_the_install(
 
 
 def offered_dock(dock: Dock) -> Dock:
-    choose_engine(Engine.AUTOMATIC)
+    engine.choose(Engine.AUTOMATIC)
     dock.refresh()
     return dock
 
@@ -921,21 +935,21 @@ def test_a_chosen_executable_is_not_offered_the_package(dock: Dock):
 
 
 def test_the_package_is_offered_only_where_it_can_be_installed(home: Path):
-    choose_engine(Engine.AUTOMATIC)
+    engine.choose(Engine.AUTOMATIC)
     assert offer.wanted()
     version_folder(home, VERSION)
     assert not offer.wanted()
 
 
 def test_a_package_that_qgis_has_is_not_offered(usable: Package):
-    choose_engine(Engine.AUTOMATIC)
+    engine.choose(Engine.AUTOMATIC)
     assert not offer.wanted()
 
 
 def test_a_qgis_that_cannot_use_the_package_is_not_offered_it(
     old_python: str,
 ):
-    choose_engine(Engine.AUTOMATIC)
+    engine.choose(Engine.AUTOMATIC)
     assert not offer.wanted()
 
 
@@ -1019,7 +1033,7 @@ def test_the_setup_page_says_what_is_missing(bare: Dock):
 
 
 def test_the_setup_page_says_why_the_package_cannot_run(bare: Dock):
-    choose_engine(Engine.PACKAGE)
+    engine.choose(Engine.PACKAGE)
     bare.refresh()
     assert bare.setup_page.status.text() == MISSING
 

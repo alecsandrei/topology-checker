@@ -38,7 +38,7 @@ from .entries import Entry
 from .groups import restyle_errors
 from .icons import icon
 from .installer import InstallDialog
-from .menu import PanelMenu, installable, reason, relist
+from .menu import PanelMenu, installable, reason
 from .messages import RunFeedback, push_summary
 from .narrow import shrink_buttons, shrink_tabs
 from .offer import stop_offering
@@ -149,7 +149,7 @@ class Dock(QgsDockWidget):
         self.browse_button.clicked.connect(self.choose_executable)
         self.install_button.clicked.connect(self.install_package)
         self.offer.install_clicked.connect(self.install_package)
-        self.menu.engine_chosen.connect(self.choose_engine)
+        self.menu.engine_chosen.connect(self.reload)
         self.menu.install_action.triggered.connect(self.install_package)
         self.menu.update_action.triggered.connect(self.update_package)
         self.menu.remove_action.triggered.connect(self.remove_package)
@@ -212,20 +212,16 @@ class Dock(QgsDockWidget):
         self.form.show_rule()
 
     def reload(self, chosen: Engine | None = None) -> None:
-        """Has the toolbox and the panel list the rules of the engine, after
-        it or what it runs changed, and first chooses the engine if one is
-        given."""
-        relist(chosen)
+        """What follows a change of the engine, or of what it runs: keeps the
+        engine that is given, then has the toolbox and the panel list the
+        rules of the engine."""
+        engine.choose(chosen)
         self.refresh()
 
     def choose_executable(self) -> None:
         """Lets the user point to the executable, then looks for the rules."""
         if self.setup_page.choose():
             self.reload()
-
-    def choose_engine(self, chosen: Engine) -> None:
-        if chosen is not engine.chosen():
-            self.reload(chosen)
 
     def install_package(self) -> None:
         self.open_installer(update=False)
@@ -249,8 +245,10 @@ class Dock(QgsDockWidget):
     def package_installed(self) -> None:
         stop_offering()
         self.offer.hide()
-        # The dialog had the toolbox list the rules
-        self.refresh()
+        # Installing is asking for the package
+        self.reload(
+            Engine.AUTOMATIC if engine.chosen() is Engine.EXECUTABLE else None
+        )
 
     def remove_package(self) -> None:
         """Deletes the package that the plugin installed. One that is loaded

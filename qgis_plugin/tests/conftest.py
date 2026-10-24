@@ -22,7 +22,7 @@ from qgis.PyQt.QtCore import QSettings
 from qgis.PyQt.QtGui import QFontDatabase, QFontInfo
 from qgis.PyQt.QtWidgets import QApplication, QMainWindow
 
-from topology_rules.core import binary
+from topology_rules.core import binary, engine
 from topology_rules.core.engine import Engine, Package
 from topology_rules.enums import Setting
 from topology_rules.exceptions import ExecutableError
@@ -31,7 +31,6 @@ from topology_rules.panel.rules_page import COLLAPSED
 from topology_rules.provider import Provider
 
 from .helpers import (
-    choose_engine,
     isolate_network_cache,
     real_executable,
     usable_package,
@@ -160,7 +159,7 @@ def no_executable(monkeypatch: pytest.MonkeyPatch) -> c.Iterator[None]:
 def executable_engine() -> c.Iterator[None]:
     """Runs the checks with the executable, which most tests are about. The
     tests of the package, and those of both engines, choose theirs."""
-    choose_engine(Engine.EXECUTABLE)
+    engine.choose(Engine.EXECUTABLE)
     yield
     QgsSettings().remove(Setting.ENGINE.value)
 
@@ -190,7 +189,7 @@ def run_engine(
     if chosen is Engine.PACKAGE:
         request.getfixturevalue('package')
         monkeypatch.setattr(binary, 'find_executable', executable_unused)
-    choose_engine(chosen)
+    engine.choose(chosen)
     return chosen
 
 

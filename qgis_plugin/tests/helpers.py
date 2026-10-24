@@ -342,14 +342,6 @@ def isolate_network_cache(folder: Path) -> None:
     thread.join()
 
 
-def choose_engine(chosen: Engine) -> None:
-    """Has the engine run the checks, as the user chooses it."""
-    engine.choose(chosen)
-    # A task reads the setting on a thread of its own, which sees only what
-    # is in the file
-    QgsSettings().sync()
-
-
 # Runs a test, or each test of a module, once with the executable and once
 # with the Python package
 both_engines = pytest.mark.usefixtures('run_engine')
