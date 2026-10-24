@@ -35,7 +35,13 @@ KEPT = re.compile(rf'{MODULE}|{MODULE}-[^/]+\.dist-info|{MODULE}\.libs')
 
 
 class Unsupported(Exception):
-    """Why this QGIS cannot load the package."""
+    """Why this QGIS cannot load the package, with why in a few words for
+    where the message has no room. Without a wheel for the system, that is
+    the same for each."""
+
+    def __init__(self, message: str, brief: str = '') -> None:
+        super().__init__(message)
+        self.brief = brief or tr('not for this system')
 
 
 class Failed(Exception):
@@ -72,25 +78,34 @@ def check() -> None:
         raise Unsupported(
             tr('Needs CPython, QGIS has {implementation}').format(
                 implementation=implementation
-            )
+            ),
+            tr('needs CPython'),
         )
     if numbers(python)[:2] < PYTHON:
         raise Unsupported(
             tr('Needs Python 3.10 or newer, QGIS has Python {python}').format(
                 python=python
-            )
+            ),
+            tr('needs Python 3.10'),
         )
     platform_tags()
 
 
-def unsupported() -> str | None:
+def refusal() -> Unsupported | None:
     """Why this QGIS cannot use the package, or None when it can. Where it
     cannot, the plugin keeps to the executable."""
     try:
         check()
     except Unsupported as error:
-        return str(error)
+        return error
     return None
+
+
+def unsupported() -> str | None:
+    """Why this QGIS cannot use the package, in words, or None when it
+    can."""
+    error = refusal()
+    return None if error is None else str(error)
 
 
 def described() -> str:
@@ -143,7 +158,8 @@ def platform_tags() -> list[str]:
             raise Unsupported(
                 tr('Needs glibc 2.17 or newer, Linux has {found}').format(
                     found=found
-                )
+                ),
+                tr('needs glibc 2.17'),
             )
         return linux_tags(glibc)
     raise Unsupported(

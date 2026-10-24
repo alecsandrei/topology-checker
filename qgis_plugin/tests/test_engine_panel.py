@@ -404,7 +404,24 @@ def test_the_install_says_why_this_qgis_cannot_use_the_package(
     menu.fill()
     assert menu.install_action.isVisible()
     assert not menu.install_action.isEnabled()
+    assert menu.install_action.text() == (
+        'Install Python package (needs Python 3.10)'
+    )
     assert menu.install_action.toolTip() == old_python
+
+
+def test_the_install_can_be_offered_again_once_this_qgis_can_use_it(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    menu = PanelMenu()
+    with monkeypatch.context() as patched:
+        patched.setattr(platform, 'python_version', lambda: '3.9.18')
+        menu.fill()
+    menu.fill()
+    assert menu.install_action.isEnabled()
+    assert menu.install_action.text() == 'Install Python package…'
+    # Without a tip of its own, an item has its text as one
+    assert 'Needs Python' not in menu.install_action.toolTip()
 
 
 def test_an_installed_package_can_be_removed_and_not_installed(home: Path):

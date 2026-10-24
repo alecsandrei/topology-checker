@@ -15,7 +15,7 @@ from qgis.PyQt.QtWidgets import (
     QWidget,
 )
 
-from ..core import binary, engine, install
+from ..core import binary, engine, install, wheels
 from ..core.engine import Engine, Package
 from ..core.wheels import PACKAGE
 from ..exceptions import ExecutableError, MissingError, PackageError
@@ -138,7 +138,17 @@ class PanelMenu(QMenu):
 
         version = install.installed()
         self.install_action.setVisible(version is None and found is None)
-        self.offer(self.install_action, install.unsupported())
+        refusal = wheels.refusal()
+        if refusal is None:
+            self.install_action.setText(tr('Install Python package…'))
+            self.offer(self.install_action, None)
+        else:
+            self.refuse(
+                self.install_action,
+                tr('Install Python package'),
+                str(refusal),
+                refusal.brief,
+            )
         self.update_action.setVisible(install.outdated())
         self.update_action.setText(
             tr('Update Python package to {version}…').format(
@@ -153,12 +163,14 @@ class PanelMenu(QMenu):
         self.offer(action, None, tip)
 
     def unusable(self, choice: Engine, reason: str, brief: str) -> None:
-        """Greys out the engine, with why in a few words after its name: a
-        tip shows only to a pointer that rests on the item."""
-        action = self.engines[choice]
+        self.refuse(self.engines[choice], engine_names()[choice], reason, brief)
+
+    def refuse(self, action: t.Any, name: str, reason: str, brief: str) -> None:
+        """Greys out the item, with why in a few words after its name: a tip
+        shows only to a pointer that rests on the item."""
         action.setText(
-            tr('{engine} ({why})').format(
-                engine=engine_names()[choice], why=brief or tr('unavailable')
+            tr('{name} ({why})').format(
+                name=name, why=brief or tr('unavailable')
             )
         )
         self.offer(action, reason)

@@ -153,52 +153,62 @@ def thirty_two_bits(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.parametrize(
-    ('patch', 'reason'),
+    ('patch', 'reason', 'brief'),
     [
         (
             lambda m: m.setattr(platform, 'python_version', lambda: '3.9.18'),
             'Needs Python 3.10 or newer, QGIS has Python 3.9.18',
+            'needs Python 3.10',
         ),
         (
             lambda m: m.setattr(
                 platform, 'python_implementation', lambda: 'PyPy'
             ),
             'Needs CPython, QGIS has PyPy',
+            'needs CPython',
         ),
         (
             lambda m: windows(m, 'win32'),
             'No wheel for Windows win32',
+            'not for this system',
         ),
         (
             lambda m: windows(m, 'win-arm64'),
             'No wheel for Windows win-arm64',
+            'not for this system',
         ),
         (
             lambda m: mac(m, 'i386', '10.15'),
             'No wheel for macOS i386',
+            'not for this system',
         ),
         (
             lambda m: m.setattr(platform, 'machine', lambda: 'aarch64'),
             'No wheel for Linux aarch64',
+            'not for this system',
         ),
-        (thirty_two_bits, 'No wheel for 32-bit Python'),
+        (thirty_two_bits, 'No wheel for 32-bit Python', 'not for this system'),
         (
             lambda m: m.setattr(platform, 'libc_ver', lambda: ('', '')),
             'Needs glibc 2.17 or newer, Linux has no glibc',
+            'needs glibc 2.17',
         ),
         (
             lambda m: m.setattr(
                 platform, 'libc_ver', lambda: ('glibc', '2.12')
             ),
             'Needs glibc 2.17 or newer, Linux has glibc 2.12',
+            'needs glibc 2.17',
         ),
         (
             lambda m: m.setattr(platform, 'libc_ver', lambda: ('glibc', '2')),
             'Needs glibc 2.17 or newer, Linux has glibc 2',
+            'needs glibc 2.17',
         ),
         (
             lambda m: m.setattr(platform, 'system', lambda: 'FreeBSD'),
             'No wheel for FreeBSD x86_64',
+            'not for this system',
         ),
     ],
 )
@@ -206,11 +216,16 @@ def test_why_this_qgis_cannot_use_it_is_said(
     monkeypatch: pytest.MonkeyPatch,
     patch: c.Callable[[pytest.MonkeyPatch], None],
     reason: str,
+    brief: str,
 ):
     patch(monkeypatch)
     found = wheels.unsupported()
     assert found is not None
     assert found.startswith(reason)
+    # And in a few words, for the menu
+    refusal = wheels.refusal()
+    assert refusal is not None
+    assert refusal.brief == brief
 
 
 # The files of a wheel
