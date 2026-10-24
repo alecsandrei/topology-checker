@@ -490,7 +490,19 @@ class Reports:
 
     def __exit__(self, *_: object) -> None:
         self.stopped.set()
-        # From this thread too: the rule that is checked stops at once
+        if self.ended:
+            self.close()
+            return
+        # Stopped first: the rule that is checked stops at once, and the run
+        # ends without waiting for the package, which can take seconds to
+        # stop a large rule
+        closing = threading.Thread(
+            target=self.close, name='topology-reports-close'
+        )
+        closing.daemon = True
+        closing.start()
+
+    def close(self) -> None:
         with contextlib.suppress(Exception):
             self.stream.close()
 

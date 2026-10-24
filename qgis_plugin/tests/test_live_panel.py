@@ -51,6 +51,7 @@ from .helpers import (
     wait_for,
 )
 from .live import (
+    HOLD_SECONDS,
     Gates,
     Hold,
     close_gates,
@@ -621,6 +622,48 @@ def test_canceling_stops_the_rule_that_the_package_checks(
     wait_for(lambda: dock.task is None)
     # The thread of the package that checks the rules is gone, while the
     # thread that waits for the reports may still be held by the test
+    assert tc._native.live_workers(10.0) == 0
+
+
+def test_a_canceled_run_ends_while_the_package_stops(
+    held_package: Held,
+    package_panel: Dock,
+    bar: t.Any,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Stopping a large rule can take the package seconds. The run ends
+    with the rules that are done without waiting for it."""
+    import topology_checker as tc
+
+    dock = package_panel
+    held = held_package
+    add_rules(dock)
+    reference = held.complete(dock)
+    asked = threading.Event()
+    stopped = threading.Event()
+    real = tc.ReportStream.close
+
+    def close(self: tc.ReportStream) -> None:
+        asked.set()
+        if not stopped.wait(HOLD_SECONDS):
+            raise AssertionError('the test did not let the package stop')
+        real(self)
+
+    monkeypatch.setattr(tc.ReportStream, 'close', close)
+    try:
+        run = held.start(dock)
+        held.let(1)
+        at(dock, held, run, 1)
+        bar.calls.clear()
+        held.cancel(dock)
+        wait_for(lambda: dock.task is None)
+        wait_for(asked.is_set)
+        assert not stopped.is_set()
+        assert seen_now(dock) == reference.first(1)
+        found = int(reference.counts[0])
+        assert last_message(bar) == canceled_text(1, RULES, found)
+    finally:
+        stopped.set()
     assert tc._native.live_workers(10.0) == 0
 
 
