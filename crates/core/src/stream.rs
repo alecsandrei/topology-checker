@@ -1,5 +1,5 @@
 //! Incremental validation metadata and sink errors.
-use crate::{Error, RuleReport, RuleSpec, ViolationKind, Warning};
+use crate::{Error, RuleReport, RuleSpec, Violation, ViolationKind, Warning};
 use serde::Serialize;
 use std::collections::BTreeMap;
 
@@ -49,6 +49,16 @@ impl ReportSummary {
     pub fn is_valid(&self) -> bool {
         self.violation_count() == 0
     }
+}
+/// One step of incremental validation, in rule registration order.
+#[derive(Debug)]
+#[non_exhaustive]
+pub enum ValidationEvent<'a> {
+    /// One aggregated violation of a registered rule.
+    Violation(RuleSpec, Violation),
+    /// A rule finished, after all of its violations. Sent for every rule,
+    /// including rules without violations.
+    RuleEnd(&'a RuleSummary),
 }
 /// An operational error or the original error returned by the consumer.
 #[derive(Debug, thiserror::Error)]

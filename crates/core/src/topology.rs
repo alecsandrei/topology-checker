@@ -1,7 +1,8 @@
 use crate::cache::Cache;
 use crate::engine::line_graph::{InputMode, LineGraph};
 use crate::{
-    Error, Layer, LayerId, Rule, RuleId, RuleSpec, Violation, ViolationKind, model::Parts, rules,
+    Error, Layer, LayerId, Rule, RuleId, RuleSpec, ValidationEvent, Violation, ViolationKind,
+    model::Parts, rules,
 };
 use rayon::prelude::*;
 use serde::Serialize;
@@ -12,6 +13,15 @@ use std::{
 };
 type GraphSlot = Arc<Cache<Result<Arc<LineGraph>, Error>>>;
 type GraphCache = Arc<Mutex<BTreeMap<Vec<(LayerId, InputMode)>, GraphSlot>>>;
+
+fn violations_only<E>(
+    mut sink: impl FnMut(RuleSpec, Violation) -> Result<(), E>,
+) -> impl FnMut(ValidationEvent<'_>) -> Result<(), E> {
+    move |event| match event {
+        ValidationEvent::Violation(spec, v) => sink(spec, v),
+        ValidationEvent::RuleEnd(_) => Ok(()),
+    }
+}
 
 /// One rule's violations, with deterministic counts and feature provenance.
 #[derive(Debug, Clone, Serialize)]
@@ -387,10 +397,21 @@ impl Topology {
     /// Returns deferred input failures or the consumer's original error.
     pub fn validate_into<E>(
         &self,
-        mut sink: impl FnMut(RuleSpec, Violation) -> Result<(), E>,
+        sink: impl FnMut(RuleSpec, Violation) -> Result<(), E>,
+    ) -> Result<crate::ReportSummary, crate::SinkError<E>> {
+        self.validate_events(violations_only(sink))
+    }
+    /// Like [`validate_into`](Self::validate_into), and also send
+    /// [`ValidationEvent::RuleEnd`] when each rule finishes, before the next starts.
+    ///
+    /// # Errors
+    /// Returns deferred input failures or the consumer's original error.
+    pub fn validate_events<E>(
+        &self,
+        mut sink: impl FnMut(ValidationEvent<'_>) -> Result<(), E>,
     ) -> Result<crate::ReportSummary, crate::SinkError<E>> {
         let warnings = self.warnings()?;
-        let mut summaries = Vec::new();
+        let mut summaries = Vec::with_capacity(self.specs.len());
         for &spec in &self.specs {
             let mut counts = BTreeMap::new();
             let mut total = 0;
@@ -398,13 +419,13 @@ impl Topology {
             rules::run_into(self, spec, |v| {
                 crate::cancel::check();
                 let kind = v.kind;
-                sink(spec, v)?;
+                sink(ValidationEvent::Violation(spec, v))?;
                 *counts.entry(kind).or_default() += 1;
                 total += 1;
                 Ok(())
             })?;
             crate::cancel::check();
-            summaries.push(crate::RuleSummary {
+            let summary = crate::RuleSummary {
                 spec,
                 layer: self.layer(spec.layer)?.name().into(),
                 other: spec
@@ -413,7 +434,9 @@ impl Topology {
                     .transpose()?,
                 counts,
                 total,
-            });
+            };
+            sink(ValidationEvent::RuleEnd(&summary)).map_err(crate::SinkError::Consumer)?;
+            summaries.push(summary);
         }
         Ok(crate::ReportSummary {
             tolerance: self.tolerance,
@@ -430,10 +453,22 @@ impl Topology {
         token: crate::CancellationToken,
         sink: impl FnMut(RuleSpec, Violation) -> Result<(), E>,
     ) -> Result<crate::ReportSummary, crate::SinkError<E>> {
+        self.validate_events_cancellable(token, violations_only(sink))
+    }
+    /// Send [`validate_events`](Self::validate_events) output with cooperative
+    /// cancellation, retaining the original sink error.
+    ///
+    /// # Errors
+    /// Returns input failures, cancellation, or the consumer's original error.
+    pub fn validate_events_cancellable<E>(
+        &self,
+        token: crate::CancellationToken,
+        sink: impl FnMut(ValidationEvent<'_>) -> Result<(), E>,
+    ) -> Result<crate::ReportSummary, crate::SinkError<E>> {
         let mut snapshot = self.snapshot();
         snapshot.cancellation = Some(token.clone());
         match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            crate::cancel::scope(Some(token), || snapshot.validate_into(sink))
+            crate::cancel::scope(Some(token), || snapshot.validate_events(sink))
         })) {
             Ok(result) => result,
             Err(error) if error.is::<crate::cancel::Cancelled>() => {

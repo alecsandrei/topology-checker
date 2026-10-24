@@ -41,7 +41,8 @@ The core keeps its existing dependencies and planar tolerance model.
 are returned unchanged as `SinkError::Consumer`. `validate_into_cancellable`
 accepts a shared `CancellationToken`; cancellation releases construction scratch
 and leaves shared caches reusable. `snapshot()` retains immutable input and rule
-snapshots. Duplicate pairs are preserved individually.
+snapshots. Duplicate pairs are preserved individually. `validate_events(sink)`
+also emits each rule's `RuleSummary` when that rule ends.
 
 Parts share unchanged coordinates and build indexes lazily. Boundary and point
 location indexes are cached for repeated polygon queries. Collapsed lines emit
