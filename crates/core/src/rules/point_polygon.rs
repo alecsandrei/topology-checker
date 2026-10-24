@@ -5,6 +5,7 @@ use crate::{
     aggregate::{Merge, aggregate},
     engine::{cross, index},
 };
+use geo::BoundingRect;
 
 /// How each point part relates to the polygon layer.
 #[derive(Debug, Clone, Copy)]
@@ -103,7 +104,10 @@ pub(super) fn contained_points(
     let a = t.parts(spec.layer)?;
     let b = t.parts(other)?;
     let locations = crate::engine::location::locations(a);
-    let pairs = index::pairs(a.polygon_index(), b.point_index(), t.tolerance(), false);
+    // A feature's own polygons are searched in order, without an index of their own.
+    let polygons = a.polygons.iter().enumerate();
+    let polygons = polygons.filter_map(|(i, p)| p.geometry.bounding_rect().map(|r| (i, r)));
+    let pairs = index::candidates(polygons, b.point_index(), t.tolerance());
     let contained = |(i, j): (usize, usize)| {
         let (p, q) = (&a.polygons[i], &b.points[j]);
         t.cancellable(|| {

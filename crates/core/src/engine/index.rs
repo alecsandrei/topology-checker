@@ -27,6 +27,8 @@ pub(crate) fn build(items: impl IntoIterator<Item = (usize, Rect)>) -> Index {
             .collect(),
     )
 }
+/// [`candidates`] for the items of `a`, in its order. With `same`, `a` and `b` are one
+/// index and each pair comes once.
 pub(crate) fn pairs<'a>(
     a: &'a Index,
     b: &'a Index,
@@ -34,7 +36,7 @@ pub(crate) fn pairs<'a>(
     same: bool,
 ) -> impl Iterator<Item = (usize, usize)> + 'a {
     use rstar::RTreeObject;
-    a.iter().flat_map(move |item| {
+    let boxes = a.iter().map(|item| {
         let bounds = item.envelope();
         let rect = Rect::new(
             Coord {
@@ -46,10 +48,61 @@ pub(crate) fn pairs<'a>(
                 y: bounds.upper()[1],
             },
         );
-        b.locate_in_envelope_intersecting(&expanded(rect, tolerance))
-            .filter(move |other| !same || item.data < other.data)
-            .map(move |other| (item.data, other.data))
-    })
+        (item.data, rect)
+    });
+    candidates(boxes, b, tolerance).filter(move |&(i, j)| !same || i < j)
+}
+/// Each item of `boxes` with each item of `b` whose box it meets, grown by `tolerance`.
+/// The search checks for cancellation every [`CHECK`](crate::cancel::CHECK) items
+/// and candidates, against the token of the thread that starts it, so it stops
+/// whichever thread runs it and however few pairs it finds.
+pub(crate) fn candidates<'a>(
+    boxes: impl Iterator<Item = (usize, Rect)> + 'a,
+    b: &'a Index,
+    tolerance: f64,
+) -> impl Iterator<Item = (usize, usize)> + 'a {
+    Candidates {
+        boxes,
+        search: move |rect| {
+            b.locate_in_envelope_intersecting(&expanded(rect, tolerance))
+                .map(|other| other.data)
+        },
+        found: None,
+        steps: 0,
+        token: crate::cancel::current(),
+    }
+}
+struct Candidates<A, F, I> {
+    boxes: A,
+    search: F,
+    found: Option<(usize, I)>,
+    steps: usize,
+    token: Option<crate::CancellationToken>,
+}
+impl<A, F, I> Iterator for Candidates<A, F, I>
+where
+    A: Iterator<Item = (usize, Rect)>,
+    F: FnMut(Rect) -> I,
+    I: Iterator<Item = usize>,
+{
+    type Item = (usize, usize);
+    fn next(&mut self) -> Option<(usize, usize)> {
+        loop {
+            if self.steps.is_multiple_of(crate::cancel::CHECK) {
+                crate::cancel::scope(self.token.clone(), || {
+                    crate::cancel::checkpoint("candidates");
+                });
+            }
+            self.steps += 1;
+            if let Some((i, found)) = &mut self.found
+                && let Some(j) = found.next()
+            {
+                return Some((*i, j));
+            }
+            let (i, rect) = self.boxes.next()?;
+            self.found = Some((i, (self.search)(rect)));
+        }
+    }
 }
 
 /// Items with boxes, searched in a fixed order.
@@ -548,6 +601,46 @@ mod tests {
             assert!((visit + 1..=visit + 4).contains(&visits), "{step} {visit}");
             assert_eq!(record.live, 0);
             assert!(record.workers > 0 || step == "index", "{step} {visit}");
+        }
+    }
+
+    #[test]
+    fn candidate_searches_stop_on_any_thread_when_cancelled() {
+        use crate::cancel::{self, hooks};
+        let at = |x: usize, y: f64| {
+            let corner = Coord { x: x as f64, y };
+            Rect::new(corner, corner)
+        };
+        let many = 4 * cancel::CHECK;
+        let row = build((0..many).map(|i| (i, at(i, 0.))));
+        // Many boxes without candidates, then one box with many.
+        let cases = [
+            ((0..many).map(|i| (i, at(i, 5.))).collect::<Vec<_>>(), 0),
+            (
+                vec![(0, Rect::new(at(0, 0.).min(), at(many, 0.).max()))],
+                many,
+            ),
+        ];
+        for (boxes, pairs) in cases {
+            assert_eq!(
+                candidates(boxes.clone().into_iter(), &row, 0.).count(),
+                pairs
+            );
+            let token = hooks::watched(Some(("candidates", 2)));
+            let search = cancel::scope(Some(token.clone()), || {
+                candidates(boxes.into_iter(), &row, 0.)
+            });
+            // The thread that runs the search has no token of its own.
+            let result = std::thread::scope(|scope| {
+                scope
+                    .spawn(|| {
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| search.count()))
+                    })
+                    .join()
+                    .unwrap()
+            });
+            assert!(result.expect_err("cancelled").is::<cancel::Cancelled>());
+            assert_eq!(hooks::record(&token).visits["candidates"], 3);
         }
     }
 }

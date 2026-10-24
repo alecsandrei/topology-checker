@@ -1405,19 +1405,34 @@ mod tests {
                 .into()
         });
         let well = vec![(0, Point::new(-10., -10.).into())];
+        // Points in the box of a triangle but outside it.
+        let side = count as f64 + 1.;
+        let triangle = Polygon::new(
+            LineString::from(vec![(0., 0.), (side, 0.), (0., side), (0., 0.)]),
+            vec![],
+        );
+        let edge = (0..count)
+            .map(|fid| (fid, Point::new(fid as f64 + 1., side).into()))
+            .collect();
         let cases = [
             (Rule::LineMustNotHaveDangles, disjoint, None),
             (Rule::LineMustNotHavePseudoNodes, chain, None),
             (Rule::GeometryMustNotBeMultipart, multi, None),
             (Rule::PointMustNotOverlap, points, None),
             (Rule::PolygonMustContainPoint, squares, Some(well)),
+            (
+                Rule::PolygonMustContainOnePoint,
+                vec![(0, triangle.into())],
+                Some(edge),
+            ),
         ];
         let reached_by_case = [
             "dangles violations.sort",
             "pseudos violations.sort",
             "multipart violations.sort",
             "point.features",
-            "aggregate aggregate.merge violations.sort",
+            "candidates aggregate aggregate.merge violations.sort",
+            "candidates aggregate aggregate.merge violations.sort",
         ];
         // Steps after the inputs are built.
         let steps = [
@@ -1425,6 +1440,7 @@ mod tests {
             "pseudos",
             "multipart",
             "point.features",
+            "candidates",
             "aggregate",
             "aggregate.merge",
             "violations.sort",
@@ -1434,16 +1450,8 @@ mod tests {
             let layer = t.add_layer(Layer::from_features("many", features));
             let other = other.map(|f| t.add_layer(Layer::from_features("other", f)));
             t.add_rule(rule, layer, other).unwrap();
-            let validate = |token| {
-                let mut sent = 0;
-                let result = t.validate_into_cancellable(token, |_, _| {
-                    sent += 1;
-                    Ok::<_, Infallible>(())
-                });
-                (result.map(|_| ()), sent)
-            };
             let token = crate::cancel::hooks::watched(None);
-            assert!(validate(token.clone()).0.is_ok(), "{rule:?}");
+            assert!(validated(&t, token.clone()).0.is_ok(), "{rule:?}");
             let visits = crate::cancel::hooks::record(&token).visits;
             let reached = steps
                 .into_iter()
@@ -1453,21 +1461,59 @@ mod tests {
             assert_eq!(reached, expected, "{rule:?}");
             for step in reached {
                 // A check at least every CHECK features' worth of work.
-                let checks = visits[step];
                 let least = count as usize / crate::cancel::CHECK;
-                assert!(checks >= least, "{rule:?} {step}: {checks}");
-                for visit in [0, checks / 2, checks - 1] {
-                    let token = crate::cancel::hooks::watched(Some((step, visit)));
-                    let (result, sent) = validate(token.clone());
-                    assert!(
-                        matches!(result, Err(SinkError::Core(Error::Cancelled))),
-                        "{rule:?} {step} {visit}: {result:?}"
-                    );
-                    let after = crate::cancel::hooks::record(&token).visits[step];
-                    assert_eq!(after, visit + 1, "{rule:?} {step} {visit}");
-                    assert_eq!(sent, 0, "{rule:?} {step} {visit}");
-                }
+                assert_stops_at_each_check(&t, step, least, &format!("{rule:?}"));
             }
+        }
+    }
+
+    #[test]
+    fn a_feature_whose_parts_find_no_pairs_stops_at_the_next_check() {
+        // No point of the feature is in the box of a line, so only the search runs.
+        let count = 10_000;
+        let far = (0..count).map(|i| Point::new(i as f64, 10.));
+        let far = MultiPoint::from(far.collect::<Vec<_>>());
+        let line = LineString::from(vec![(0., 0.), (count as f64, 0.)]);
+        let mut t = Topology::new(0.).unwrap();
+        let points = t.add_layer(Layer::from_features("far-points", [(1, far.into())]));
+        let lines = t.add_layer(Layer::from_features("far-lines", [(1, line.into())]));
+        t.add_rule(Rule::PointMustNotIntersectLines, points, Some(lines))
+            .unwrap();
+        let least = count / crate::cancel::CHECK;
+        assert_stops_at_each_check(&t, "candidates", least, "far points");
+    }
+
+    /// Validate `t` with `token`, counting the violations sent.
+    fn validated(t: &Topology, token: CancellationToken) -> (Result<(), Error>, usize) {
+        let mut sent = 0;
+        let result = t.validate_into_cancellable(token, |_, _| {
+            sent += 1;
+            Ok::<_, Infallible>(())
+        });
+        (result.map(|_| ()).map_err(Error::from), sent)
+    }
+    /// Check that `t`'s validation passes `step` at least `least` times, and that
+    /// cancelling at its first, middle and last visit stops at the next check, before
+    /// any violation is sent.
+    fn assert_stops_at_each_check(t: &Topology, step: &'static str, least: usize, case: &str) {
+        let token = crate::cancel::hooks::watched(None);
+        assert!(validated(t, token.clone()).0.is_ok(), "{case} {step}");
+        let checks = crate::cancel::hooks::record(&token)
+            .visits
+            .get(step)
+            .copied()
+            .unwrap_or_default();
+        assert!(checks >= least, "{case} {step}: {checks}");
+        for visit in [0, checks / 2, checks - 1] {
+            let token = crate::cancel::hooks::watched(Some((step, visit)));
+            let (result, sent) = validated(t, token.clone());
+            assert!(
+                matches!(result, Err(Error::Cancelled)),
+                "{case} {step} {visit}: {result:?}"
+            );
+            let after = crate::cancel::hooks::record(&token).visits[step];
+            assert_eq!(after, visit + 1, "{case} {step} {visit}");
+            assert_eq!(sent, 0, "{case} {step} {visit}");
         }
     }
 

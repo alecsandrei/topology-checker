@@ -6,7 +6,7 @@ use crate::{
     engine::{cross, index, proximity},
     model::{Part, Parts},
 };
-use geo::{Line, Point};
+use geo::{Line, Point, Rect};
 
 /// Secondary-layer features that cover a point within tolerance.
 #[derive(Debug, Clone, Copy)]
@@ -114,7 +114,10 @@ pub(super) fn line_contacts(
 ) -> Result<Vec<Violation>, Error> {
     let a = t.parts(spec.layer)?;
     let b = t.parts(other)?;
-    let pairs = index::pairs(a.point_index(), b.line_index(), t.tolerance(), false);
+    // A feature's own points are searched in order, without an index of their own.
+    let points = a.points.iter().enumerate();
+    let points = points.map(|(i, p)| (i, Rect::new(p.geometry.0, p.geometry.0)));
+    let pairs = index::candidates(points, b.line_index(), t.tolerance());
     let contact = |(i, j): (usize, usize)| {
         let (p, l) = (&a.points[i], &b.lines[j]);
         t.cancellable(|| {
