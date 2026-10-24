@@ -1,0 +1,946 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+        <link rel="canonical" href="https://alecsandrei.github.io/topology-checker/python-usage/">
+      
+      
+        <link rel="prev" href="../web-app/">
+      
+      
+        <link rel="next" href="../python-api/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Usage - topology-checker</title>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/stylesheets/main.ec1eaa64.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    <body dir="ltr">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#python-usage" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href=".." title="topology-checker" class="md-header__button md-logo" aria-label="topology-checker" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            topology-checker
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Usage
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/alecsandrei/topology-checker" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href=".." title="topology-checker" class="md-nav__button md-logo" aria-label="topology-checker" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    topology-checker
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/alecsandrei/topology-checker" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href=".." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../install/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../rules/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Rules
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../web-app/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Web app
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Python
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Python
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Usage
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Usage
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#register-and-validate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Register and validate
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reuse-a-layer-explicitly" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reuse a layer explicitly
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#declare-ambiguous-empty-layers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Declare ambiguous empty layers
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#crs-and-tolerance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CRS and tolerance
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#geometry-dependent-semantics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Geometry-dependent semantics
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#line-utilities" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Line utilities
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../python-api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="https://alecsandrei.github.io/topology-checker/rust/topology_checker_core/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Rust API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#register-and-validate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Register and validate
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#reuse-a-layer-explicitly" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Reuse a layer explicitly
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#declare-ambiguous-empty-layers" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Declare ambiguous empty layers
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#crs-and-tolerance" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CRS and tolerance
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#geometry-dependent-semantics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Geometry-dependent semantics
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#line-utilities" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Line utilities
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="python-usage">Python usage<a class="headerlink" href="#python-usage" title="Permanent link">&para;</a></h1>
+<p>Install from PyPI with <code>uv add topology-checker</code>, or use
+<code>uv add 'topology-checker[geopandas]'</code> for GeoDataFrame exports and file loading
+through GeoPandas. Python 3.10 through 3.14 on regular CPython are supported.
+The base package uses Shapely and pyproj. It does not require GeoPandas or a
+separate Rust installation when a compatible wheel is available. See the
+<a href="../python-api/">API reference</a> for every class and function.</p>
+<h2 id="register-and-validate">Register and validate<a class="headerlink" href="#register-and-validate" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><span class="kn">import</span><span class="w"> </span><span class="nn">geopandas</span><span class="w"> </span><span class="k">as</span><span class="w"> </span><span class="nn">gpd</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">topology_checker</span><span class="w"> </span><span class="kn">import</span> <span class="n">Rule</span><span class="p">,</span> <span class="n">Topology</span>
+
+<span class="n">roads_gdf</span> <span class="o">=</span> <span class="n">gpd</span><span class="o">.</span><span class="n">read_file</span><span class="p">(</span><span class="s2">"roads.gpkg"</span><span class="p">)</span>
+<span class="n">topology</span> <span class="o">=</span> <span class="n">Topology</span><span class="p">(</span><span class="n">tolerance</span><span class="o">=</span><span class="mf">0.001</span><span class="p">)</span>
+<span class="n">topology</span><span class="o">.</span><span class="n">add_rule</span><span class="p">(</span><span class="n">Rule</span><span class="o">.</span><span class="n">MUST_NOT_HAVE_DANGLES</span><span class="p">,</span> <span class="n">roads_gdf</span><span class="p">)</span>
+<span class="n">report</span> <span class="o">=</span> <span class="n">topology</span><span class="o">.</span><span class="n">validate</span><span class="p">()</span>
+<span class="n">errors</span> <span class="o">=</span> <span class="n">report</span><span class="o">.</span><span class="n">to_geodataframe</span><span class="p">()</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">report</span><span class="o">.</span><span class="n">is_valid</span><span class="p">,</span> <span class="n">report</span><span class="o">.</span><span class="n">error_count</span><span class="p">,</span> <span class="n">report</span><span class="o">.</span><span class="n">warnings</span><span class="p">)</span>
+</code></pre></div>
+<p><code>add_rule</code> accepts a Shapely geometry, a geometry iterable, a GeoSeries,
+a GeoDataFrame, a GeoJSON mapping, or an object with <code>__geo_interface__</code>.
+Pass the second layer with the keyword argument <code>other=</code>. Use enum members
+such as <code>Rule.MUST_NOT_OVERLAP</code>; parse serialized names with
+<code>Rule("must-not-overlap")</code> before registration.</p>
+<p>Each raw input creates a fresh XY snapshot at registration. Later edits to a
+GeoDataFrame or list do not change that layer. Passing the same raw object to
+two rules creates two layers, and a generator is consumed on each call.
+<code>validate()</code> returns an immutable report snapshot; topology violations are
+results, while invalid registrations raise exceptions and leave the topology
+unchanged.</p>
+<h2 id="reuse-a-layer-explicitly">Reuse a layer explicitly<a class="headerlink" href="#reuse-a-layer-explicitly" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">shapely.geometry</span><span class="w"> </span><span class="kn">import</span> <span class="n">LineString</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">topology_checker</span><span class="w"> </span><span class="kn">import</span> <span class="n">Rule</span><span class="p">,</span> <span class="n">Topology</span>
+
+<span class="n">topology</span> <span class="o">=</span> <span class="n">Topology</span><span class="p">(</span><span class="n">tolerance</span><span class="o">=</span><span class="mf">0.001</span><span class="p">)</span>
+<span class="n">roads</span> <span class="o">=</span> <span class="n">topology</span><span class="o">.</span><span class="n">add_layer</span><span class="p">(</span>
+    <span class="p">[</span><span class="n">LineString</span><span class="p">([(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">),</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">)]),</span> <span class="n">LineString</span><span class="p">([(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">),</span> <span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">0</span><span class="p">)])],</span>
+    <span class="n">name</span><span class="o">=</span><span class="s2">"roads"</span><span class="p">,</span>
+    <span class="n">fids</span><span class="o">=</span><span class="p">[</span><span class="mi">41</span><span class="p">,</span> <span class="mi">92</span><span class="p">],</span>
+    <span class="n">crs</span><span class="o">=</span><span class="s2">"EPSG:28992"</span><span class="p">,</span>
+<span class="p">)</span>
+<span class="n">topology</span><span class="o">.</span><span class="n">add_rule</span><span class="p">(</span><span class="n">Rule</span><span class="o">.</span><span class="n">MUST_NOT_HAVE_DANGLES</span><span class="p">,</span> <span class="n">roads</span><span class="p">)</span>
+<span class="n">topology</span><span class="o">.</span><span class="n">add_rule</span><span class="p">(</span><span class="n">Rule</span><span class="o">.</span><span class="n">MUST_NOT_OVERLAP</span><span class="p">,</span> <span class="n">roads</span><span class="p">)</span>
+<span class="n">report</span> <span class="o">=</span> <span class="n">topology</span><span class="o">.</span><span class="n">validate</span><span class="p">()</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">topology</span><span class="o">.</span><span class="n">layer</span><span class="p">(</span><span class="n">roads</span><span class="p">)</span><span class="o">.</span><span class="n">name</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">report</span><span class="o">.</span><span class="n">to_dict</span><span class="p">())</span>
+</code></pre></div>
+<p>The returned <code>LayerId</code> belongs to its originating <code>Topology</code>. Reuse it across
+rules to share the registered layer and native caches. Binary rules require
+distinct IDs. A <code>RuleSpec</code> returned by <code>add_rule</code> also exposes the registered
+IDs through <code>.layer</code> and <code>.other</code>.</p>
+<p>FIDs default to original input positions, independent of a GeoDataFrame's
+index or GeoJSON feature IDs. Explicit FIDs must be unique signed 64-bit
+integers, one per original position, including positions subsequently skipped.
+Reports preserve FID and multipart provenance in <code>.origin</code> and <code>.destination</code>.
+Missing and empty features are skipped with warnings, extra dimensions are
+discarded, and nonfinite retained XY coordinates are rejected. Mixed nonempty
+families are accepted only by rules with an <code>ANY</code> input signature.</p>
+<h2 id="declare-ambiguous-empty-layers">Declare ambiguous empty layers<a class="headerlink" href="#declare-ambiguous-empty-layers" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">topology_checker</span><span class="w"> </span><span class="kn">import</span> <span class="n">GeometryKind</span><span class="p">,</span> <span class="n">Rule</span><span class="p">,</span> <span class="n">Topology</span>
+
+<span class="n">topology</span> <span class="o">=</span> <span class="n">Topology</span><span class="p">()</span>
+<span class="n">empty_lines</span> <span class="o">=</span> <span class="n">topology</span><span class="o">.</span><span class="n">add_layer</span><span class="p">([],</span> <span class="n">kind</span><span class="o">=</span><span class="n">GeometryKind</span><span class="o">.</span><span class="n">LINE</span><span class="p">)</span>
+<span class="n">topology</span><span class="o">.</span><span class="n">add_rule</span><span class="p">(</span><span class="n">Rule</span><span class="o">.</span><span class="n">MUST_NOT_OVERLAP</span><span class="p">,</span> <span class="n">empty_lines</span><span class="p">)</span>
+<span class="k">assert</span> <span class="n">topology</span><span class="o">.</span><span class="n">validate</span><span class="p">()</span><span class="o">.</span><span class="n">is_valid</span>
+</code></pre></div>
+<p>Family inference uses nonempty parts first, then empty geometry hints. An empty
+list, only missing values, or conflicting empty hints have no inferred family.
+Rules with multiple possible signatures then require a declaration through
+<code>add_layer(..., kind=GeometryKind.POINT)</code>, <code>LINE</code>, or <code>POLYGON</code>. A declaration
+must agree with every retained nonempty part. A uniquely matching rule, such as
+<code>MUST_NOT_HAVE_DANGLES</code>, can resolve even with unknown empty input.</p>
+<h2 id="crs-and-tolerance">CRS and tolerance<a class="headerlink" href="#crs-and-tolerance" title="Permanent link">&para;</a></h2>
+<p>The engine operates in a Cartesian XY plane. It does not reproject, calculate
+geodesic distances, or infer a CRS from coordinates. Reproject geographic data
+to an appropriate projected CRS before using distance tolerances.</p>
+<p>Tolerance is finite, nonnegative, and expressed in the inputs' coordinate units.
+For a CRS using metres, <code>0.001</code> is one millimetre. It is interpreted by each rule,
+such as a distance threshold, a minimum retained line length, or a polygon sliver
+filter. It does not apply a universal geometry buffer or repair geometries.
+Inspect the concrete rule description for the relevant behavior.</p>
+<p>All known layer CRSs must agree. Explicit CRS metadata must agree with metadata
+on the input. Unknown CRSs are accepted as caller-supplied coordinates. When
+known and unknown metadata are mixed, validation continues with a warning and
+the export CRS is unset. <code>Report.to_dict()</code> works without GeoPandas;
+<code>Report.to_geodataframe()</code> requires the <code>geopandas</code> extra.</p>
+<h2 id="geometry-dependent-semantics">Geometry-dependent semantics<a class="headerlink" href="#geometry-dependent-semantics" title="Permanent link">&para;</a></h2>
+<p>The 24 public constraints resolve to the 38 concrete <a href="../rules/">rules</a> using the ordered
+geometry families and whether <code>other=</code> is supplied. These examples illustrate
+why the concrete variant matters:</p>
+<table>
+<thead>
+<tr>
+<th>Public rule and inputs</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>MUST_NOT_OVERLAP</code>, points</td>
+<td>Coincident point pairs within tolerance.</td>
+</tr>
+<tr>
+<td><code>MUST_NOT_OVERLAP</code>, lines</td>
+<td>Shared linework between distinct features; crossings and self-overlaps are excluded.</td>
+</tr>
+<tr>
+<td><code>MUST_NOT_OVERLAP</code>, polygons</td>
+<td>Shared areas between distinct features, excluding slivers below tolerance.</td>
+</tr>
+<tr>
+<td><code>MUST_NOT_OVERLAP</code>, lines then polygons</td>
+<td>Interior or shared boundary line pieces longer than tolerance; isolated contacts are allowed.</td>
+</tr>
+<tr>
+<td><code>MUST_BE_INSIDE</code>, points then polygons</td>
+<td>Strict interior membership; boundary proximity within tolerance is outside.</td>
+</tr>
+<tr>
+<td><code>MUST_BE_INSIDE</code>, lines then polygons</td>
+<td>Pieces outside the polygon union longer than tolerance; boundary linework is covered.</td>
+</tr>
+<tr>
+<td><code>MUST_NOT_INTERSECT</code>, lines</td>
+<td>Overlaps and interior crossings between distinct features; endpoint touches are allowed.</td>
+</tr>
+<tr>
+<td><code>MUST_NOT_INTERSECT</code>, lines then polygons</td>
+<td>Interior pieces, shared boundary pieces and isolated contacts, including boundary proximity within tolerance.</td>
+</tr>
+<tr>
+<td><code>MUST_NOT_HAVE_GAPS</code>, polygons</td>
+<td>Enclosed gaps and an outer-boundary diagnostic; inspect error categories.</td>
+</tr>
+<tr>
+<td><code>MUST_NOT_BE_CONTAINED_BY</code>, any then any</td>
+<td>Whole cleaned features contained by individual targets, excluding mutual containment; no tolerance buffer.</td>
+</tr>
+</tbody>
+</table>
+<p>Order matters: line then polygon signatures do not imply polygon then line
+support. Multipart parts of one feature retain their FID; use the dedicated
+self-intersection or self-overlap constraints to examine a feature internally.</p>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">shapely.geometry</span><span class="w"> </span><span class="kn">import</span> <span class="n">Point</span><span class="p">,</span> <span class="n">box</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">topology_checker</span><span class="w"> </span><span class="kn">import</span> <span class="n">Rule</span><span class="p">,</span> <span class="n">Topology</span>
+
+<span class="n">topology</span> <span class="o">=</span> <span class="n">Topology</span><span class="p">()</span>
+<span class="n">topology</span><span class="o">.</span><span class="n">add_rule</span><span class="p">(</span><span class="n">Rule</span><span class="o">.</span><span class="n">MUST_BE_INSIDE</span><span class="p">,</span> <span class="p">[</span><span class="n">Point</span><span class="p">(</span><span class="mf">0.5</span><span class="p">,</span> <span class="mf">0.5</span><span class="p">)],</span> <span class="n">other</span><span class="o">=</span><span class="p">[</span><span class="n">box</span><span class="p">(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">,</span> <span class="mi">1</span><span class="p">,</span> <span class="mi">1</span><span class="p">)])</span>
+<span class="n">result</span> <span class="o">=</span> <span class="n">topology</span><span class="o">.</span><span class="n">validate</span><span class="p">()</span><span class="o">.</span><span class="n">rules</span><span class="p">[</span><span class="mi">0</span><span class="p">]</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">result</span><span class="o">.</span><span class="n">resolved_rule</span><span class="o">.</span><span class="n">value</span><span class="p">)</span>
+<span class="nb">print</span><span class="p">(</span><span class="n">result</span><span class="o">.</span><span class="n">resolved_rule</span><span class="o">.</span><span class="n">description</span><span class="p">)</span>
+<span class="k">for</span> <span class="n">variant</span> <span class="ow">in</span> <span class="n">Rule</span><span class="o">.</span><span class="n">MUST_NOT_OVERLAP</span><span class="o">.</span><span class="n">variants</span><span class="p">:</span>
+    <span class="nb">print</span><span class="p">(</span><span class="n">variant</span><span class="o">.</span><span class="n">inputs</span><span class="p">,</span> <span class="n">variant</span><span class="o">.</span><span class="n">description</span><span class="p">)</span>
+</code></pre></div>
+<p>Use <code>.resolved_rule</code> on a <code>RuleSpec</code>, <code>RuleReport</code>, or <code>Violation</code> to inspect
+the selected semantics. Invalid arity, unsupported families, or ambiguous
+empty inputs are reported at registration with the supported signatures.</p>
+<h2 id="line-utilities">Line utilities<a class="headerlink" href="#line-utilities" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><span class="kn">from</span><span class="w"> </span><span class="nn">shapely.geometry</span><span class="w"> </span><span class="kn">import</span> <span class="n">LineString</span>
+<span class="kn">from</span><span class="w"> </span><span class="nn">topology_checker</span><span class="w"> </span><span class="kn">import</span> <span class="n">explode_lines</span><span class="p">,</span> <span class="n">merge_lines</span>
+
+<span class="n">lines</span> <span class="o">=</span> <span class="p">[</span><span class="n">LineString</span><span class="p">([(</span><span class="mi">0</span><span class="p">,</span> <span class="mi">0</span><span class="p">),</span> <span class="p">(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">)]),</span> <span class="n">LineString</span><span class="p">([(</span><span class="mi">1</span><span class="p">,</span> <span class="mi">0</span><span class="p">),</span> <span class="p">(</span><span class="mi">2</span><span class="p">,</span> <span class="mi">0</span><span class="p">)])]</span>
+<span class="n">merged</span> <span class="o">=</span> <span class="n">merge_lines</span><span class="p">(</span><span class="n">lines</span><span class="p">,</span> <span class="n">tolerance</span><span class="o">=</span><span class="mf">0.001</span><span class="p">)</span>
+<span class="n">segments</span> <span class="o">=</span> <span class="n">explode_lines</span><span class="p">(</span><span class="n">merged</span><span class="p">)</span>
+<span class="k">assert</span> <span class="nb">len</span><span class="p">(</span><span class="n">segments</span><span class="p">)</span> <span class="o">==</span> <span class="mi">2</span>
+</code></pre></div>
+<p>Both utilities return tuples of Shapely lines. They accept the same input
+adapters and operate on planar snapshots.</p>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "..", "features": ["content.code.copy"], "search": "../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"alias": true, "provider": "mike"}}</script>
+    
+    
+      <script src="../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

@@ -1,0 +1,9 @@
+(function() {
+    const implementors = Object.fromEntries([["topology_checker_core",[["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.99.1/core/error/trait.Error.html\" title=\"trait core::error::Error\">Error</a> for <a class=\"enum\" href=\"topology_checker_core/enum.Error.html\" title=\"enum topology_checker_core::Error\">Error</a>",0],["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.99.1/core/error/trait.Error.html\" title=\"trait core::error::Error\">Error</a> for <a class=\"struct\" href=\"topology_checker_core/struct.ParseRuleError.html\" title=\"struct topology_checker_core::ParseRuleError\">ParseRuleError</a>",0],["impl&lt;E&gt; <a class=\"trait\" href=\"https://doc.rust-lang.org/1.99.1/core/error/trait.Error.html\" title=\"trait core::error::Error\">Error</a> for <a class=\"enum\" href=\"topology_checker_core/enum.SinkError.html\" title=\"enum topology_checker_core::SinkError\">SinkError</a>&lt;E&gt;<div class=\"where\">where\n    Self: <a class=\"trait\" href=\"https://doc.rust-lang.org/1.99.1/core/fmt/trait.Debug.html\" title=\"trait core::fmt::Debug\">Debug</a> + <a class=\"trait\" href=\"https://doc.rust-lang.org/1.99.1/core/fmt/trait.Display.html\" title=\"trait core::fmt::Display\">Display</a>,</div>",0]]]]);
+    if (window.register_implementors) {
+        window.register_implementors(implementors);
+    } else {
+        window.pending_implementors = implementors;
+    }
+})()
+//{"start":59,"fragment_lengths":[1206]}
