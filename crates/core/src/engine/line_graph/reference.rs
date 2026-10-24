@@ -910,8 +910,13 @@ mod tests {
         for seed in 0..20 {
             let case = case(seed, 28);
             let token = hooks::watched(None);
-            pool.install(|| report(&topology(&case).0, token.clone()))
-                .expect("report");
+            pool.install(|| {
+                cancel::scope(Some(token.clone()), || {
+                    for inputs in 0..3 {
+                        graphs(&case, inputs, false);
+                    }
+                })
+            });
             assert_eq!(hooks::record(&token).workers, 0, "case {seed}");
         }
     }
