@@ -1009,19 +1009,21 @@ mod tests {
     }
 
     #[test]
-    fn cancelling_at_random_times_stops_promptly_and_frees_every_worker() {
+    fn cancelling_at_random_points_stops_promptly_and_frees_every_worker() {
         let rules = [
             Rule::LineMustNotIntersectOrTouchInterior,
             Rule::LineMustNotSelfIntersect,
             Rule::LineMustNotIntersectWith,
             Rule::LineMustNotOverlap,
         ];
-        let pool = Arc::new(
-            rayon::ThreadPoolBuilder::new()
-                .num_threads(4)
-                .build()
-                .unwrap(),
-        );
+        let pools = [4, 2, 1].map(|n| {
+            Arc::new(
+                rayon::ThreadPoolBuilder::new()
+                    .num_threads(n)
+                    .build()
+                    .unwrap(),
+            )
+        });
         let warm = busy(&rules);
         let expected = warm
             .specs
@@ -1031,23 +1033,30 @@ mod tests {
             .unwrap()
             .concat();
         assert!(!expected.is_empty());
-        // An uncancelled run on the same path and pool, with cold caches as below.
-        let cold = busy(&rules);
-        let started = Instant::now();
-        let run = pool.install(|| {
-            let token = CancellationToken::default();
-            cold.topology
-                .validate_into_cancellable(token, |_, _| Ok::<_, Infallible>(()))
-        });
-        assert!(run.is_ok());
-        let full = started.elapsed();
+        let features = warm.topology.layer(warm.specs[0].layer).unwrap().len();
         let mut rng = Rng::new(11);
         let (mut cancelled, mut slowest) = (0, Duration::ZERO);
         for seed in 0..40 {
+            let pool = &pools[seed % pools.len()];
             let case = busy(&rules);
+            // Cancel up to 5 ms after a seeded feature start. Every rule starts each
+            // feature once, so starts count progress on any machine. Every fourth run
+            // picks a rule's first feature, which builds the caches the rule shares.
+            let starts = Arc::new(Mutex::new(Vec::new()));
+            let note = || Action::Note(Arc::clone(&starts));
+            let name = on(&case.topology, case.specs[0], 0, note());
+            for fid in 1..features as i64 {
+                on(&case.topology, case.specs[0], fid, note());
+            }
+            let at = if seed % 4 == 0 {
+                rng.below(rules.len()) * features
+            } else {
+                rng.below(rules.len() * features)
+            };
+            let delay = Duration::from_micros(rng.below(5000) as u64);
             let token = CancellationToken::default();
             let (send, receive) = mpsc::channel();
-            let (worker_pool, worker_token) = (Arc::clone(&pool), token.clone());
+            let (worker_pool, worker_token) = (Arc::clone(pool), token.clone());
             let worker = std::thread::spawn(move || {
                 let mut emitted = Vec::new();
                 let result = worker_pool.install(|| {
@@ -1060,14 +1069,19 @@ mod tests {
                 });
                 send.send((result, emitted)).unwrap();
             });
-            std::thread::sleep(full.mul_f64(rng.below(1000) as f64 / 800.));
-            let at = Instant::now();
+            let started = || starts.lock().unwrap_or_else(PoisonError::into_inner).len();
+            while started() <= at && !worker.is_finished() {
+                std::thread::sleep(Duration::from_micros(50));
+            }
+            std::thread::sleep(delay);
+            let cancel = Instant::now();
             token.cancel();
             let (result, emitted) = receive
                 .recv_timeout(Duration::from_secs(30))
                 .expect("cancellation stops the run");
-            slowest = slowest.max(at.elapsed());
+            slowest = slowest.max(cancel.elapsed());
             worker.join().unwrap();
+            clear(&name);
             match result {
                 Ok(()) => assert_eq!(emitted, expected, "seed {seed}"),
                 Err(SinkError::Core(Error::Cancelled)) => {
@@ -1077,23 +1091,25 @@ mod tests {
                 Err(error) => panic!("seed {seed}: {error:?}"),
             }
         }
-        // Most delays fall within the run; machine load moves the share either way.
+        // Only a point within the last few milliseconds of a run lets it finish.
         assert!(cancelled > 10, "{cancelled}");
         assert!(slowest < Duration::from_secs(5), "{slowest:?}");
-        assert_idle(&pool);
-        let rerun = busy(&rules);
-        assert_eq!(
-            pool.install(|| {
-                rerun
-                    .specs
-                    .iter()
-                    .map(|&spec| streamed(&rerun.topology, spec, None))
-                    .collect::<Result<Vec<_>, Error>>()
-            })
-            .unwrap()
-            .concat(),
-            expected
-        );
+        for pool in &pools {
+            assert_idle(pool);
+            let rerun = busy(&rules);
+            assert_eq!(
+                pool.install(|| {
+                    rerun
+                        .specs
+                        .iter()
+                        .map(|&spec| streamed(&rerun.topology, spec, None))
+                        .collect::<Result<Vec<_>, Error>>()
+                })
+                .unwrap()
+                .concat(),
+                expected
+            );
+        }
     }
 
     #[test]
