@@ -328,5 +328,6 @@ fn _native(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(registry, module)?)?;
     module.add_function(wrap_pyfunction!(lines, module)?)?;
     module.add_function(wrap_pyfunction!(prepare, module)?)?;
+    module.add_function(wrap_pyfunction!(stream::live_workers, module)?)?;
     Ok(())
 }

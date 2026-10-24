@@ -1,6 +1,7 @@
 use assert_cmd::cargo::cargo_bin_cmd;
 use geo::{LineString, Point};
 use serde_json::{Map, Value, json};
+use std::ffi::OsStr;
 use topology_checker_io::{
     crs, read,
     write::{self, DatasetLayer, Record},
@@ -359,4 +360,325 @@ fn utilities_refuse_to_replace_existing_outputs() {
         .assert()
         .code(2);
     assert_eq!(std::fs::read_to_string(&output).unwrap(), "keep");
+}
+
+/// GeoJSON layers for the progress tests: a line with two dangles and a
+/// degenerate part, two coincident points, and two polygons whose gap cannot
+/// be emitted exactly.
+fn progress_inputs(dir: &std::path::Path) {
+    let x = 1f64.next_up();
+    for (name, features) in [
+        (
+            "lines",
+            json!([
+                {"type":"Feature","id":1,"properties":{},"geometry":{"type":"LineString","coordinates":[[5,52],[6,53]]}},
+                {"type":"Feature","id":2,"properties":{},"geometry":{"type":"LineString","coordinates":[[5,53],[5,53]]}}
+            ]),
+        ),
+        (
+            "points",
+            json!([
+                {"type":"Feature","id":1,"properties":{},"geometry":{"type":"Point","coordinates":[5,52]}},
+                {"type":"Feature","id":2,"properties":{},"geometry":{"type":"Point","coordinates":[5,52]}}
+            ]),
+        ),
+        (
+            "narrow",
+            json!([
+                {"type":"Feature","id":-17,"properties":{},"geometry":{"type":"Polygon","coordinates":[[[1.,0.],[x,0.],[x,1.],[1.,1.],[1.,0.]]]}},
+                {"type":"Feature","id":82,"properties":{},"geometry":{"type":"Polygon","coordinates":[[[1.,-1.],[x,-1.],[1.,1.],[1.,-1.]]]}}
+            ]),
+        ),
+    ] {
+        let collection = json!({"type":"FeatureCollection","features":features});
+        std::fs::write(dir.join(format!("{name}.geojson")), collection.to_string()).unwrap();
+    }
+}
+
+/// A definition with the given `(rule, layer alias)` checks.
+fn progress_config(dir: &std::path::Path, rules: &[(&str, &str)]) -> std::path::PathBuf {
+    let mut text = String::from(if rules.is_empty() { "rules = []\n" } else { "" });
+    text.push_str(
+        "[layers]\nroads = { path = \"lines.geojson\" }\nwells = { path = \"points.geojson\" }\nparcels = { path = \"narrow.geojson\" }\n",
+    );
+    for (rule, layer) in rules {
+        text.push_str(&format!(
+            "\n[[rules]]\nrule = \"{rule}\"\nlayer = \"{layer}\"\n"
+        ));
+    }
+    let path = dir.join("topology.toml");
+    std::fs::write(&path, text).unwrap();
+    path
+}
+
+const THREE_RULES: [(&str, &str); 3] = [
+    ("line/must-not-have-dangles", "roads"),
+    ("line/must-not-self-overlap", "roads"),
+    ("point/must-not-overlap", "wells"),
+];
+
+fn validate(args: &[&str], config: &std::path::Path, extra: &[&OsStr]) -> std::process::Output {
+    let mut command = cargo_bin_cmd!("topology-checker");
+    command.args(args).arg("validate").arg(config).args(extra);
+    command.output().unwrap()
+}
+
+fn progress_lines(stderr: &str) -> Vec<&str> {
+    stderr
+        .lines()
+        .filter(|l| l.starts_with("checked rule "))
+        .collect()
+}
+
+const PROGRESS: &str = "--progress";
+
+#[test]
+fn progress_prints_one_line_per_finished_rule_before_the_warnings() {
+    let dir = tempfile::tempdir().unwrap();
+    progress_inputs(dir.path());
+    let config = progress_config(dir.path(), &THREE_RULES);
+    let progress = validate(&[], &config, &[OsStr::new(PROGRESS)]);
+    assert_eq!(progress.status.code(), Some(1));
+    let stderr = String::from_utf8(progress.stderr).unwrap();
+    let lines = stderr.lines().collect::<Vec<_>>();
+    assert_eq!(
+        lines[..3],
+        [
+            "checked rule 1/3 (line/must-not-have-dangles): 2 errors",
+            "checked rule 2/3 (line/must-not-self-overlap): 0 errors",
+            "checked rule 3/3 (point/must-not-overlap): 1 error",
+        ],
+        "{stderr}"
+    );
+    // Warnings still come last, after every rule has finished.
+    assert!(lines.len() > 3, "{stderr}");
+    assert!(
+        lines[3..].iter().all(|l| l.starts_with("warning: ")),
+        "{stderr}"
+    );
+    assert!(stderr.contains("degenerate"), "{stderr}");
+    let plain = validate(&[], &config, &[]);
+    assert_eq!(plain.status.code(), Some(1));
+    assert_eq!(
+        String::from_utf8(plain.stderr).unwrap(),
+        lines[3..].join("\n") + "\n"
+    );
+    // Each line names the rule and count the report gives at that position.
+    let report = validate(&["--json"], &config, &[OsStr::new(PROGRESS)]);
+    let json: Value = serde_json::from_slice(&report.stdout).unwrap();
+    let stderr = String::from_utf8(report.stderr).unwrap();
+    let rules = json["rules"].as_array().unwrap();
+    let progress = progress_lines(&stderr);
+    assert_eq!(progress.len(), rules.len());
+    for (i, (line, rule)) in progress.iter().zip(rules).enumerate() {
+        let count = rule["errors"].as_array().unwrap().len();
+        let unit = if count == 1 { "error" } else { "errors" };
+        let name = rule["spec"]["rule"].as_str().unwrap();
+        let expected = format!(
+            "checked rule {}/{} ({name}): {count} {unit}",
+            i + 1,
+            rules.len()
+        );
+        assert_eq!(*line, expected);
+    }
+}
+
+#[test]
+fn progress_counts_every_registered_rule_of_multi_layer_inputs() {
+    let dir = tempfile::tempdir().unwrap();
+    let layer = |name: &str, x: f64| {
+        DatasetLayer::new(
+            name,
+            Some(crs::parse("EPSG:4326").unwrap()),
+            vec![Record {
+                id: Some(1),
+                geometry: Some(LineString::from(vec![(x, 52.), (x + 1., 53.)]).into()),
+                properties: Map::new(),
+            }],
+        )
+    };
+    write::dataset(
+        &dir.path().join("network.gpkg"),
+        None,
+        false,
+        &[layer("east", 5.), layer("west", 9.)],
+    )
+    .unwrap();
+    let config = dir.path().join("topology.toml");
+    std::fs::write(
+        &config,
+        "[layers]\nnetwork = { path = \"network.gpkg\" }\n\n[[rules]]\nrule = \"line/must-not-have-dangles\"\nlayer = \"network\"\n\n[[rules]]\nrule = \"line/must-not-self-overlap\"\nlayer = \"network\"\n",
+    )
+    .unwrap();
+    let output = validate(&[], &config, &[OsStr::new(PROGRESS)]);
+    assert_eq!(output.status.code(), Some(1));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert_eq!(
+        progress_lines(&stderr),
+        [
+            "checked rule 1/4 (line/must-not-have-dangles): 2 errors",
+            "checked rule 2/4 (line/must-not-have-dangles): 2 errors",
+            "checked rule 3/4 (line/must-not-self-overlap): 0 errors",
+            "checked rule 4/4 (line/must-not-self-overlap): 0 errors",
+        ],
+        "{stderr}"
+    );
+}
+
+/// Every file in a folder, by name, with its bytes.
+fn folder(path: &std::path::Path) -> Vec<(String, Vec<u8>)> {
+    let mut files = std::fs::read_dir(path)
+        .unwrap()
+        .map(|entry| {
+            let entry = entry.unwrap();
+            (
+                entry.file_name().to_string_lossy().into_owned(),
+                std::fs::read(entry.path()).unwrap(),
+            )
+        })
+        .collect::<Vec<_>>();
+    files.sort();
+    files
+}
+
+/// The features and attributes of every readable dataset in a folder.
+fn decoded(path: &std::path::Path) -> Vec<String> {
+    let mut layers = Vec::new();
+    for (name, _) in folder(path) {
+        let file = path.join(&name);
+        if topology_checker_io::registry::for_path(&file).is_none() {
+            continue;
+        }
+        for layer in read::read_with_attributes(&file, None, "errors", true).unwrap() {
+            let features = layer.layer.features().collect::<Vec<_>>();
+            layers.push(format!(
+                "{name} {} {features:?} {:?}",
+                layer.selector, layer.attributes
+            ));
+        }
+    }
+    layers
+}
+
+#[test]
+fn progress_leaves_stdout_and_outputs_unchanged() {
+    let dir = tempfile::tempdir().unwrap();
+    progress_inputs(dir.path());
+    let config = progress_config(dir.path(), &THREE_RULES);
+    for mode in [
+        &[][..],
+        &["--json"],
+        &["--json", "--summary"],
+        &["--summary"],
+    ] {
+        let plain = validate(mode, &config, &[]);
+        let progress = validate(mode, &config, &[OsStr::new(PROGRESS)]);
+        assert_eq!(plain.status.code(), Some(1));
+        assert_eq!(progress.status.code(), Some(1));
+        assert!(!plain.stdout.is_empty());
+        assert_eq!(plain.stdout, progress.stdout, "{mode:?}");
+    }
+    // Error reports group points into multipoints, which GPX refuses with or
+    // without progress.
+    for case in [
+        "geojson", "gpkg", "fgb", "parquet", "kml", "kmz", "gpx", "shp",
+    ] {
+        let run = |name: &str, progress: bool| {
+            let folder = dir.path().join(format!("{case}-{name}"));
+            std::fs::create_dir(&folder).unwrap();
+            let output = folder.join(format!("errors.{case}"));
+            let mut extra = vec![OsStr::new("-o"), output.as_os_str()];
+            extra.extend(progress.then(|| OsStr::new(PROGRESS)));
+            let result = validate(&["--json"], &config, &extra);
+            let stderr = String::from_utf8(result.stderr).unwrap();
+            (result.status.code(), result.stdout, stderr, folder)
+        };
+        let (code, plain, plain_err, plain_folder) = run("plain", false);
+        let (again_code, again, _, again_folder) = run("again", false);
+        let (progress_code, progress, progress_err, progress_folder) = run("progress", true);
+        assert_eq!(
+            [again_code, progress_code],
+            [code; 2],
+            "{case}: {plain_err}"
+        );
+        assert_eq!(plain, again, "{case}");
+        assert_eq!(plain, progress, "{case}");
+        // Progress only adds its own lines to stderr.
+        let rest = progress_err
+            .lines()
+            .filter(|l| !l.starts_with("checked rule "))
+            .collect::<Vec<_>>();
+        assert_eq!(rest, plain_err.lines().collect::<Vec<_>>(), "{case}");
+        assert_eq!(progress_lines(&progress_err).len(), 3, "{progress_err}");
+        if case == "gpx" {
+            assert_eq!(code, Some(2), "{plain_err}");
+            assert!(plain_err.contains("GPX export supports"), "{plain_err}");
+            assert!(folder(&plain_folder).is_empty());
+            assert!(folder(&progress_folder).is_empty());
+            continue;
+        }
+        assert_eq!(code, Some(1), "{case}: {plain_err}");
+        assert!(!folder(&plain_folder).is_empty(), "{case}");
+        if folder(&plain_folder) == folder(&again_folder) {
+            assert_eq!(folder(&plain_folder), folder(&progress_folder), "{case}");
+        } else {
+            // Formats that stamp the write time differ run to run; compare contents.
+            let names = |f: &std::path::Path| {
+                folder(f)
+                    .into_iter()
+                    .map(|(name, _)| name)
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(names(&plain_folder), names(&progress_folder), "{case}");
+            assert!(!decoded(&plain_folder).is_empty(), "{case}");
+            assert_eq!(decoded(&plain_folder), decoded(&progress_folder), "{case}");
+        }
+    }
+}
+
+#[test]
+fn progress_needs_a_rule_to_report() {
+    let dir = tempfile::tempdir().unwrap();
+    progress_inputs(dir.path());
+    let config = progress_config(dir.path(), &[]);
+    let output = validate(&[], &config, &[OsStr::new(PROGRESS)]);
+    assert_eq!(output.status.code(), Some(2));
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("no rules"), "{stderr}");
+    assert!(progress_lines(&stderr).is_empty(), "{stderr}");
+    assert!(output.stdout.is_empty());
+}
+
+#[test]
+fn progress_stops_before_the_rule_that_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    progress_inputs(dir.path());
+    let config = progress_config(
+        dir.path(),
+        &[
+            ("line/must-not-have-dangles", "roads"),
+            ("polygon/must-not-have-gaps", "parcels"),
+            ("point/must-not-overlap", "wells"),
+        ],
+    );
+    let output = dir.path().join("errors.geojson");
+    let result = validate(
+        &[],
+        &config,
+        &[
+            OsStr::new("--progress"),
+            OsStr::new("-o"),
+            output.as_os_str(),
+        ],
+    );
+    assert!(!result.status.success());
+    let stderr = String::from_utf8(result.stderr).unwrap();
+    assert_eq!(
+        progress_lines(&stderr),
+        ["checked rule 1/3 (line/must-not-have-dangles): 2 errors"],
+        "{stderr}"
+    );
+    assert!(stderr.contains("precision failure"), "{stderr}");
+    assert!(result.stdout.is_empty());
+    assert!(!output.exists());
 }

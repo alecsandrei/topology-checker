@@ -35,40 +35,45 @@ fn every_duplicate_pair_is_streamed_and_consumer_failure_is_preserved() {
     assert_eq!(t.validate().unwrap().violation_count(), 0);
 }
 
-#[test]
-fn every_rule_sink_matches_independent_eager_execution() {
+/// Three overlapping features of one family, so most rules report something.
+fn rule_features(
+    kind: topology_checker_core::GeometryKind,
+) -> Vec<(i64, topology_checker_core::geo::Geometry)> {
     use topology_checker_core::{
         GeometryKind,
         geo::{Geometry, GeometryCollection, LineString, MultiLineString, MultiPoint, Rect, coord},
     };
-    fn features(kind: GeometryKind) -> Vec<(i64, Geometry)> {
-        [9, -4, 77]
-            .into_iter()
-            .enumerate()
-            .map(|(i, fid)| {
-                let x = i as f64;
-                let point = Point::new(x, 0.5);
-                let geometry: Geometry = match kind {
-                    GeometryKind::Point => MultiPoint(vec![point, Point::new(x + 0.5, 0.5)]).into(),
-                    GeometryKind::Line => MultiLineString(vec![
-                        LineString::from(vec![(0., x), (3., 3. - x)]),
-                        LineString::from(vec![(x, 0.), (x, 3.)]),
-                    ])
+    [9, -4, 77]
+        .into_iter()
+        .enumerate()
+        .map(|(i, fid)| {
+            let x = i as f64;
+            let point = Point::new(x, 0.5);
+            let geometry: Geometry = match kind {
+                GeometryKind::Point => MultiPoint(vec![point, Point::new(x + 0.5, 0.5)]).into(),
+                GeometryKind::Line => MultiLineString(vec![
+                    LineString::from(vec![(0., x), (3., 3. - x)]),
+                    LineString::from(vec![(x, 0.), (x, 3.)]),
+                ])
+                .into(),
+                GeometryKind::Polygon => Rect::new(coord! {x:x,y:0.}, coord! {x:x+2.,y:2.})
+                    .to_polygon()
                     .into(),
-                    GeometryKind::Polygon => Rect::new(coord! {x:x,y:0.}, coord! {x:x+2.,y:2.})
+                _ => Geometry::GeometryCollection(GeometryCollection(vec![
+                    point.into(),
+                    Rect::new(coord! {x:x,y:0.}, coord! {x:x+2.,y:2.})
                         .to_polygon()
                         .into(),
-                    _ => Geometry::GeometryCollection(GeometryCollection(vec![
-                        point.into(),
-                        Rect::new(coord! {x:x,y:0.}, coord! {x:x+2.,y:2.})
-                            .to_polygon()
-                            .into(),
-                    ])),
-                };
-                (fid, geometry)
-            })
-            .collect()
-    }
+                ])),
+            };
+            (fid, geometry)
+        })
+        .collect()
+}
+
+#[test]
+fn every_rule_sink_matches_independent_eager_execution() {
+    let features = rule_features;
     for rule in Rule::ALL {
         let mut t = Topology::new(0.001).unwrap();
         let (a, b) = rule.inputs();
@@ -401,4 +406,175 @@ fn cancellation_inside_a_rule_stops_before_its_end_and_later_rules() {
     assert!(matches!(error, SinkError::Consumer("stop")));
     assert_eq!(ends, 1);
     assert_eq!(t.validate().unwrap().violation_count(), 8);
+}
+
+/// One event as seen by a sink, owned so whole runs can be compared.
+#[derive(Debug, PartialEq)]
+enum Logged {
+    Violation(usize, topology_checker_core::Violation),
+    End(
+        usize,
+        std::collections::BTreeMap<topology_checker_core::ViolationKind, usize>,
+        usize,
+    ),
+}
+
+/// Every rule once, in registry order, over shared layers of each family.
+fn every_rule_topology() -> Topology {
+    use topology_checker_core::GeometryKind;
+    let mut t = Topology::new(0.001).unwrap();
+    let kinds = [
+        GeometryKind::Point,
+        GeometryKind::Line,
+        GeometryKind::Polygon,
+        GeometryKind::Any,
+    ];
+    let layers = kinds.map(|kind| {
+        let primary = t.add_layer(Layer::from_features("primary", rule_features(kind)));
+        let target = t.add_layer(Layer::from_features("target", rule_features(kind)));
+        (kind, primary, target)
+    });
+    let find = |kind| *layers.iter().find(|(k, ..)| *k == kind).unwrap();
+    for &rule in Rule::ALL {
+        let (a, b) = rule.inputs();
+        t.add_rule(rule, find(a).1, b.map(|kind| find(kind).2))
+            .unwrap();
+    }
+    t
+}
+
+fn log_events(
+    t: &Topology,
+    token: topology_checker_core::CancellationToken,
+    mut stop: impl FnMut(&Logged) -> bool,
+) -> (
+    Vec<Logged>,
+    Result<topology_checker_core::ReportSummary, SinkError<()>>,
+) {
+    use topology_checker_core::ValidationEvent;
+    let mut log = Vec::new();
+    let result = t.validate_events_cancellable(token.clone(), |event| {
+        log.push(match event {
+            ValidationEvent::Violation(spec, v) => Logged::Violation(spec.id.index(), v),
+            ValidationEvent::RuleEnd(rule) => {
+                Logged::End(rule.spec.id.index(), rule.counts.clone(), rule.total)
+            }
+            _ => unreachable!(),
+        });
+        if stop(log.last().unwrap()) {
+            token.cancel();
+        }
+        Ok(())
+    });
+    (log, result)
+}
+
+/// The events eager validation implies: each rule's violations, then its end.
+fn expected_events(t: &Topology) -> Vec<Logged> {
+    let eager = t.validate().unwrap();
+    let mut expected = Vec::new();
+    for (i, report) in eager.rules.iter().enumerate() {
+        expected.extend(
+            report
+                .violations
+                .iter()
+                .map(|v| Logged::Violation(i, v.clone())),
+        );
+        expected.push(Logged::End(
+            i,
+            report.counts.clone(),
+            report.violations.len(),
+        ));
+    }
+    expected
+}
+
+#[test]
+fn rule_end_matches_eager_reports_for_every_rule_alone_and_together() {
+    use topology_checker_core::CancellationToken;
+    for &rule in Rule::ALL {
+        let mut t = Topology::new(0.001).unwrap();
+        let (a, b) = rule.inputs();
+        let a = t.add_layer(Layer::from_features("primary", rule_features(a)));
+        let b = b.map(|kind| t.add_layer(Layer::from_features("target", rule_features(kind))));
+        t.add_rule(rule, a, b).unwrap();
+        let (log, result) = log_events(&t, CancellationToken::default(), |_| false);
+        assert_eq!(log, expected_events(&t), "{rule}");
+        let summary = result.unwrap();
+        assert!(matches!(log.last(), Some(Logged::End(0, _, n)) if *n == summary.rules[0].total));
+    }
+    let t = every_rule_topology();
+    let expected = expected_events(&t);
+    let (log, result) = log_events(&t, CancellationToken::default(), |_| false);
+    assert_eq!(log, expected);
+    let summary = result.unwrap();
+    let ends = log
+        .iter()
+        .filter_map(|e| match e {
+            Logged::End(i, counts, total) => Some((*i, counts, *total)),
+            Logged::Violation(..) => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(ends.len(), Rule::ALL.len());
+    for (i, (index, counts, total)) in ends.into_iter().enumerate() {
+        assert_eq!(index, i);
+        assert_eq!(counts, &summary.rules[i].counts);
+        assert_eq!(total, summary.rules[i].total);
+    }
+    // The fixture must exercise both passing and failing rules.
+    assert!(summary.rules.iter().any(|r| r.total == 0));
+    assert!(summary.rules.iter().any(|r| r.total > 1));
+}
+
+#[test]
+fn cancelling_at_each_rule_end_stops_before_the_next_rule() {
+    use topology_checker_core::{CancellationToken, Error};
+    let t = every_rule_topology();
+    let expected = expected_events(&t);
+    let last = Rule::ALL.len() - 1;
+    for k in 0..=last {
+        let (log, result) = log_events(
+            &t,
+            CancellationToken::default(),
+            |e| matches!(e, Logged::End(i, ..) if *i == k),
+        );
+        assert_eq!(log[..], expected[..log.len()], "rule {k}");
+        assert!(matches!(log.last(), Some(Logged::End(i, ..)) if *i == k));
+        if k == last {
+            // Nothing is left to cancel after the final rule.
+            assert!(result.is_ok());
+        } else {
+            assert!(
+                matches!(result, Err(SinkError::Core(Error::Cancelled))),
+                "rule {k}"
+            );
+        }
+    }
+    let token = CancellationToken::default();
+    token.cancel();
+    let (log, result) = log_events(&t, token, |_| false);
+    assert!(log.is_empty());
+    assert!(matches!(result, Err(SinkError::Core(Error::Cancelled))));
+}
+
+#[test]
+fn cancelling_inside_each_rule_drops_its_end_and_every_later_rule() {
+    use topology_checker_core::{CancellationToken, Error};
+    let t = every_rule_topology();
+    let expected = expected_events(&t);
+    let mut cancelled = 0;
+    for (position, event) in expected.iter().enumerate() {
+        let Logged::Violation(rule, _) = event else {
+            continue;
+        };
+        let mut seen = 0;
+        let (log, result) = log_events(&t, CancellationToken::default(), |_| {
+            seen += 1;
+            seen == position + 1
+        });
+        assert_eq!(log[..], expected[..=position], "rule {rule}");
+        assert!(matches!(result, Err(SinkError::Core(Error::Cancelled))));
+        cancelled += 1;
+    }
+    assert!(cancelled > Rule::ALL.len());
 }
