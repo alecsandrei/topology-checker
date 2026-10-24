@@ -4,6 +4,7 @@ import collections.abc as c
 import dataclasses
 import json
 import os
+import re
 import typing as t
 from pathlib import Path
 
@@ -131,6 +132,10 @@ def definition_command(
 # The executables that do not know --stream, by path and time of change, so
 # that one that is replaced is asked again
 WITHOUT_STREAM: set[tuple[str, int]] = set()
+# What the parser of the arguments of an executable from before --stream
+# says of the flag, on a line of its own, and the colors it may have
+REFUSED = re.compile(r"^error: unexpected argument '--stream' found\r?$", re.M)
+COLORS = re.compile(r'\x1b\[[0-9;]*m')
 
 
 def modified(executable: str) -> int:
@@ -153,13 +158,16 @@ def run_validate(
     feedback: QgsProcessingFeedback,
     out: Lines,
     older: c.Callable[[], None] | None = None,
+    done: c.Callable[[], bool] | None = None,
 ) -> Completed:
     """Runs the rules of a definition, giving `out` each line of the report
-    as soon as the executable says it.
+    as soon as the executable says it. Once `done` says that the report is
+    complete, the executable has a moment to end before it is ended.
 
     An executable that does not know --stream is asked again without it, and
     says the whole report at the end; it is not asked with the flag again,
-    and `older` hears of it.
+    and `older` hears of it. Only the words of its parser tell that it does
+    not know it: other errors may name the flag, as a layer may.
     """
     version = (executable, modified(executable))
     stream = version not in WITHOUT_STREAM
@@ -176,12 +184,13 @@ def run_validate(
             validate_command(executable, config, tolerance, stream),
             feedback,
             out=read,
+            done=done,
         )
         refused = (
             stream
             and not taken
             and completed.exit_code == ExitCode.ERROR.value
-            and '--stream' in completed.stderr + completed.stdout
+            and REFUSED.search(COLORS.sub('', completed.stderr)) is not None
         )
         if not refused:
             return completed

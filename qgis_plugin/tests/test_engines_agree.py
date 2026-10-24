@@ -136,8 +136,8 @@ def recording(monkeypatch: pytest.MonkeyPatch, references: References) -> None:
     made: list[IdMap] = []
 
     class Recorded(Report):
-        def __init__(self, gathered: t.Any, ids: IdMap) -> None:
-            super().__init__(gathered, ids)
+        def __init__(self, gathered: t.Any, ids: IdMap, *rest: t.Any) -> None:
+            super().__init__(gathered, ids, *rest)
             made.append(ids)
 
     def run_validate(

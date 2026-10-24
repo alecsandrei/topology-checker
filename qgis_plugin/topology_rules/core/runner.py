@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import collections
 import collections.abc as c
 import contextlib
 import dataclasses
@@ -24,6 +25,16 @@ if t.TYPE_CHECKING:
 POLL_SECONDS = 0.2
 # How long to wait for what was killed to be gone
 STOP_SECONDS = 5
+# How long a followed tool has to end, and to let go of its pipes, once it
+# has told all or has ended
+GRACE_SECONDS = 2.0
+# How much of what a followed tool says, and the plugin does not take, is
+# kept: the end of it
+KEPT_CHARS = 1_000_000
+# How much of the error output of a tool the log shows: the start as it
+# comes, and the end once the tool is done, and how much of each line
+LOGGED_CHARS = 50_000
+LINE_CHARS = 2_000
 
 
 @dataclasses.dataclass(frozen=True)
@@ -31,10 +42,63 @@ class Completed:
     exit_code: int
     stdout: str
     stderr: str
+    # Whether the tool was ended, as it did not end once it had told all
+    ended: bool = False
 
 
 # A line of what the tool says, which says whether it took the line
 Lines = c.Callable[[str], bool]
+
+
+class Tail:
+    """The last lines of what a tool says, up to a number of characters, and
+    how many lines were left out before them. The last line is kept, however
+    long."""
+
+    def __init__(self, size: int) -> None:
+        self.size = size
+        self.lines: collections.deque[str] = collections.deque()
+        self.chars = 0
+        self.left_out = 0
+
+    def add(self, line: str) -> None:
+        self.lines.append(line)
+        self.chars += len(line)
+        while self.chars > self.size and len(self.lines) > 1:
+            self.chars -= len(self.lines.popleft())
+            self.left_out += 1
+
+    def text(self) -> str:
+        return ''.join(self.lines)
+
+
+class Log:
+    """Shows lines of the error output of a tool in the log, each cut short:
+    the first as they come, and the last once the tool is done. Those in
+    between are counted."""
+
+    def __init__(self, feedback: QgsProcessingFeedback) -> None:
+        self.feedback = feedback
+        self.room = LOGGED_CHARS
+        self.tail = Tail(LOGGED_CHARS)
+
+    def add(self, line: str) -> None:
+        if len(line) > LINE_CHARS:
+            line = line[:LINE_CHARS] + '…'
+        if self.room > 0:
+            self.room -= len(line)
+            self.feedback.pushInfo(line)
+        else:
+            self.tail.add(line)
+
+    def end(self) -> None:
+        if self.tail.left_out:
+            self.feedback.pushInfo(
+                tr('… {count} lines left out').format(count=self.tail.left_out)
+            )
+        for line in self.tail.lines:
+            self.feedback.pushInfo(line)
+        self.tail = Tail(LOGGED_CHARS)
 
 
 def run(
@@ -43,13 +107,16 @@ def run(
     timeout: float | None = None,
     lines: Lines | None = None,
     out: Lines | None = None,
+    done: c.Callable[[], bool] | None = None,
 ) -> Completed:
     """Runs the command without a shell, stopping it if the feedback cancels
     or the timeout in seconds passes.
 
     The lines, if given, get each line of the error output as soon as the
     tool says it, and `out` each line of the output; those they take are not
-    in what is returned.
+    in what is returned, which has the end of the others. Once `done` says
+    that the tool has told all, it has a moment to end, as it has once it
+    ends to let go of its pipes; then it is ended.
     """
     flags = 0
     if sys.platform == 'win32':
@@ -93,7 +160,7 @@ def run(
             ) from None
 
     if lines is not None or out is not None:
-        return follow(process, (out, lines), check)
+        return follow(process, (out, lines), check, done)
     while True:
         try:
             stdout, stderr = process.communicate(timeout=POLL_SECONDS)
@@ -107,13 +174,16 @@ def follow(
     process: subprocess.Popen[str],
     takers: tuple[Lines | None, Lines | None],
     check: c.Callable[[c.Callable[[], None]], None],
+    done: c.Callable[[], bool] | None = None,
 ) -> Completed:
     """Waits for the process, giving the takers each line of its output and
     of its error output as it comes. A thread reads each pipe, so that
     neither fills up while the other is read.
 
-    However the wait ends, what is left of the process is stopped and
-    reaped.
+    A process that has told all, or has ended, and has not ended and let go
+    of its pipes a moment later, is ended, with what it started: the lines
+    read by then are taken. However the wait ends, what is left of the
+    process is stopped and reaped.
     """
     pipes = (not_none(process.stdout), not_none(process.stderr))
     found: queue.Queue[tuple[int, str | None]] = queue.Queue()
@@ -138,9 +208,12 @@ def follow(
     ]
     for reader in readers:
         reader.start()
-    kept: tuple[list[str], list[str]] = ([], [])
+    kept = (Tail(KEPT_CHARS), Tail(KEPT_CHARS))
     ends = 0
     stopped = False
+    ended = False
+    # When the process has had its moment to end
+    deadline: float | None = None
 
     def stopping() -> None:
         nonlocal stopped
@@ -152,14 +225,27 @@ def follow(
             try:
                 source, line = found.get(timeout=POLL_SECONDS)
             except queue.Empty:
+                if stopped:
+                    # The lines that were read before it ended are taken
+                    break
                 source, line = 0, ''
             if line is None:
                 ends += 1
             elif line:
                 take = takers[source]
                 if take is None or not take(line.rstrip('\r\n')):
-                    kept[source].append(line)
+                    kept[source].add(line)
             check(stopping)
+            if stopped:
+                continue
+            if deadline is None:
+                if process.poll() is not None or (done is not None and done()):
+                    deadline = time.monotonic() + GRACE_SECONDS
+            elif time.monotonic() > deadline and (
+                process.poll() is None or any(r.is_alive() for r in readers)
+            ):
+                ended = process.poll() is None
+                stopping()
     finally:
         if not stopped and (
             process.poll() is None or any(r.is_alive() for r in readers)
@@ -171,7 +257,9 @@ def follow(
             if not reader.is_alive():
                 with contextlib.suppress(OSError, ValueError):
                     pipe.close()
-    return Completed(process.returncode, ''.join(kept[0]), ''.join(kept[1]))
+    # One that could not be killed has no code
+    code = -1 if process.returncode is None else process.returncode
+    return Completed(code, kept[0].text(), kept[1].text(), ended)
 
 
 def execute(
@@ -179,25 +267,31 @@ def execute(
     feedback: QgsProcessingFeedback,
     lines: Lines | None = None,
     out: Lines | None = None,
+    done: c.Callable[[], bool] | None = None,
 ) -> Completed:
-    """Runs the command, showing it and what the tool says in the log. With
-    lines or out, what the tool says on its error output is shown as it
-    comes, but for the lines that they take, and `out` gets each line of
-    the output."""
+    """Runs the command, showing it and what the tool says in the log, up to
+    a size. With lines or out, what the tool says on its error output is
+    shown as it comes, but for the lines that they take, and `out` gets
+    each line of the output."""
     feedback.pushCommandInfo(' '.join(command))
+    log = Log(feedback)
     if lines is None and out is None:
         completed = run(command, feedback)
         for line in completed.stderr.splitlines():
-            feedback.pushInfo(line)
+            log.add(line)
+        log.end()
         return completed
 
     def told(line: str) -> bool:
         if lines is not None and lines(line):
             return True
-        feedback.pushInfo(line)
+        log.add(line)
         return False
 
-    return run(command, feedback, lines=told, out=out)
+    try:
+        return run(command, feedback, lines=told, out=out, done=done)
+    finally:
+        log.end()
 
 
 def error_message(completed: Completed) -> str:

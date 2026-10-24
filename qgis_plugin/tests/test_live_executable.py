@@ -11,6 +11,7 @@ import contextlib
 import errno
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -20,27 +21,38 @@ import typing as t
 from pathlib import Path
 
 import pytest
-from qgis.core import QgsProcessingFeedback
+from qgis.core import QgsProcessingFeedback, QgsVectorLayer
 
-from topology_rules.core import commands, runner
+from topology_rules.core import checks, commands, runner
 from topology_rules.core.checks import Job
 from topology_rules.exceptions import RunError
 from topology_rules.utils import not_none
 
-from .helpers import process_alive, wait_for, write_tool
+from .helpers import (
+    line_layer,
+    polygon_layer,
+    process_alive,
+    real_streams,
+    save,
+    wait_for,
+    write_tool,
+)
 from .live import (
     Recorder,
     Told,
     expected_stages,
+    forwarding_executable,
     found_rows,
     let_all_lines,
     let_end,
     let_lines,
     refusing_executable,
+    reordering_executable,
     replaying_executable,
     run_told,
 )
-from .test_live_engines import file_rows, jobs_of, lines
+from .test_engines_agree import BOWTIE, CHAIN, SQUARE, project
+from .test_live_engines import Spec, file_rows, jobs_of, lines
 
 not_on_windows = pytest.mark.skipif(
     sys.platform == 'win32', reason='a test of the sessions of POSIX'
@@ -134,7 +146,7 @@ def test_both_pipes_are_read_while_the_tool_fills_them(tmp_path: Path):
         tmp_path / 'tool',
         """
 for number in range(2000):
-    sys.stdout.write(f'o{number:04d}' + 'o' * 1000 + '\\n')
+    sys.stdout.write(f'o{number:04d}' + 'o' * 400 + '\\n')
     say(f'e{number}\\n'.encode())
 sys.stdout.flush()
 """,
@@ -157,9 +169,9 @@ sys.stdout.flush()
     # A run that read one pipe only would stop here
     completed = runner.run([command], timeout=60, lines=take, out=take_out)
     assert completed.exit_code == 0
-    assert out == [f'o{n:04d}' + 'o' * 1000 for n in range(1, 2000, 2)]
+    assert out == [f'o{n:04d}' + 'o' * 400 for n in range(1, 2000, 2)]
     assert completed.stdout == ''.join(
-        f'o{n:04d}' + 'o' * 1000 + '\n' for n in range(0, 2000, 2)
+        f'o{n:04d}' + 'o' * 400 + '\n' for n in range(0, 2000, 2)
     )
     assert taken == [f'e{n}' for n in range(0, 2000, 2)]
     assert completed.stderr == ''.join(f'e{n}\n' for n in range(1, 2000, 2))
@@ -175,7 +187,7 @@ out = sys.stdout
 say(b'reading roads\\r\\n', out)
 say(b'{"rule": 1}\\r\\n', out)
 say(b'caf\\xe9 \\xff\\xfe\\n', out)
-say(b'"' + b'x' * 1000000 + b'"\\n', out)
+say(b'"' + b'x' * 100000 + b'"\\n', out)
 say(b'{"rule": ', out)
 say(b'2}\\n', out)
 say(b'not json\\n', out)
@@ -201,7 +213,7 @@ say(b'{"rule": 3}', out)
         'reading roads\n'
         + b'caf\xe9 \xff\xfe\n'.decode('utf-8', 'replace')
         + '"'
-        + 'x' * 1000000
+        + 'x' * 100000
         + '"\n'
         + 'not json\n'
     )
@@ -352,6 +364,45 @@ def test_a_tool_that_ends_alone_is_not_held_up_by_its_lines(tmp_path: Path):
     assert completed == runner.Completed(4, 'out\n', 'only line\n')
 
 
+@pytest.mark.parametrize('follows', [False, True], ids=['at the end', 'live'])
+def test_the_log_has_the_start_and_the_end_of_what_the_tool_says(
+    tmp_path: Path, follows: bool
+):
+    """Each line cut short, and those in between counted; what is kept of
+    the error output of a followed tool is its end."""
+    command = tool(
+        tmp_path / 'tool',
+        """
+for number in range(30000):
+    say(f'e{number:05d} '.encode() + b'.' * 100 + b'\\n')
+say(b'x' * 10000 + b'\\n')
+say(b'last\\n')
+""",
+    )
+    feedback = QgsProcessingFeedback()
+    out: runner.Lines | None = (lambda line: False) if follows else None
+    completed = runner.execute([command], feedback, out=out)
+    assert completed.exit_code == 0
+    log = feedback.textLog()
+    assert len(log) < 2 * runner.LOGGED_CHARS + runner.LINE_CHARS + 5000
+    shown = log.splitlines()
+    numbered = [
+        int(line[1:6])
+        for line in shown
+        if re.fullmatch(r'e\d{5} \.{100}', line)
+    ]
+    left_out = re.search(r'^… (\d+) lines left out$', log, re.M)
+    assert left_out is not None
+    assert numbered == sorted(numbered)
+    assert numbered[0] == 0
+    assert numbered[-1] == 29999
+    assert len(numbered) + int(left_out[1]) == 30000
+    assert shown[-2:] == ['x' * runner.LINE_CHARS + '…', 'last']
+    if follows:
+        assert len(completed.stderr) <= runner.KEPT_CHARS
+        assert completed.stderr.endswith('.\n' + 'x' * 10000 + '\nlast\n')
+
+
 # The report as the tool says it
 
 
@@ -423,9 +474,9 @@ def test_each_rule_is_read_as_soon_as_the_tool_says_it(
 def test_lines_that_are_not_of_the_report_are_left_out(
     executable: str, tmp_path: Path
 ):
-    """What the tool says on its error output is in the log; lines of its
-    output that are not of the report, or of no rule of the run, are left
-    out, and the rules are told as from a quiet tool."""
+    """What the tool says on its error output is in the log, each line cut
+    short; lines of its output that are not of the report, or cannot be
+    read, are left out, and the rules are told as from a quiet tool."""
     noisy, gates = replaying(tmp_path, noise=True)
     let_all_lines(gates)
     let_end(gates)
@@ -442,10 +493,10 @@ def test_lines_that_are_not_of_the_report_are_left_out(
     log = told.feedback.textLog()
     assert 'reading roads' in log
     assert b'caf\xe9 \xff\xfe not utf-8'.decode('utf-8', 'replace') in log
-    assert 'x' * 100000 in log
+    assert 'x' * runner.LINE_CHARS + '…' in log
+    assert 'x' * (runner.LINE_CHARS + 1) not in log
     assert '[' * 1000 not in log
     assert '9' * 4000 not in log
-    assert 'line/no-such-rule' not in log
 
 
 @not_on_windows
@@ -518,6 +569,176 @@ def test_a_canceled_run_keeps_the_rules_that_are_done(
     assert found_rows(running.recorder.checks()) == file_rows(told.output)
 
 
+# Reports that are not those of the run
+
+
+def same_rule_on_two_layers() -> list[Spec]:
+    roads = project(line_layer(*CHAIN, name='roads'))
+    rivers = project(
+        line_layer(
+            'LINESTRING(0 0, 5 5)', 'LINESTRING(7 7, 9 9)', name='rivers'
+        )
+    )
+    return [
+        ('line/must-not-have-dangles', roads),
+        ('line/must-not-have-dangles', rivers),
+    ]
+
+
+def reordering(tmp_path: Path, order: list[int | str], **how: t.Any) -> str:
+    folder = tmp_path / 'tool'
+    folder.mkdir()
+    return str(reordering_executable(folder, order, **how))
+
+
+@pytest.mark.parametrize(
+    ('order', 'kept'),
+    [
+        pytest.param([1, 0], 0, id='swapped'),
+        pytest.param(['{"spec": {"rule": 5}, cut', 1], 0, id='first cut off'),
+        pytest.param([0, 0, 1], 1, id='first twice'),
+        pytest.param([0, 1, 1], 2, id='last twice'),
+    ],
+)
+def test_a_report_on_other_layers_fails_the_run(
+    executable: str, tmp_path: Path, order: list[int | str], kept: int
+):
+    """The same rule on two layers: each report has to be of the next rule
+    on its layers. The run fails at the first that is not, and keeps the
+    rules before it with their own errors."""
+    jobs = jobs_of(executable, same_rule_on_two_layers())
+    reference = run_told(executable, jobs, tmp_path / 'reference')
+    assert all(reference.outcome.counts)
+    recorder = Recorder()
+    with pytest.raises(RunError, match=r'^The report of the tool is not of'):
+        run_told(
+            reordering(tmp_path, order),
+            jobs,
+            tmp_path / 'run',
+            feedback=recorder,
+        )
+    assert [d.count for d in recorder.checks()] == (
+        reference.outcome.counts[:kept]
+    )
+    assert found_rows(recorder.checks()) == found_rows(
+        reference.feedback.checks()[:kept]
+    )
+    assert not (tmp_path / 'run' / 'errors.gpkg').exists()
+    log = recorder.textLog()
+    if kept < len(jobs):
+        expected = 'roads' if kept == 0 else 'rivers'
+        assert (
+            f'Rule {kept + 1} of the run is line/must-not-have-dangles '
+            f'({expected}), and the tool told of'
+        ) in log
+    else:
+        assert 'The run has 2 rules, and the tool told of' in log
+
+
+def test_a_report_in_the_order_of_the_run_is_read(
+    executable: str, tmp_path: Path
+):
+    jobs = jobs_of(executable, same_rule_on_two_layers())
+    reference = run_told(executable, jobs, tmp_path / 'reference')
+    told = run_told(reordering(tmp_path, [0, 1]), jobs, tmp_path / 'run')
+    assert told.outcome.counts == reference.outcome.counts
+    assert file_rows(told.output) == file_rows(reference.output)
+
+
+@pytest.mark.parametrize(
+    ('order', 'last', 'lacks'),
+    [
+        pytest.param([0], True, 'The report has 1 of 3 rules', id='a rule'),
+        pytest.param([0, 1, 2], False, 'The report has no last line', id='end'),
+    ],
+)
+def test_a_report_that_lacks_a_part_fails_the_run(
+    executable: str,
+    tmp_path: Path,
+    order: list[int | str],
+    last: bool,
+    lacks: str,
+):
+    """With a short message; the log tells what is missing, and the end of
+    what else the tool said."""
+    jobs = jobs_of(executable, lines())
+    junk = '{"rules": ' + 'x' * 10000 + 'END'
+    recorder = Recorder()
+    path = reordering(tmp_path, [*order, junk], last=last)
+    with pytest.raises(RunError) as raised:
+        run_told(path, jobs, tmp_path / 'run', feedback=recorder)
+    assert str(raised.value) == 'Could not read the report of the tool'
+    log = recorder.textLog()
+    assert lacks in log
+    assert (
+        'The rest of the output: …' + 'x' * (checks.SHOWN_CHARS - 3) + 'END'
+        in log
+    )
+    assert 'x' * 600 not in log
+
+
+# A tool that does not end once it has told all
+
+
+@pytest.fixture
+def short_grace(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(runner, 'GRACE_SECONDS', 0.5)
+
+
+@pytest.mark.usefixtures('short_grace')
+def test_a_tool_that_waits_once_it_told_all_is_ended(
+    executable: str, tmp_path: Path
+):
+    """A moment after the last line of the report: the run has all of it,
+    as from a tool that ends."""
+    pids = tmp_path / 'pids'
+    then = f"""
+with open({str(pids)!r}, 'w') as file:
+    file.write(str(os.getpid()))
+time.sleep(600)
+"""
+    jobs = jobs_of(executable, lines())
+    reference = run_told(executable, jobs, tmp_path / 'reference')
+    path = reordering(tmp_path, [0, 1, 2], then=then)
+    started = time.monotonic()
+    told = run_told(path, jobs, tmp_path / 'run')
+    assert time.monotonic() - started < 60
+    assert told.outcome.counts == reference.outcome.counts
+    assert file_rows(told.output) == file_rows(reference.output)
+    (pid,) = numbers(pids)
+    wait_for(lambda: not process_alive(pid), 30)
+
+
+@not_on_windows
+@pytest.mark.usefixtures('short_grace')
+def test_a_program_the_tool_leaves_behind_does_not_hold_up_the_run(
+    executable: str, tmp_path: Path
+):
+    """The tool ends, and what it started holds on to its pipes: it is
+    ended a moment later."""
+    pids = tmp_path / 'pids'
+    then = f"""
+child = subprocess.Popen(['sleep', '600'])
+with open({str(pids)!r}, 'w') as file:
+    file.write(str(child.pid))
+"""
+    jobs = jobs_of(executable, lines())
+    reference = run_told(executable, jobs, tmp_path / 'reference')
+    path = reordering(tmp_path, [0, 1, 2], then=then)
+    try:
+        started = time.monotonic()
+        told = run_told(path, jobs, tmp_path / 'run')
+        assert time.monotonic() - started < 60
+        assert told.outcome.counts == reference.outcome.counts
+        assert file_rows(told.output) == file_rows(reference.output)
+        (child,) = numbers(pids)
+        wait_for(lambda: not process_alive(child), 30)
+    finally:
+        if pids.exists():
+            with contextlib.suppress(ProcessLookupError, ValueError):
+                os.kill(int(pids.read_text()), signal.SIGKILL)
+
+
 # A tool from before --stream
 
 
@@ -586,6 +807,94 @@ def test_a_tool_that_is_replaced_at_its_path_is_asked_again(
     assert [done.index for done in told.feedback.checks()] == list(
         range(len(jobs))
     )
+
+
+REFUSAL = (
+    "error: unexpected argument '--stream' found\n\n"
+    "  tip: to pass '--stream' as a value, use '-- --stream'\n\n"
+    'Usage: topology-checker validate <input>\n'
+)
+
+
+@pytest.mark.parametrize(
+    ('said', 'refused'),
+    [
+        pytest.param(REFUSAL, True, id='refused'),
+        pytest.param(
+            REFUSAL.replace('\n', '\r\n'), True, id='Windows line ends'
+        ),
+        pytest.param(
+            '\x1b[1m\x1b[31merror:\x1b[0m unexpected argument '
+            "'\x1b[33m--stream\x1b[0m' found\n",
+            True,
+            id='in colors',
+        ),
+        pytest.param(
+            '{"error": "layer parcels --stream: feature 2 has an invalid '
+            'geometry"}\n',
+            False,
+            id='a layer named so',
+        ),
+        pytest.param(
+            '{"error": "error: unexpected argument \'--stream\' found"}\n',
+            False,
+            id='an error that says so',
+        ),
+        pytest.param(
+            "error: the argument '--tolerance' needs a value: --stream\n",
+            False,
+            id='another argument',
+        ),
+    ],
+)
+def test_only_the_parser_refusing_the_flag_is_an_older_tool(
+    tmp_path: Path, said: str, refused: bool
+):
+    log = tmp_path / 'commands'
+    path = tool(
+        tmp_path / 'tool',
+        f"""
+with open({str(log)!r}, 'a') as file:
+    file.write(' '.join(sys.argv[1:]) + '\\n')
+say({said.encode()!r})
+sys.exit(2)
+""",
+    )
+    completed = commands.run_validate(
+        path, 'checks.toml', None, QgsProcessingFeedback(), lambda _: False
+    )
+    assert completed.exit_code == 2
+    asked = validate_lines(log)
+    assert ['--stream' in command for command in asked] == (
+        [True, False] if refused else [True]
+    )
+    assert bool(commands.WITHOUT_STREAM) is refused
+
+
+def test_a_layer_named_after_the_flag_does_not_make_an_older_tool(
+    executable: str, tmp_path: Path
+):
+    """The tool rejects a feature of the layer, naming it: the run is made
+    again without the feature, and the tool is still asked with the flag,
+    then and later."""
+    if not real_streams():
+        pytest.skip('the real tool does not know the flag')
+    path = tmp_path / 'parcels.gpkg'
+    name = 'parcels --stream'
+    save(polygon_layer(SQUARE, BOWTIE, name=name), path, 'GPKG', name)
+    layer = QgsVectorLayer(f'{path}|layername={name}', name, 'ogr')
+    assert layer.isValid()
+    log = tmp_path / 'commands'
+    (tmp_path / 'tool').mkdir()
+    forwarding = str(forwarding_executable(tmp_path / 'tool', log))
+    jobs = jobs_of(executable, [('polygon/must-not-overlap', project(layer))])
+    told = run_told(forwarding, jobs, tmp_path / 'run')
+    assert [found.reason for found in told.outcome.invalid]
+    run_told(forwarding, jobs_of(executable, lines()), tmp_path / 'again')
+    asked = validate_lines(log)
+    assert len(asked) == 3
+    assert all('--stream' in command for command in asked)
+    assert not commands.WITHOUT_STREAM
 
 
 # Windows, with a patched platform and a process that is not started

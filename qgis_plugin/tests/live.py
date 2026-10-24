@@ -250,8 +250,7 @@ def replaying_executable(
     It can crash before the line of a rule, or kill itself halfway through
     the line, and say lines that are not of the report: with Windows line
     ends, bytes that are not UTF-8, lines that are long or nested deep,
-    numbers of thousands of digits, and reports of rules that are not of
-    the run."""
+    numbers of thousands of digits, and reports that cannot be read."""
     real = real_executable()
     assert real is not None, 'set TOPOLOGY_CHECKER'
     gates.mkdir(exist_ok=True)
@@ -294,13 +293,6 @@ def say(data, stream=sys.stdout):
     stream.buffer.flush()
 
 
-OTHER = {{
-    'spec': {{'rule': 'line/no-such-rule', 'layer': 0, 'other': None}},
-    'layer': 'x',
-    'other': None,
-    'counts': {{'dangle': 1}},
-    'errors': [],
-}}
 for number, rule in enumerate(report.pop('rules')):
     line = json.dumps(rule).encode()
     if number == {crash_after!r}:
@@ -322,7 +314,6 @@ for number, rule in enumerate(report.pop('rules')):
         say(b'9' * 5000 + b'\\n')
         say(b'{{"spec": {{"layer": ' + b'9' * 5000 + b'}}}}\\n')
         say(b'{{"spec": null, "errors": [1]}}\\n')
-        say(json.dumps(OTHER).encode() + b'\\n')
         say(b'null\\n')
     wait(str(number))
     say(line + b'\\r\\n' if {noise!r} else line + b'\\n')
@@ -331,6 +322,42 @@ if {noise!r}:
 # As the tool, which writes its file after the last rule
 wait('end')
 say(json.dumps(report).encode() + b'\\n')
+sys.exit(done.returncode)
+"""
+    return write_tool(directory / 'topology-checker', source)
+
+
+def reordering_executable(
+    directory: Path,
+    order: c.Sequence[int | str],
+    last: bool = True,
+    then: str = '',
+) -> Path:
+    """A tool that runs the real tool, then says the reports of its rules
+    as `--stream` does, in the order of their numbers, then its last line
+    if asked: a text in the order is said as it is. Then it runs the lines
+    of `then`, and ends as the real tool did."""
+    real = real_executable()
+    assert real is not None, 'set TOPOLOGY_CHECKER'
+    source = f"""#!/usr/bin/env python3
+import json
+import os
+import subprocess
+import sys
+import time
+{follow_tool(real)}
+arguments = [argument for argument in sys.argv[1:] if argument != '--stream']
+done = subprocess.run([{real!r}, *arguments], capture_output=True)
+sys.stderr.buffer.write(done.stderr)
+report = json.loads(done.stdout)
+rules = report.pop('rules')
+for item in {list(order)!r}:
+    line = item if isinstance(item, str) else json.dumps(rules[item])
+    sys.stdout.write(line + '\\n')
+if {last!r}:
+    sys.stdout.write(json.dumps(report) + '\\n')
+sys.stdout.flush()
+{then}
 sys.exit(done.returncode)
 """
     return write_tool(directory / 'topology-checker', source)
@@ -584,8 +611,10 @@ def untold_executable(monkeypatch: t.Any) -> None:
     written: list[Path] = []
 
     class Recorded(Report):
-        def __init__(self, gathered: Gathered, ids: IdMap) -> None:
-            super().__init__(gathered, ids)
+        def __init__(
+            self, gathered: Gathered, ids: IdMap, *rest: t.Any
+        ) -> None:
+            super().__init__(gathered, ids, *rest)
             tables.append(ids)
 
     def run_validate(
@@ -595,6 +624,7 @@ def untold_executable(monkeypatch: t.Any) -> None:
         feedback: QgsProcessingFeedback,
         out: c.Callable[[str], bool],
         older: object = None,
+        done: object = None,
     ) -> Completed:
         own = Path(config).with_name('own.gpkg')
         command = validate_command(executable, config, tolerance, False)

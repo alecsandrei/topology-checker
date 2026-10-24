@@ -32,6 +32,8 @@ from .runner import error_message
 UNREADABLE = re.compile(r'WKB|GeoPackage envelope|non-finite')
 # How often a run is repeated without the features that the tool rejects
 MAX_ATTEMPTS = 25
+# How much of the output that is not of the report the log shows
+SHOWN_CHARS = 500
 
 # The features to leave out of each input, and why
 Skips = dict[object, dict[int, str]]
@@ -248,7 +250,14 @@ def run_once(
         if item.ids is not None
     }
     gathered = Gathered(jobs, layers, feedback)
-    report = Report(gathered, ids)
+    names = [
+        (
+            aliases[check.layer],
+            None if check.other is None else aliases[check.other],
+        )
+        for check in checks
+    ]
+    report = Report(gathered, ids, names)
     # Which rule runs is not known when the executable says it at the end
     staged(
         feedback,
@@ -264,12 +273,14 @@ def run_once(
             feedback,
             report.line,
             lambda: staged(feedback, Stage.CHECKING, None, len(jobs)),
+            done=lambda: report.complete,
         )
     except RunError:
         if not (feedback.isCanceled() and gathered.counts):
             raise
     else:
-        if completed.exit_code not in (
+        # A tool that was ended once it had told all has no code of its own
+        if not completed.ended and completed.exit_code not in (
             ExitCode.VALID.value,
             ExitCode.VIOLATIONS.value,
         ):
@@ -283,11 +294,8 @@ def run_once(
                 inputs,
             )
         if not report.complete:
-            raise RunError(
-                tr('Could not read the report: {report}').format(
-                    report=repr(completed.stdout[:200])
-                )
-            )
+            unread(feedback, report, completed.stdout)
+            raise RunError(tr('Could not read the report of the tool'))
     errors = gathered.errors(report.warnings or ())
     # The errors have no CRS where an input has none, as the tool reads it
     crs = (
@@ -308,6 +316,29 @@ def run_once(
         for skipped in item.skipped
     ]
     return Outcome(errors.counts, layers, invalid, target)
+
+
+def unread(
+    feedback: QgsProcessingFeedback, report: Report, output: str
+) -> None:
+    """Tells the log what the report lacks, and the end of the output that
+    is not of it."""
+    told, total = len(report.gathered.counts), len(report.gathered.jobs)
+    if told < total:
+        feedback.pushInfo(
+            tr('The report has {told} of {total} rules').format(
+                told=told, total=total
+            )
+        )
+    else:
+        feedback.pushInfo(tr('The report has no last line'))
+    rest = output.strip()
+    if rest:
+        if len(rest) > SHOWN_CHARS:
+            rest = '…' + rest[-SHOWN_CHARS:]
+        feedback.pushInfo(
+            tr('The rest of the output: {text}').format(text=rest)
+        )
 
 
 def rejected(

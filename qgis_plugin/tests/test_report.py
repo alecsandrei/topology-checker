@@ -17,6 +17,7 @@ from topology_rules.core import report
 from topology_rules.core.checks import Job
 from topology_rules.core.errors import Gathered, from_wkb
 from topology_rules.core.report import Report
+from topology_rules.exceptions import RunError
 
 from .live import Recorder
 
@@ -46,7 +47,10 @@ IDS = {'roads': (10, 20, 30), 'rivers': (7,)}
 def reading(jobs: list[Job] = JOBS) -> tuple[Report, Recorder]:
     feedback = Recorder()
     gathered = Gathered(jobs, {'roads': 'r-id', 'rivers': 'v-id'}, feedback)
-    return Report(gathered, IDS), feedback
+    names = [
+        (j.layer.name, None if j.other is None else j.other.name) for j in jobs
+    ]
+    return Report(gathered, IDS, names), feedback
 
 
 def point(x: float, y: float) -> dict[str, object]:
@@ -160,12 +164,106 @@ def test_an_older_tool_tells_all_rules_at_the_end():
     assert values(feedback) == EXPECTED
 
 
-def test_a_rule_past_the_last_is_not_read():
+def test_a_rule_past_the_last_fails_the_run():
+    """The rules that were read are kept."""
     read, feedback = reading()
     for value in (FIRST, SECOND):
         assert read.line(line(value))
-    assert not read.line(line(FIRST))
+    with pytest.raises(RunError, match='not of the rules of the run'):
+        read.line(line(FIRST))
     assert len(feedback.checks()) == 2
+    assert 'The run has 2 rules, and the tool told of' in feedback.textLog()
+
+
+def test_nothing_is_read_once_the_report_is_complete():
+    read, feedback = reading()
+    for value in (FIRST, SECOND, LAST):
+        assert read.line(line(value))
+    for value in (FIRST, {**LAST, 'warnings': []}):
+        assert not read.line(line(value))
+    assert len(feedback.checks()) == 2
+    assert read.warnings == LAST['warnings']
+
+
+# The same rule on two layers, which only the layers of a report tell apart
+TWICE = [job(DANGLES, 'roads'), job(DANGLES, 'rivers')]
+
+
+def on(layer: str, number: int, *errors: object) -> dict[str, object]:
+    """A report of dangles on the layer, which the tool numbers so."""
+    return {
+        **dangles(*errors),
+        'spec': {'rule': DANGLES, 'layer': number, 'other': None},
+        'layer': layer,
+    }
+
+
+ROADS = on('roads', 1, error(point(0, 0), feature(1, 1)))
+RIVERS = on('rivers', 0, error(point(5, 5), feature(0, 1)))
+
+
+@pytest.mark.parametrize(
+    ('lines', 'kept'),
+    [
+        pytest.param([RIVERS, ROADS], 0, id='swapped'),
+        pytest.param([ROADS, ROADS], 1, id='first twice'),
+        pytest.param([ROADS, on('rivers', 1)], 1, id='numbered as another'),
+    ],
+)
+def test_a_report_of_the_next_rule_on_other_layers_fails_the_run(
+    lines: list[dict[str, object]], kept: int
+):
+    """Only the rules before it are kept, with their own errors."""
+    read, feedback = reading(TWICE)
+    first, second = lines
+    if kept:
+        assert read.line(line(first))
+    else:
+        second = first
+    with pytest.raises(RunError, match='not of the rules of the run'):
+        read.line(line(second))
+    assert (
+        values(feedback)
+        == [[(0, DANGLES, 'dangle', 'roads', 10, 0, None, None, None)]][:kept]
+    )
+    log = feedback.textLog()
+    assert f'Rule {kept + 1} of the run is {DANGLES} (' in log
+    assert f'and the tool told of {DANGLES} (' in log
+
+
+def test_a_layer_numbered_again_fails_the_run():
+    read, feedback = reading([TWICE[0], TWICE[0]])
+    assert read.line(line(ROADS))
+    with pytest.raises(RunError, match='not of the rules of the run'):
+        read.line(line(on('roads', 0)))
+    assert len(feedback.checks()) == 1
+    assert f'and the tool told of {DANGLES} (roads #0)' in feedback.textLog()
+
+
+def test_each_layer_is_read_by_the_number_the_tool_gives_it():
+    read, feedback = reading(TWICE)
+    assert read.line(line(ROADS))
+    assert read.line(line(RIVERS))
+    assert values(feedback) == [
+        [(0, DANGLES, 'dangle', 'roads', 10, 0, None, None, None)],
+        [(1, DANGLES, 'dangle', 'rivers', 7, 0, None, None, None)],
+    ]
+
+
+def test_a_report_of_another_rule_fails_the_run():
+    read, feedback = reading()
+    assert read.line(line(FIRST))
+    with pytest.raises(RunError, match='not of the rules of the run'):
+        read.line(line({**SECOND, 'spec': {**SECOND['spec'], 'rule': DANGLES}}))
+    assert len(feedback.checks()) == 1
+
+
+def test_an_older_tool_whose_rules_are_of_other_layers_fails():
+    read, feedback = reading(TWICE)
+    with pytest.raises(RunError, match='not of the rules of the run'):
+        read.line(line({**LAST, 'rules': [RIVERS, ROADS]}))
+    assert feedback.checks() == []
+    assert read.warnings is None
 
 
 def test_a_feature_outside_its_export_keeps_its_number():
@@ -176,10 +274,15 @@ def test_a_feature_outside_its_export_keeps_its_number():
     assert report.source_id(IDS, 'roads', None) is None
 
 
-def other_rule() -> dict[str, object]:
-    value = json.loads(line(FIRST))
-    value['spec']['rule'] = 'line/no-such-rule'
-    return value
+def test_a_report_of_a_rule_that_is_not_of_the_run_fails_it():
+    read, feedback = reading()
+    with pytest.raises(RunError, match='not of the rules of the run'):
+        read.line(line(changed(('spec', 'rule'), 'line/no-such-rule')))
+    assert feedback.checks() == []
+    assert (
+        f'Rule 1 of the run is {DANGLES} (roads), and the tool told of '
+        'line/no-such-rule (roads #2)'
+    ) in feedback.textLog()
 
 
 def changed(path: tuple[object, ...], new: object) -> dict[str, object]:
@@ -204,7 +307,8 @@ GARBAGE = {
     'nested deep': '[' * 100000,
     'cut off': line(FIRST)[: len(line(FIRST)) // 2],
     'no spec': line({'spec': None, 'errors': [1]}),
-    'another rule': line(other_rule()),
+    'rule a number': line(changed(('spec', 'rule'), 5)),
+    'other without a number': line(changed(('other',), 'rivers')),
     'layer of digits': line(FIRST).replace(
         '"layer": 2', '"layer": ' + '9' * 5000
     ),

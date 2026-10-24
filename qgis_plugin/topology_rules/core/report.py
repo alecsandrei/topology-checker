@@ -6,6 +6,9 @@ then a line with the tolerance and the warnings. An older one says the
 whole report on one line at the end, whose `rules` are the same reports.
 Each error has its geometry in the form of geo-types, which is made WKB
 here.
+
+Each report names its rule and layers, which have to be those of the next
+rule of the run: a run whose report is of other rules, or of more, fails.
 """
 
 from __future__ import annotations
@@ -15,12 +18,16 @@ import json
 import struct
 import typing as t
 
+from ..exceptions import RunError
+from ..utils import tr
 from .errors import Gathered, found_in, from_wkb
 from .progress import Found
 
 # The ids of the source features of each exported layer, by its alias: the
 # n-th feature of the export came from the n-th id
 IdMap = dict[str, tuple[int, ...]]
+# The alias of the layer of each rule of the run, and of its other layer
+Names = c.Sequence[tuple[str, 'str | None']]
 
 POINT, LINE_STRING, POLYGON = 1, 2, 3
 MULTI_POINT, MULTI_LINE_STRING, MULTI_POLYGON, COLLECTION = 4, 5, 6, 7
@@ -125,17 +132,32 @@ def number(value: object) -> int:
     return value
 
 
+def text(value: object) -> str:
+    if not isinstance(value, str):
+        raise TypeError(value)
+    return value
+
+
+def shown(rule: str, layers: c.Iterable[str]) -> str:
+    """A rule and its layers, for the log: 'line/must-not-intersect-with
+    (roads, rivers)'."""
+    return f'{rule} ({", ".join(layers)})'
+
+
 class Report:
     """Reads the lines of a run of the executable. The errors of each rule
     are gathered as soon as its line is read; the warnings are those of the
-    last line."""
+    last line. The names are the aliases of the layers of each rule."""
 
-    def __init__(self, gathered: Gathered, ids: IdMap) -> None:
+    def __init__(self, gathered: Gathered, ids: IdMap, names: Names) -> None:
         self.gathered = gathered
         self.ids = ids
+        self.names = names
         # The number of the next error, over all rules
         self.violation = 0
         self.warnings: list[str] | None = None
+        # The number that the tool gives each layer, by its alias
+        self.numbers: dict[str, int] = {}
 
     @property
     def complete(self) -> bool:
@@ -145,12 +167,15 @@ class Report:
             and self.warnings is not None
         )
 
-    def line(self, text: str) -> bool:
+    def line(self, line: str) -> bool:
         """Reads a line of the output, and says whether it was a line of the
         report. One that is not, such as the start of a line that was cut
-        off, says nothing of the run."""
+        off, says nothing of the run, nor does any line once the report is
+        complete."""
+        if self.complete:
+            return False
         try:
-            value = json.loads(text)
+            value = json.loads(line)
         except (ValueError, RecursionError):
             return False
         if not isinstance(value, dict):
@@ -169,20 +194,20 @@ class Report:
 
     def rule(self, value: object) -> bool:
         """Reads the report of the next rule, which is gathered once all of
-        it is read. One that cannot be read, or is of another rule, is not
-        gathered."""
-        jobs = self.gathered.jobs
-        if len(self.gathered.counts) >= len(jobs):
-            return False
+        it is read. One that cannot be read is not gathered. One of another
+        rule or other layers than the next rule, or past the last, fails
+        the run, which keeps the rules before it."""
         violation = self.violation
         try:
             entry = t.cast('dict[str, t.Any]', value)
             spec = entry['spec']
-            if spec['rule'] != jobs[len(self.gathered.counts)].rule.name:
-                return False
-            aliases = {number(spec['layer']): str(entry['layer'])}
+            layers = [(text(entry['layer']), number(spec['layer']))]
+            if (spec['other'] is None) != (entry['other'] is None):
+                raise ValueError(entry['other'])
             if spec['other'] is not None:
-                aliases[number(spec['other'])] = str(entry['other'])
+                layers.append((text(entry['other']), number(spec['other'])))
+            numbers = self.expect(text(spec['rule']), layers)
+            aliases = {index: name for name, index in layers}
             count = sum(number(n) for n in entry['counts'].values())
             found: list[Found] = []
             for error in entry['errors']:
@@ -201,8 +226,47 @@ class Report:
         except UNREADABLE:
             return False
         self.violation = violation
+        self.numbers = numbers
         self.gathered.add(found, count)
         return True
+
+    def expect(
+        self, rule: str, layers: c.Sequence[tuple[str, int]]
+    ) -> dict[str, int]:
+        """The numbers of the layers once a report of the rule is read, with
+        the aliases and the numbers of its layers. Raises unless it is the
+        next rule of the run, on its layers, and the tool numbers each layer
+        as it did before."""
+        jobs = self.gathered.jobs
+        index = len(self.gathered.counts)
+        numbers = dict(self.numbers)
+        named = {given: name for name, given in numbers.items()}
+        renumbered = False
+        for name, given in layers:
+            had = numbers.setdefault(name, given)
+            renumbered |= had != given or named.setdefault(given, name) != name
+        told = shown(rule, (f'{name} #{given}' for name, given in layers))
+        if index < len(jobs):
+            expected = (
+                jobs[index].rule.name,
+                [name for name in self.names[index] if name is not None],
+            )
+            if (rule, [name for name, _ in layers]) == expected and not (
+                renumbered
+            ):
+                return numbers
+            detail = tr(
+                'Rule {number} of the run is {expected}, and the tool told '
+                'of {rule}'
+            ).format(number=index + 1, expected=shown(*expected), rule=told)
+        else:
+            detail = tr(
+                'The run has {count} rules, and the tool told of {rule} too'
+            ).format(count=len(jobs), rule=told)
+        self.gathered.feedback.pushInfo(detail)
+        raise RunError(
+            tr('The report of the tool is not of the rules of the run')
+        )
 
     def feature(
         self, reference: t.Any, aliases: c.Mapping[int, str]
