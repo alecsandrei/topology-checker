@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import html
 import math
+import typing as t
 from pathlib import Path
 
 from qgis.core import QgsApplication
@@ -101,12 +102,10 @@ class Status(QLabel):
     def minimumSizeHint(self) -> QSize:
         return self.wrapped(super().minimumSizeHint())
 
-    def resizeEvent(self, event: QResizeEvent | None) -> None:
-        super().resizeEvent(event)
-        if (
-            event is not None
-            and event.size().width() != event.oldSize().width()
-        ):
+    def resizeEvent(self, *args: t.Any) -> None:  # pyright: ignore[reportIncompatibleMethodOverride]
+        super().resizeEvent(*args)
+        event = t.cast(QResizeEvent, args[0])
+        if event.size().width() != event.oldSize().width():
             self.updateGeometry()
 
 
