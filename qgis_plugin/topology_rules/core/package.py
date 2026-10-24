@@ -9,6 +9,7 @@ loads where it is not installed.
 from __future__ import annotations
 
 import collections.abc as c
+import contextlib
 import dataclasses
 import queue
 import threading
@@ -436,8 +437,8 @@ class Reports:
     """The report of each rule of the topology as soon as the rule is done.
 
     The package checks the rules outside the lock of Python, in a thread
-    that waits for them, so that a canceled run stops at once: the rule that
-    is checked then is dropped, and the stream is closed when it is done.
+    that waits for them, so that a canceled run stops at once: the stream is
+    closed, which stops the rule that is checked then and drops it.
     """
 
     def __init__(self, topology: tc.Topology) -> None:
@@ -445,7 +446,7 @@ class Reports:
         self.stopped = threading.Event()
         self.summary: tc.ReportSummary | None = None
         self.ended = False
-        stream = topology.iter_reports()
+        self.stream = stream = topology.iter_reports()
         self.thread = threading.Thread(
             target=self.read, args=(stream,), name='topology-reports'
         )
@@ -489,6 +490,9 @@ class Reports:
 
     def __exit__(self, *_: object) -> None:
         self.stopped.set()
+        # From this thread too: the rule that is checked stops at once
+        with contextlib.suppress(Exception):
+            self.stream.close()
 
 
 @dataclasses.dataclass(frozen=True)

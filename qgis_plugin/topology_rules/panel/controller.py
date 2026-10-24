@@ -251,6 +251,10 @@ def finish(dock: Dock, run: Run, ok: bool, results: dict[str, t.Any]) -> None:
     feedback = run.feedback
     todo = run.entries
     settle(dock)
+    if not run.live:
+        # The tab counted errors that the tree does not have: the engine
+        # gives them only with the layers
+        dock.set_error_count(0)
     bar = not_none(dock.iface.messageBar())
     canceled = feedback.isCanceled()
     if not ok and not canceled:
