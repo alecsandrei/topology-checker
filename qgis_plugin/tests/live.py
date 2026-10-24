@@ -322,16 +322,24 @@ def close_gates(gates: Path) -> None:
 
 
 def refusing_executable(
-    directory: Path, name: str = 'topology-checker'
+    directory: Path, name: str = 'topology-checker', log: Path | None = None
 ) -> Path:
     """A tool from before --progress: it refuses the flag as the parser of
-    its arguments does, and is the real tool otherwise."""
+    its arguments does, and is the real tool otherwise. With a log it writes
+    down each of its commands."""
     real = real_executable()
     assert real is not None, 'set TOPOLOGY_CHECKER'
+    logged = (
+        ''
+        if log is None
+        else f"""with open({str(log)!r}, 'a') as log:
+    log.write(' '.join(sys.argv[1:]) + '\\n')
+"""
+    )
     source = f"""#!/usr/bin/env python3
 import os
 import sys
-if '--progress' in sys.argv:
+{logged}if '--progress' in sys.argv:
     print("error: unexpected argument '--progress' found", file=sys.stderr)
     print('', file=sys.stderr)
     print('Usage: topology-checker validate <CONFIG>', file=sys.stderr)
