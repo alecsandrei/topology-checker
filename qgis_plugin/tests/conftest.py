@@ -168,13 +168,24 @@ def forget_tools() -> None:
         probe.versions.update(versions)
 
 
+@pytest.fixture(scope='session')
+def empty_cargo(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A Cargo install root without the tool."""
+    return tmp_path_factory.mktemp('cargo')
+
+
 @pytest.fixture(autouse=True)
-def no_executable(monkeypatch: pytest.MonkeyPatch) -> c.Iterator[None]:
+def no_executable(
+    monkeypatch: pytest.MonkeyPatch, empty_cargo: Path
+) -> c.Iterator[None]:
     """Starts without a configured executable and without cached rules."""
     # The fake executables are scripts for the system Python, which a
     # bundled QGIS Python home would break
     monkeypatch.delenv('PYTHONHOME', raising=False)
     monkeypatch.delenv('PYTHONPATH', raising=False)
+    # Not the tool that `cargo install` put in the bin folder of the user,
+    # which a test that finds no tool would find
+    monkeypatch.setenv('CARGO_INSTALL_ROOT', str(empty_cargo))
     settings = QgsSettings()
     settings.remove(Setting.EXECUTABLE.value)
     forget_options_box(settings)
