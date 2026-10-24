@@ -12,11 +12,10 @@ from qgis.core import (
     QgsFeature,
     QgsProcessingContext,
     QgsProcessingFeedback,
-    QgsVectorLayer,
 )
 
 from ..exceptions import RunError
-from ..utils import not_none, tr
+from ..utils import tr
 from .binary import Rule
 from .commands import (
     ERROR_LAYERS,
@@ -28,7 +27,7 @@ from .commands import (
 from .engine import Package, Tool, describe
 from .inputs import Prepared, prepare
 from .invalid import REJECTED, Invalid, Rejected, parse_failure
-from .layers import Input
+from .layers import Input, private_layer
 
 # The columns of an error that name a feature, and the layer it is in
 ID_COLUMNS = (
@@ -310,13 +309,15 @@ def renumber_errors(path: str, ids: IdMap) -> None:
     if not ids:
         return
     for name in ERROR_LAYERS:
-        layer = QgsVectorLayer(f'{path}|layername={name}', name, 'ogr')
+        layer = private_layer(f'{path}|layername={name}', name)
         if not layer.isValid():
             continue
         fields = layer.fields()
-        changes: dict[int, dict[int, object]] = {}
+        # The new and the old values of each feature that changes
+        changes: dict[int, tuple[dict[int, object], dict[int, object]]] = {}
         for feature in t.cast('c.Iterable[QgsFeature]', layer.getFeatures()):
             new: dict[int, object] = {}
+            old: dict[int, object] = {}
             for layer_column, id_column in ID_COLUMNS:
                 if fields.indexOf(id_column) < 0:
                     continue
@@ -324,10 +325,16 @@ def renumber_errors(path: str, ids: IdMap) -> None:
                 after = source_id(ids, feature[layer_column], before)
                 if isinstance(before, int) and after != before:
                     new[fields.indexOf(id_column)] = after
+                    old[fields.indexOf(id_column)] = before
             if new:
-                changes[feature.id()] = new
-        if changes and not not_none(layer.dataProvider()).changeAttributeValues(
-            changes
+                changes[feature.id()] = (new, old)
+        if changes and not (
+            layer.startEditing()
+            and all(
+                layer.changeAttributeValues(fid, values, previous)
+                for fid, (values, previous) in changes.items()
+            )
+            and layer.commitChanges()
         ):
             raise RunError(
                 tr('Could not write the feature ids to {path}').format(

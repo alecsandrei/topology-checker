@@ -17,9 +17,9 @@ from qgis.core import (
 )
 
 from ..exceptions import RunError
-from ..utils import not_none, tr
+from ..utils import tr
 from .inputs import not_finite
-from .layers import geometry_word, wkb_kind
+from .layers import geometry_word, private_layer, wkb_kind
 
 # The columns of the tool, as a memory layer defines them
 FIELDS = (
@@ -120,12 +120,15 @@ def append_invalid(
         if not found:
             continue
         name = f'errors_{kind}'
-        layer = QgsVectorLayer(f'{path}|layername={name}', name, 'ogr')
+        layer = private_layer(f'{path}|layername={name}', name)
         if layer.isValid():
-            added, _ = not_none(layer.dataProvider()).addFeatures(
-                [item.feature(layer.fields()) for item in found]
-            )
-            if not added:
+            if not (
+                layer.startEditing()
+                and layer.addFeatures(
+                    [item.feature(layer.fields()) for item in found]
+                )
+                and layer.commitChanges()
+            ):
                 raise RunError(
                     tr('Could not write the {kind} errors').format(
                         kind=geometry_word(kind)

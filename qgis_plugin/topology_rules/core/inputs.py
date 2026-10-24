@@ -22,14 +22,13 @@ from qgis.core import (
     QgsProcessingContext,
     QgsProcessingFeatureSource,
     QgsProcessingFeedback,
-    QgsProviderRegistry,
     QgsVectorFileWriter,
     QgsWkbTypes,
 )
 
 from ..exceptions import RunError
 from ..utils import QgsCsException, named, not_none, tr
-from .layers import Dataset, Input, wkb_kind
+from .layers import Dataset, Input, private_layer, wkb_kind
 
 # How many features are read by their ids, or written, at once
 BATCH = 2000
@@ -153,18 +152,16 @@ def reconnect(item: Input) -> bool:
     QGIS keeps the connection of a read that could not open a GeoPackage
     and reads no feature through it from then on, without an error. A read
     fails so when it opens the file while an edit session starts or ends, as
-    the map does when it draws the layer. A provider of its own reloads the
+    the map does when it draws the layer. A layer of its own reloads the
     file, which drops those connections and leaves the layer, its selection
     and its edits as they are.
     """
     if item.shared is None:
         return False
-    provider = not_none(QgsProviderRegistry.instance()).createProvider(
-        'ogr', item.shared
-    )
-    if provider is None or not provider.isValid():
+    layer = private_layer(item.shared, item.name)
+    if not layer.isValid():
         return False
-    provider.reloadData()
+    layer.reload()
     return True
 
 

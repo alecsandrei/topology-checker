@@ -160,6 +160,21 @@ def geopackage_source(layer: QgsVectorLayer) -> str | None:
     return provider.dataSourceUri()
 
 
+def private_layer(source: str, name: str) -> QgsVectorLayer:
+    """A layer of the OGR source that is not in the project, which a run in
+    another thread owns.
+
+    The run reads and edits the layer and never asks for its provider. When
+    a run deletes an object that QGIS made and Python wrapped, such as a
+    provider, PyQt tells the main thread later. By then another object can
+    be at its address, and Python takes that one for deleted.
+    """
+    options = QgsVectorLayer.LayerOptions(False)
+    # No dialog or message about a missing CRS from another thread
+    options.skipCrsValidation = True
+    return QgsVectorLayer(source, name, 'ogr', options)
+
+
 def wkb_kind(wkb_type: t.Any) -> str:
     """'point', 'line' or 'polygon', and 'none' for a table."""
     return {0: 'point', 1: 'line', 2: 'polygon'}.get(
