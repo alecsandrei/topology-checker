@@ -10,6 +10,7 @@ from __future__ import annotations
 import collections.abc as c
 import html
 import importlib
+import itertools
 import platform
 import sys
 import threading
@@ -19,7 +20,7 @@ from pathlib import Path
 import pytest
 from qgis.core import QgsSettings
 from qgis.gui import QgisInterface
-from qgis.PyQt.QtCore import Qt, QUrl
+from qgis.PyQt.QtCore import QRect, Qt, QUrl
 from qgis.PyQt.QtGui import QDesktopServices
 from qgis.PyQt.QtWidgets import (
     QApplication,
@@ -771,14 +772,26 @@ def test_the_dialog_says_what_it_would_install(
     name = wheel_name(LINUX)
     assert dialog.status.isHidden()
     assert shown(dialog.facts)
-    assert dialog.package_label.text() == f'topology-checker {VERSION}'
+    assert dialog.package_field.text() == f'topology-checker {VERSION}'
     assert dialog.file_field.text() == (
         f'{name} ({install.size_text(len(content))})'
     )
     assert dialog.source_field.text() == f'{pypi.url}/files/{name}'
     assert dialog.sha256_field.text() == sha256(content)
     assert dialog.folder_field.text() == str(home / VERSION)
-    assert dialog.dependencies_label.text() == 'None'
+    assert dialog.dependencies_field.text() == 'None'
+    # Each fact is a text box that can be copied but not changed
+    assert all(
+        field.isReadOnly()
+        for field in (
+            dialog.package_field,
+            dialog.file_field,
+            dialog.source_field,
+            dialog.sha256_field,
+            dialog.folder_field,
+            dialog.dependencies_field,
+        )
+    )
     assert dialog.install_button.isEnabled()
     assert dialog.install_button.text() == 'Install'
     assert dialog.copy_log.isHidden()
@@ -1080,6 +1093,190 @@ def test_closing_the_panel_stops_the_install(
     assert dock.installer is None
     wait_for(lambda: not installer.running, 30)
     dock.deleteLater()
+
+
+# The layout of the install dialog
+
+
+def log_lines(dialog: InstallDialog) -> None:
+    """More lines than the log shows at once, as a long install has."""
+    for number in range(2 * installer.LOG_LINES):
+        dialog.logged(f'Line {number}')
+
+
+def placed(layout: QLayout) -> list[tuple[QWidget, QRect]]:
+    """The widgets that the layout, or a layout in it, places and shows,
+    each where the layout puts it. A style can draw a widget past that,
+    such as the title of a group box over the spacing above it."""
+    widgets: list[tuple[QWidget, QRect]] = []
+    for index in range(layout.count()):
+        item = not_none(layout.itemAt(index))
+        widget, inner = item.widget(), item.layout()
+        if widget is not None and widget.isVisible():
+            widgets.append((widget, item.geometry()))
+        elif inner is not None:
+            widgets.extend(placed(inner))
+    return widgets
+
+
+def name_of(dialog: InstallDialog, widget: QWidget) -> str:
+    """What the dialog calls the widget, or what it is and says."""
+    if widget is dialog:
+        return 'dialog'
+    for name, value in vars(dialog).items():
+        if value is widget:
+            return name
+    text = getattr(widget, 'text', lambda: '')()
+    return f'{type(widget).__name__} {text!r}'
+
+
+def overlaps(dialog: InstallDialog) -> list[str]:
+    """Where a widget of the dialog covers another, or runs out of the one
+    that holds it."""
+    problems = []
+    for holder in (dialog, dialog.facts, dialog.command_box, dialog.buttons):
+        if not holder.isVisible():
+            continue
+        widgets = placed(not_none(holder.layout()))
+        for widget, rect in widgets:
+            if not holder.rect().contains(rect):
+                problems.append(
+                    f'{name_of(dialog, widget)} {rect} runs out '
+                    f'of {name_of(dialog, holder)} {holder.rect()}'
+                )
+        for (first, one), (second, other) in itertools.combinations(widgets, 2):
+            if one.intersects(other):
+                problems.append(
+                    f'{name_of(dialog, first)} {one} covers '
+                    f'{name_of(dialog, second)} {other}'
+                )
+    return problems
+
+
+def least_height(dialog: InstallDialog) -> int:
+    """The height that the layout of the dialog needs at its width, with the
+    lines that its text wraps into."""
+    layout = not_none(dialog.layout())
+    height = layout.totalMinimumSize().height()
+    if layout.hasHeightForWidth():
+        height = max(height, layout.minimumHeightForWidth(dialog.width()))
+    return height
+
+
+def assert_fits(dialog: InstallDialog) -> None:
+    """The dialog has room for all that it shows, nothing covers anything
+    else, and without the log it is no higher than its rows."""
+    QApplication.processEvents()
+    assert overlaps(dialog) == []
+    layout = not_none(dialog.layout())
+    assert dialog.width() >= layout.totalMinimumSize().width()
+    if dialog.log.isVisible():
+        assert dialog.height() >= least_height(dialog)
+    else:
+        assert dialog.height() == least_height(dialog)
+
+
+def assert_log_takes_more(dialog: InstallDialog) -> None:
+    """A higher dialog gives its height to the log."""
+    height = dialog.log.height()
+    dialog.resize(dialog.width(), dialog.height() + 100)
+    assert_fits(dialog)
+    assert dialog.log.height() == height + 100
+
+
+def cannot_load(path: Path) -> str:
+    """Why macOS cannot load a library built for another processor: it is
+    long, with the path three times."""
+    other = "(mach-o file, but is an incompatible architecture (have 'arm64', "
+    return (
+        f'The topology-checker Python package cannot be imported: dlopen({path}'
+        f", 0x0002): tried: '{path}' {other}need 'x86_64')), "
+        f"'/System/Volumes/Preboot/Cryptexes/OS{path}' (no such file), "
+        f"'{path}' {other}need 'x86_64'))"
+    )
+
+
+def test_the_dialog_fits_the_facts_as_the_command_opens_and_closes(
+    published: tuple[Index, bytes],
+):
+    dialog = looked_up(open_dialog())
+    assert_fits(dialog)
+    dialog.command_box.setCollapsed(False)
+    assert_fits(dialog)
+    dialog.command_box.setCollapsed(True)
+    assert_fits(dialog)
+    # No room is left where the command was
+    assert dialog.height() == dialog.sizeHint().height()
+
+
+def test_the_log_has_room_as_the_install_goes(pypi: Index):
+    url = pypi.url + '/files/slow.whl'
+    pypi.routes['/files/slow.whl'] = trickle
+    slow = {
+        'filename': wheel_name(LINUX),
+        'url': url,
+        'size': 10_000_000,
+        'digests': {'sha256': sha256(b'')},
+        'packagetype': 'bdist_wheel',
+    }
+    pypi.release(answer([slow]))
+    dialog = looked_up(open_dialog())
+    dialog.install_button.click()
+    wait_for(lambda: dialog.progress.value() > 0, 30)
+    log_lines(dialog)
+    assert_fits(dialog)
+    assert_log_takes_more(dialog)
+
+
+def test_a_long_outcome_keeps_the_log_off_the_buttons(
+    published: tuple[Index, bytes],
+    monkeypatch: pytest.MonkeyPatch,
+    home: Path,
+):
+    library = home / VERSION / 'topology_checker' / 'topology_checker.abi3.so'
+
+    def unloadable() -> Package:
+        raise PackageError(cannot_load(library), 'cannot be loaded')
+
+    dialog = looked_up(open_dialog())
+    monkeypatch.setattr(engine, 'find_package', unloadable)
+    install_in(dialog)
+    log_lines(dialog)
+    assert dialog.status.text().startswith(
+        f'Installed topology-checker {VERSION}. The topology-checker'
+    )
+    assert_fits(dialog)
+    assert_log_takes_more(dialog)
+
+
+def test_a_long_error_keeps_the_log_off_the_command(pypi: Index):
+    content = make_wheel()
+    url = f'{pypi.url}/packages/3f/9a/{"0" * 60}/{wheel_name(LINUX)}'
+    pypi.release(answer([release_file(LINUX, content, url)]))
+    dialog = install_in(open_dialog())
+    log_lines(dialog)
+    assert dialog.status.text().startswith(f'Cannot fetch {url}: HTTP 404')
+    assert not dialog.command_box.isCollapsed()
+    assert_fits(dialog)
+    # The log takes the room of the command
+    height = dialog.log.height()
+    dialog.command_box.setCollapsed(True)
+    assert_fits(dialog)
+    assert dialog.log.height() > height
+
+
+def test_the_dialog_fits_the_facts_again_after_a_retry(pypi: Index):
+    # Nothing is published yet, so the look-up fails
+    dialog = looked_up(open_dialog())
+    log_lines(dialog)
+    assert_fits(dialog)
+    content = make_wheel()
+    url = pypi.serve('/files/wheel.whl', content, kind='x')
+    pypi.release(answer([release_file(LINUX, content, url)]))
+    dialog.retry_button.click()
+    looked_up(dialog)
+    assert dialog.log.isHidden()
+    assert_fits(dialog)
 
 
 # The bar that offers the package

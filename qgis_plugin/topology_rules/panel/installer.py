@@ -5,19 +5,27 @@ from __future__ import annotations
 
 import html
 import math
+import typing as t
 from pathlib import Path
 
 from qgis.core import QgsApplication
 from qgis.gui import QgsCollapsibleGroupBoxBasic
-from qgis.PyQt.QtCore import Qt, QUrl, pyqtSignal, pyqtSlot
-from qgis.PyQt.QtGui import QDesktopServices, QFontDatabase, QTextOption
+from qgis.PyQt.QtCore import QSize, Qt, QUrl, pyqtSignal, pyqtSlot
+from qgis.PyQt.QtGui import (
+    QDesktopServices,
+    QFontDatabase,
+    QResizeEvent,
+    QTextOption,
+)
 from qgis.PyQt.QtWidgets import (
+    QWIDGETSIZE_MAX,
     QApplication,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
     QHBoxLayout,
     QLabel,
+    QLayout,
     QLineEdit,
     QPlainTextEdit,
     QProgressBar,
@@ -38,6 +46,8 @@ from ..utils import not_none, tr
 GUIDE = f'{DOCS}qgis-plugin/#install'
 # The lines that the log shows without scrolling: all of an install
 LOG_LINES = 10
+# The least width of what the dialog shows, without its margins
+WIDTH = 540
 # The tasks that run, kept until they end: a dialog that closes does not
 # wait for its task, and Python must not collect it before QGIS is done
 running: set[install.Task] = set()
@@ -66,6 +76,39 @@ def fact(text: str = '') -> QLineEdit:
     return field
 
 
+class Status(QLabel):
+    """A line over the rest, which wraps. A window leaves out the lines that
+    a label wraps into, so this one is as high as all of them at its width,
+    and no higher."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.setWordWrap(True)
+        self.setTextFormat(Qt.TextFormat.RichText)
+        self.setOpenExternalLinks(True)
+        policy = self.sizePolicy()
+        policy.setVerticalPolicy(QSizePolicy.Policy.Fixed)
+        self.setSizePolicy(policy)
+
+    def wrapped(self, size: QSize) -> QSize:
+        # It has a width once a layout gives it one
+        if self.testAttribute(Qt.WidgetAttribute.WA_Resized):
+            size.setHeight(self.heightForWidth(self.width()))
+        return size
+
+    def sizeHint(self) -> QSize:
+        return self.wrapped(super().sizeHint())
+
+    def minimumSizeHint(self) -> QSize:
+        return self.wrapped(super().minimumSizeHint())
+
+    def resizeEvent(self, *args: t.Any) -> None:  # pyright: ignore[reportIncompatibleMethodOverride]
+        super().resizeEvent(*args)
+        event = t.cast(QResizeEvent, args[0])
+        if event.size().width() != event.oldSize().width():
+            self.updateGeometry()
+
+
 class Log(QPlainTextEdit):
     """The lines of the install, which stay at the end as they come and as
     the dialog changes around them."""
@@ -73,15 +116,20 @@ class Log(QPlainTextEdit):
     def __init__(self) -> None:
         super().__init__()
         self.setReadOnly(True)
+        bar = not_none(self.verticalScrollBar())
+        bar.rangeChanged.connect(lambda _, end: bar.setValue(end))
+
+    def minimumSizeHint(self) -> QSize:
+        """Room for its lines, in the font that it has once polished."""
+        size = super().minimumSizeHint()
         margin = not_none(self.document()).documentMargin()
-        self.setMinimumHeight(
+        size.setHeight(
             math.ceil(
                 LOG_LINES * self.fontMetrics().lineSpacing()
                 + 2 * (margin + self.frameWidth())
             )
         )
-        bar = not_none(self.verticalScrollBar())
-        bar.rangeChanged.connect(lambda _, end: bar.setValue(end))
+        return size
 
     def to_end(self) -> None:
         bar = not_none(self.verticalScrollBar())
@@ -112,6 +160,30 @@ class Command(QTextEdit):
         self.setFixedHeight(math.ceil(height) + 2 * self.frameWidth())
 
 
+class CommandBox(QgsCollapsibleGroupBoxBasic):
+    """The box with the command, closed at first. Closed, it asks for the
+    height that it keeps, so that the dialog shrinks back to it."""
+
+    def __init__(self, title: str) -> None:
+        super().__init__(title)
+        self.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
+        )
+
+    def closed(self, size: QSize) -> QSize:
+        # Closing it on the screen sets the height of its title as its most
+        height = self.maximumHeight()
+        if self.isCollapsed() and height < QWIDGETSIZE_MAX:
+            size.setHeight(height)
+        return size
+
+    def sizeHint(self) -> QSize:
+        return self.closed(super().sizeHint())
+
+    def minimumSizeHint(self) -> QSize:
+        return self.closed(super().minimumSizeHint())
+
+
 class InstallDialog(QDialog):
     """Finds the wheel on PyPI and says what it is, then installs it when
     asked, with the lines of the install as it goes. It ends with what to do
@@ -133,14 +205,11 @@ class InstallDialog(QDialog):
         self.installing = False
         self.cancelled = False
 
-        self.status = QLabel()
-        self.status.setWordWrap(True)
-        self.status.setTextFormat(Qt.TextFormat.RichText)
-        self.status.setOpenExternalLinks(True)
+        self.status = Status()
         self.progress = QProgressBar()
         self.progress.setRange(0, 100)
         self.progress.hide()
-        self.package_label = QLabel(f'{PACKAGE} {self.version}')
+        self.package_field = fact(f'{PACKAGE} {self.version}')
         self.file_field = fact()
         self.source_field = fact()
         self.sha256_field = fact()
@@ -148,11 +217,14 @@ class InstallDialog(QDialog):
         self.folder_field = fact(str(install.folder_of(self.version)))
         self.open_button = QPushButton(tr('Open'))
         # The package needs no other package
-        self.dependencies_label = QLabel(tr('None'))
+        self.dependencies_field = fact(tr('None'))
         self.facts = QWidget()
+        self.facts.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
+        )
         form = QFormLayout(self.facts)
         form.setContentsMargins(0, 0, 0, 0)
-        form.addRow(tr('Package'), self.package_label)
+        form.addRow(tr('Package'), self.package_field)
         form.addRow(tr('File'), self.file_field)
         form.addRow(tr('Source'), self.source_field)
         form.addRow(tr('SHA-256'), self.sha256_field)
@@ -160,9 +232,9 @@ class InstallDialog(QDialog):
         folder_row.addWidget(self.folder_field, 1)
         folder_row.addWidget(self.open_button)
         form.addRow(tr('Folder'), folder_row)
-        form.addRow(tr('Dependencies'), self.dependencies_label)
+        form.addRow(tr('Dependencies'), self.dependencies_field)
 
-        self.command_box = QgsCollapsibleGroupBoxBasic(
+        self.command_box = CommandBox(
             tr('Command for {terminal}').format(terminal=install.terminal())
         )
         self.command = Command(install.command(self.version))
@@ -201,13 +273,16 @@ class InstallDialog(QDialog):
         self.retry_button.hide()
 
         layout = QVBoxLayout(self)
+        # The dialog fits what it shows as that changes, and only the log
+        # takes more height
+        layout.setSizeConstraint(QLayout.SizeConstraint.SetMinAndMaxSize)
+        layout.addStrut(WIDTH)
         layout.addWidget(self.status)
         layout.addWidget(self.progress)
         layout.addWidget(self.facts)
         layout.addWidget(self.log, 1)
         layout.addWidget(self.command_box)
         layout.addWidget(self.buttons)
-        self.setMinimumWidth(560)
 
         self.open_button.clicked.connect(self.open_folder)
         self.copy_command.clicked.connect(
