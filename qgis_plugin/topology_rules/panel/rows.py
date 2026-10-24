@@ -27,8 +27,7 @@ def field_text(feature: QgsFeature, index: int) -> str:
     field that the layer does not have, whose index is -1."""
     if index < 0:
         return ''
-    value = feature.attribute(index)
-    return '' if value is None or str(value) == 'NULL' else str(value)
+    return value_text(feature.attribute(index))
 
 
 def shape_of(feature: QgsFeature) -> str:
@@ -137,8 +136,11 @@ def read_rows(
         fields = layer.fields()
         indexes = [fields.indexOf(name) for name in COLUMNS]
         for feature in t.cast('c.Iterable[QgsFeature]', layer.getFeatures()):
+            # All the values at once, as each call crosses into QGIS
+            values = feature.attributes()
             rule, error, origin, fid, other, other_fid = (
-                field_text(feature, index) for index in indexes
+                '' if index < 0 else value_text(values[index])
+                for index in indexes
             )
             rows.append(
                 Row(
