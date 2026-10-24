@@ -9,22 +9,20 @@ use std::{
 
 /// A thread-safe cancellation flag. Clones address the same validation request.
 #[derive(Debug, Clone, Default)]
-pub struct CancellationToken(Arc<AtomicBool>);
+pub struct CancellationToken {
+    flag: Arc<AtomicBool>,
+    /// What tests record about the request.
+    #[cfg(test)]
+    record: Option<Arc<std::sync::Mutex<hooks::Record>>>,
+}
 impl CancellationToken {
     /// Stop this request at the next construction or emission checkpoint.
     pub fn cancel(&self) {
-        self.0.store(true, Ordering::Release);
+        self.flag.store(true, Ordering::Release);
     }
     /// Whether cancellation was requested.
     pub fn is_cancelled(&self) -> bool {
-        self.0.load(Ordering::Acquire)
-    }
-}
-#[cfg(test)]
-impl CancellationToken {
-    /// Whether both address the same request.
-    pub(crate) fn same(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.0, &other.0)
+        self.flag.load(Ordering::Acquire)
     }
 }
 thread_local! { static CURRENT: RefCell<Option<CancellationToken>> = const { RefCell::new(None) }; }
@@ -44,6 +42,12 @@ pub(crate) fn check() {
 pub(crate) fn current() -> Option<CancellationToken> {
     CURRENT.with(|c| c.borrow().clone())
 }
+/// Cheap units of work, such as comparisons or points, between checks in long
+/// loops: a check every microsecond or so, at no measurable cost. Loops whose
+/// items take longer check every item, and plain copies every [`COPY`].
+pub(crate) const CHECK: usize = 256;
+/// Elements copied between checks, a fraction of a millisecond's work.
+pub(crate) const COPY: usize = CHECK * CHECK;
 /// [`check`] at a named construction step, which tests can cancel at.
 pub(crate) fn checkpoint(step: &'static str) {
     #[cfg(test)]
@@ -51,6 +55,12 @@ pub(crate) fn checkpoint(step: &'static str) {
     #[cfg(not(test))]
     let _ = step;
     check();
+}
+/// [`checkpoint`] at every [`CHECK`]th unit of work, counted from zero.
+pub(crate) fn every(unit: usize, step: &'static str) {
+    if unit.is_multiple_of(CHECK) {
+        checkpoint(step);
+    }
 }
 pub(crate) fn scope<T>(token: Option<CancellationToken>, run: impl FnOnce() -> T) -> T {
     struct Restore(Option<CancellationToken>);
@@ -64,17 +74,14 @@ pub(crate) fn scope<T>(token: Option<CancellationToken>, run: impl FnOnce() -> T
     run()
 }
 
-/// Checkpoint visits and worker threads per watched token, and cancellation
-/// at a chosen visit.
+/// Checkpoint visits and worker threads of a request, and cancellation at a
+/// chosen visit.
 #[cfg(test)]
 pub(crate) mod hooks {
-    use super::CancellationToken;
+    use super::{CURRENT, CancellationToken};
     use std::{
         collections::BTreeMap,
-        sync::{
-            Mutex, PoisonError,
-            atomic::{AtomicUsize, Ordering},
-        },
+        sync::{Arc, Mutex, MutexGuard, PoisonError},
     };
     #[derive(Debug, Default, Clone)]
     pub(crate) struct Record {
@@ -87,80 +94,59 @@ pub(crate) mod hooks {
         /// Worker threads started.
         pub workers: usize,
     }
-    type Watched = Vec<(CancellationToken, Record)>;
-    static WATCHED: Mutex<Watched> = Mutex::new(Vec::new());
-    static COUNT: AtomicUsize = AtomicUsize::new(0);
-    fn current(f: impl FnOnce(&CancellationToken, &mut Record)) {
-        if COUNT.load(Ordering::Acquire) == 0 {
-            return;
-        }
-        let Some(token) = super::current() else {
-            return;
-        };
-        let mut watched = WATCHED.lock().unwrap_or_else(PoisonError::into_inner);
-        if let Some((_, record)) = watched.iter_mut().find(|(t, _)| t.same(&token)) {
-            f(&token, record);
-        }
+    fn lock(record: &Mutex<Record>) -> MutexGuard<'_, Record> {
+        record.lock().unwrap_or_else(PoisonError::into_inner)
     }
-    pub(crate) fn watch(token: &CancellationToken, cancel_at: Option<(&'static str, usize)>) {
-        let mut watched = WATCHED.lock().unwrap_or_else(PoisonError::into_inner);
-        watched.push((
-            token.clone(),
-            Record {
-                cancel_at,
-                ..Record::default()
-            },
-        ));
-        COUNT.fetch_add(1, Ordering::Release);
+    /// A token whose request records what it does, cancelled at `cancel_at`.
+    pub(crate) fn watched(cancel_at: Option<(&'static str, usize)>) -> CancellationToken {
+        let record = Record {
+            cancel_at,
+            ..Record::default()
+        };
+        CancellationToken {
+            record: Some(Arc::new(Mutex::new(record))),
+            ..CancellationToken::default()
+        }
     }
     /// What has been recorded for a watched token so far.
     pub(crate) fn record(token: &CancellationToken) -> Record {
-        let watched = WATCHED.lock().unwrap_or_else(PoisonError::into_inner);
-        watched
-            .iter()
-            .find(|(t, _)| t.same(token))
-            .map(|(_, record)| record.clone())
-            .expect("watched token")
+        lock(token.record.as_ref().expect("watched token")).clone()
     }
-    /// Stop watching a token and return what was recorded.
-    pub(crate) fn unwatch(token: &CancellationToken) -> Record {
-        let mut watched = WATCHED.lock().unwrap_or_else(PoisonError::into_inner);
-        let index = watched
-            .iter()
-            .position(|(t, _)| t.same(token))
-            .expect("watched token");
-        COUNT.fetch_sub(1, Ordering::Release);
-        watched.swap_remove(index).1
-    }
-    pub(crate) fn reached(step: &'static str) {
-        current(|token, record| {
+    pub(super) fn reached(step: &'static str) {
+        CURRENT.with(|c| {
+            let current = c.borrow();
+            let Some(token) = current.as_ref() else {
+                return;
+            };
+            let Some(record) = &token.record else {
+                return;
+            };
+            let mut record = lock(record);
+            let cancel_at = record.cancel_at;
             let visit = record.visits.entry(step).or_default();
-            if record.cancel_at == Some((step, *visit)) {
+            if cancel_at == Some((step, *visit)) {
                 token.cancel();
             }
             *visit += 1;
         });
     }
     /// A worker thread of a watched request, counted while it lives.
-    pub(crate) struct Live(Option<CancellationToken>);
+    pub(crate) struct Live(Option<Arc<Mutex<Record>>>);
     impl Live {
         pub(crate) fn start() -> Self {
-            let mut token = None;
-            current(|t, record| {
+            let record = CURRENT.with(|c| c.borrow().as_ref().and_then(|t| t.record.clone()));
+            if let Some(record) = &record {
+                let mut record = lock(record);
                 record.live += 1;
                 record.workers += 1;
-                token = Some(t.clone());
-            });
-            Self(token)
+            }
+            Self(record)
         }
     }
     impl Drop for Live {
         fn drop(&mut self) {
-            if let Some(token) = &self.0 {
-                let mut watched = WATCHED.lock().unwrap_or_else(PoisonError::into_inner);
-                if let Some((_, record)) = watched.iter_mut().find(|(t, _)| t.same(token)) {
-                    record.live -= 1;
-                }
+            if let Some(record) = &self.0 {
+                lock(record).live -= 1;
             }
         }
     }
