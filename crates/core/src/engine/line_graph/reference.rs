@@ -927,13 +927,13 @@ mod tests {
     }
     /// The checkpoints it passes.
     const STEPS: &str = "\
-        cluster cluster.batch cluster.ends cluster.points cluster.sort collapsed \
-        connected.components connected.join connected.sort connected.spans contacts \
-        contacts.features contacts.sort crack cuts directions edges edges.count edges.incident \
-        edges.offsets edges.sort ends ends.sort fill gather.contacts gather.edges index \
-        matches.features matches.index matches.pairs matches.retain matches.sort noding order \
-        pairs parts retain.components retain.confined retain.found retain.groups retain.ids \
-        retain.junctions retain.junctions.sort retain.meetings retain.meetings.sort \
+        aggregate aggregate.merge cluster cluster.batch cluster.ends cluster.points cluster.sort \
+        collapsed connected.components connected.join connected.sort connected.spans contacts \
+        contacts.features contacts.sort crack cuts dangles directions edges edges.count \
+        edges.incident edges.offsets edges.sort ends ends.sort fill gather.contacts gather.edges \
+        index matches.features matches.index matches.pairs matches.retain matches.sort noding \
+        order pairs parts pseudos retain.components retain.confined retain.found retain.groups \
+        retain.ids retain.junctions retain.junctions.sort retain.meetings retain.meetings.sort \
         retain.positions retain.runs retain.spans retain.spans.join retain.spans.sort \
         retain.support retain.support.spans returns.chord returns.first returns.last \
         returns.near returns.segments support.each support.evidence support.groups support.ids \
@@ -941,8 +941,8 @@ mod tests {
         support.roles.assign support.runs support.runs.join support.runs.sort \
         sustained.component sustained.lengths sustained.lines sustained.merge sustained.pending \
         sustained.restore sustained.sort sustained.sources sustained.widths ties trim.dropped \
-        trim.edges trim.ends trim.own trim.parts trim.removed zones.explained zones.meetings \
-        zones.relevant";
+        trim.edges trim.ends trim.own trim.parts trim.removed violations.sort zones.explained \
+        zones.meetings zones.relevant";
 
     #[test]
     fn cancelling_at_any_step_stops_every_thread_and_keeps_the_topology_usable() {

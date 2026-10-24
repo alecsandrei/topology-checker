@@ -140,7 +140,8 @@ pub(crate) fn aggregate(violations: Vec<Violation>, merge: Merge) -> Vec<Violati
         Option<(LayerId, i64)>,
     );
     let mut groups: BTreeMap<Key, Vec<Violation>> = BTreeMap::new();
-    for v in violations {
+    for (i, v) in violations.into_iter().enumerate() {
+        crate::cancel::every(i, "aggregate");
         groups
             .entry((
                 v.rule,
@@ -153,7 +154,9 @@ pub(crate) fn aggregate(violations: Vec<Violation>, merge: Merge) -> Vec<Violati
     }
     groups
         .into_values()
-        .map(|group| {
+        .enumerate()
+        .map(|(i, group)| {
+            crate::cancel::every(i, "aggregate.merge");
             let mut group = group.into_iter();
             let mut first = group.next().expect("aggregation groups are nonempty");
             let mut geometries = vec![std::mem::replace(

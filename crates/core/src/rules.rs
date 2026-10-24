@@ -370,13 +370,21 @@ fn emit<E>(
     sort(&mut violations);
     violations.into_iter().try_for_each(|v| send(v, sink))
 }
+/// Stable sort into emission order. Cancelling unwinds with every violation still
+/// in the slice.
 fn sort(violations: &mut [Violation]) {
-    violations.sort_by_key(|v| {
+    let key = |v: &Violation| {
         (
             v.kind,
             v.origin.map(FeatureRef::feature),
             v.destination.map(FeatureRef::feature),
         )
+    };
+    let mut compared = 0;
+    violations.sort_by(|a, b| {
+        crate::cancel::every(compared, "violations.sort");
+        compared += 1;
+        key(a).cmp(&key(b))
     });
 }
 fn send<E>(
@@ -1333,6 +1341,98 @@ mod tests {
             "{result:?}"
         );
         assert!(stopped < GRACE / 5, "{stopped:?}");
+    }
+
+    #[test]
+    fn whole_layer_rules_stop_at_the_next_check_after_their_inputs_are_built() {
+        // Each step does a little for every feature between the cached inputs and
+        // the first emitted violation.
+        let count = 10_000;
+        let features = |geometry: fn(f64) -> Geometry| {
+            (0..count)
+                .map(|fid| (fid, geometry(fid as f64 * 2.)))
+                .collect::<Vec<_>>()
+        };
+        let disjoint = features(|x| LineString::from(vec![(x, 0.), (x, 1.)]).into());
+        let chain = features(|x| LineString::from(vec![(x, 0.), (x + 2., 0.)]).into());
+        let multi = features(|x| {
+            MultiLineString(vec![
+                LineString::from(vec![(x, 0.), (x, 1.)]),
+                LineString::from(vec![(x, 2.), (x, 3.)]),
+            ])
+            .into()
+        });
+        let points = features(|x| Point::new(x, 0.).into());
+        let squares = features(|x| {
+            Rect::new(coord! {x: x, y: 0.}, coord! {x: x + 1., y: 1.})
+                .to_polygon()
+                .into()
+        });
+        let well = vec![(0, Point::new(-10., -10.).into())];
+        let cases = [
+            (Rule::LineMustNotHaveDangles, disjoint, None),
+            (Rule::LineMustNotHavePseudoNodes, chain, None),
+            (Rule::GeometryMustNotBeMultipart, multi, None),
+            (Rule::PointMustNotOverlap, points, None),
+            (Rule::PolygonMustContainPoint, squares, Some(well)),
+        ];
+        let reached_by_case = [
+            "dangles violations.sort",
+            "pseudos violations.sort",
+            "multipart violations.sort",
+            "point.features",
+            "aggregate aggregate.merge violations.sort",
+        ];
+        // Steps after the inputs are built.
+        let steps = [
+            "dangles",
+            "pseudos",
+            "multipart",
+            "point.features",
+            "aggregate",
+            "aggregate.merge",
+            "violations.sort",
+        ];
+        for ((rule, features, other), expected) in cases.into_iter().zip(reached_by_case) {
+            let mut t = Topology::new(0.).unwrap();
+            let layer = t.add_layer(Layer::from_features("many", features));
+            let other = other.map(|f| t.add_layer(Layer::from_features("other", f)));
+            t.add_rule(rule, layer, other).unwrap();
+            let validate = |token| {
+                let mut sent = 0;
+                let result = t.validate_into_cancellable(token, |_, _| {
+                    sent += 1;
+                    Ok::<_, Infallible>(())
+                });
+                (result.map(|_| ()), sent)
+            };
+            let token = crate::cancel::hooks::watched(None);
+            assert!(validate(token.clone()).0.is_ok(), "{rule:?}");
+            let visits = crate::cancel::hooks::record(&token).visits;
+            let reached = steps
+                .into_iter()
+                .filter(|step| visits.contains_key(step))
+                .collect::<Vec<_>>();
+            let expected = expected.split_whitespace().collect::<Vec<_>>();
+            assert_eq!(reached, expected, "{rule:?}");
+            for step in reached {
+                // A check at least every CHECK features' worth of work.
+                let checks = visits[step];
+                let least = count as usize / crate::cancel::CHECK;
+                assert!(checks >= least, "{rule:?} {step}: {checks}");
+                for visit in [0, checks / 2, checks - 1] {
+                    let token = crate::cancel::hooks::watched(Some((step, visit)));
+                    let (result, sent) = validate(token.clone());
+                    assert!(
+                        matches!(result, Err(SinkError::Core(Error::Cancelled))),
+                        "{rule:?} {step} {visit}: {result:?}"
+                    );
+                    let after = crate::cancel::hooks::record(&token).visits[step];
+                    assert_eq!(after, visit + 1, "{rule:?} {step} {visit}");
+                    assert_eq!(sent, 0, "{rule:?} {step} {visit}");
+                }
+            }
+        }
     }
 
     #[test]

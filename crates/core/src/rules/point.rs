@@ -59,6 +59,7 @@ pub(crate) fn overlap_into<E>(
     let b = t.parts(other)?;
     let mut features: BTreeMap<i64, Vec<usize>> = BTreeMap::new();
     for (i, p) in a.points.iter().enumerate() {
+        crate::cancel::every(i, "point.features");
         features.entry(p.reference.fid).or_default().push(i);
     }
     let ranks = t.layer(spec.layer)?.ranks();

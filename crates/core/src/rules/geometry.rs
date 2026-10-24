@@ -2,8 +2,12 @@ use crate::{Error, FeatureRef, RuleSpec, Topology, Violation, ViolationKind, mod
 pub(crate) fn multipart(t: &Topology, spec: RuleSpec) -> Result<Vec<Violation>, Error> {
     Ok(t.layer(spec.layer)?
         .features()
-        .filter(|(_, g)| part_count(g) > 1)
-        .map(|(fid, g)| Violation {
+        .enumerate()
+        .filter(|(i, (_, g))| {
+            crate::cancel::every(*i, "multipart");
+            part_count(g) > 1
+        })
+        .map(|(_, (fid, g))| Violation {
             rule: spec.rule,
             kind: ViolationKind::Multipart,
             geometry: g.clone(),

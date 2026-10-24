@@ -149,7 +149,8 @@ fn point(
 }
 fn dangles(g: &LineGraph, spec: RuleSpec) -> Vec<Violation> {
     let mut out = Vec::new();
-    for part in &g.parts {
+    for (i, part) in g.parts.iter().enumerate() {
+        crate::cancel::every(i, "dangles");
         if part.closed() || part.nodes.len() < 2 {
             continue;
         }
@@ -173,6 +174,7 @@ fn dangles(g: &LineGraph, spec: RuleSpec) -> Vec<Violation> {
 fn pseudos(g: &LineGraph, spec: RuleSpec) -> Vec<Violation> {
     let mut out = Vec::new();
     for (node, uses) in g.incident.iter().enumerate() {
+        crate::cancel::every(node, "pseudos");
         if uses.len() != 2 {
             continue;
         }
