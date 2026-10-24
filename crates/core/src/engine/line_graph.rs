@@ -281,14 +281,21 @@ mod tests {
                     .1
                     .map(|_| t.add_layer(Layer::from_features("target", lines)));
                 t.add_rule(rule, a, other).unwrap();
-                MATCHING_WORK.with(|n| n.set(0));
+                // Features run on pool threads; one thread keeps the count in one place.
+                let pool = rayon::ThreadPoolBuilder::new()
+                    .num_threads(1)
+                    .build()
+                    .unwrap();
                 let mut streamed = Vec::new();
-                t.validate_into(|_, v| {
-                    streamed.push(v);
-                    Ok::<_, ()>(())
-                })
-                .unwrap();
-                let work = MATCHING_WORK.with(std::cell::Cell::get);
+                let work = pool.install(|| {
+                    MATCHING_WORK.with(|n| n.set(0));
+                    t.validate_into(|_, v| {
+                        streamed.push(v);
+                        Ok::<_, ()>(())
+                    })
+                    .unwrap();
+                    MATCHING_WORK.with(std::cell::Cell::get)
+                });
                 assert!(
                     work < 16_384,
                     "{rule}: {work} visits must be linear in sparse intervals"

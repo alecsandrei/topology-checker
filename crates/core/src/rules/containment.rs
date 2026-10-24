@@ -21,17 +21,20 @@ pub(super) fn contained(
         .par_bridge()
         .map(|(i, j)| {
             let (a, b) = (&av.features[i], &bv.features[j]);
-            let contained = if b.is_areal()
-                && matches!(
-                    a.geometry,
-                    geo::Geometry::Point(_) | geo::Geometry::MultiPoint(_)
-                ) {
-                let positions = a.points.iter().map(|p| b.position(p.0)).collect::<Vec<_>>();
-                positions.iter().all(|&p| p >= 0) && positions.contains(&1)
-            } else {
-                let relation = b.geometry.relate(&a.geometry);
-                relation.is_contains() && !relation.is_within()
-            };
+            let contained = t.cancellable(|| {
+                if b.is_areal()
+                    && matches!(
+                        a.geometry,
+                        geo::Geometry::Point(_) | geo::Geometry::MultiPoint(_)
+                    )
+                {
+                    let positions = a.points.iter().map(|p| b.position(p.0)).collect::<Vec<_>>();
+                    positions.iter().all(|&p| p >= 0) && positions.contains(&1)
+                } else {
+                    let relation = b.geometry.relate(&a.geometry);
+                    relation.is_contains() && !relation.is_within()
+                }
+            });
             if !contained {
                 return Ok(None);
             }

@@ -73,8 +73,10 @@ fn uncovered(
         .par_iter()
         .enumerate()
         .filter(|(i, p)| {
-            endpoints.is_none_or(|ends| ends.is_open(*i, t.tolerance()))
-                && !covered(&p.geometry, target, b, t.tolerance())
+            t.cancellable(|| {
+                endpoints.is_none_or(|ends| ends.is_open(*i, t.tolerance()))
+                    && !covered(&p.geometry, target, b, t.tolerance())
+            })
         })
         .map(|(_, p)| {
             violation(
@@ -120,18 +122,20 @@ pub(super) fn line_contacts(
         .par_bridge()
         .filter_map(|(i, j)| {
             let (p, l) = (&a.points[i], &b.lines[j]);
-            l.geometry
-                .lines()
-                .any(|line| proximity::near_segment(p.geometry.0, line, t.tolerance()))
-                .then(|| {
-                    violation(
-                        spec,
-                        ViolationKind::Intersection,
-                        p.geometry,
-                        Some(p.reference.at(spec.layer)),
-                        Some(l.reference.at(other)),
-                    )
-                })
+            t.cancellable(|| {
+                l.geometry
+                    .lines()
+                    .any(|line| proximity::near_segment(p.geometry.0, line, t.tolerance()))
+            })
+            .then(|| {
+                violation(
+                    spec,
+                    ViolationKind::Intersection,
+                    p.geometry,
+                    Some(p.reference.at(spec.layer)),
+                    Some(l.reference.at(other)),
+                )
+            })
         })
         .collect();
     Ok(aggregate(violations, Merge::AllDimensions))

@@ -40,28 +40,30 @@ pub(super) fn points(
         .points
         .par_iter()
         .flat_map_iter(|p| {
-            let mut candidates = b
-                .polygon_index()
-                .locate_in_envelope_intersecting(&index::at(p.geometry.0, t.tolerance()))
-                .map(|i| i.data)
-                .collect::<Vec<_>>();
-            candidates.sort_unstable();
-            let hits = candidates
-                .into_iter()
-                .filter(|&i| {
-                    let polygon = &locations[i];
-                    match test {
-                        PointTest::NotInside => {
-                            polygon.position(p.geometry.0) == 1
-                                && !polygon.near(p.geometry.0, t.tolerance())
+            let hits = t.cancellable(|| {
+                let mut candidates = b
+                    .polygon_index()
+                    .locate_in_envelope_intersecting(&index::at(p.geometry.0, t.tolerance()))
+                    .map(|i| i.data)
+                    .collect::<Vec<_>>();
+                candidates.sort_unstable();
+                candidates
+                    .into_iter()
+                    .filter(|&i| {
+                        let polygon = &locations[i];
+                        match test {
+                            PointTest::NotInside => {
+                                polygon.position(p.geometry.0) == 1
+                                    && !polygon.near(p.geometry.0, t.tolerance())
+                            }
+                            PointTest::Covered | PointTest::NotIntersecting => {
+                                polygon.position(p.geometry.0) >= 0
+                                    || polygon.near(p.geometry.0, t.tolerance())
+                            }
                         }
-                        PointTest::Covered | PointTest::NotIntersecting => {
-                            polygon.position(p.geometry.0) >= 0
-                                || polygon.near(p.geometry.0, t.tolerance())
-                        }
-                    }
-                })
-                .collect::<Vec<_>>();
+                    })
+                    .collect::<Vec<_>>()
+            });
             let origin = Some(p.reference.at(spec.layer));
             let kind = match test {
                 PointTest::Covered => {
@@ -109,8 +111,10 @@ pub(super) fn contained_points(
         .par_bridge()
         .filter_map(|(i, j)| {
             let (p, q) = (&a.polygons[i], &b.points[j]);
-            (locations[i].position(q.geometry.0) == 1
-                && !locations[i].near(q.geometry.0, t.tolerance()))
+            t.cancellable(|| {
+                locations[i].position(q.geometry.0) == 1
+                    && !locations[i].near(q.geometry.0, t.tolerance())
+            })
             .then(|| {
                 violation(
                     spec,

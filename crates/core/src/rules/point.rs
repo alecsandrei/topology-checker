@@ -25,20 +25,22 @@ pub(crate) fn inside(
     Ok(a.points
         .par_iter()
         .filter_map(|p| {
-            let inside = b
-                .polygon_index()
-                .locate_in_envelope_intersecting(&index::at(p.geometry.0, t.tolerance()))
-                .any(|item| {
-                    let polygon = &locations[item.data];
-                    polygon.position(p.geometry.0) == 1
-                        && !polygon.near(p.geometry.0, t.tolerance())
-                });
-            (!inside).then_some(Violation {
-                rule: spec.rule,
-                kind: ViolationKind::Outside,
-                geometry: p.geometry.into(),
-                origin: Some(p.reference.at(spec.layer)),
-                destination: None,
+            t.cancellable(|| {
+                let inside = b
+                    .polygon_index()
+                    .locate_in_envelope_intersecting(&index::at(p.geometry.0, t.tolerance()))
+                    .any(|item| {
+                        let polygon = &locations[item.data];
+                        polygon.position(p.geometry.0) == 1
+                            && !polygon.near(p.geometry.0, t.tolerance())
+                    });
+                (!inside).then_some(Violation {
+                    rule: spec.rule,
+                    kind: ViolationKind::Outside,
+                    geometry: p.geometry.into(),
+                    origin: Some(p.reference.at(spec.layer)),
+                    destination: None,
+                })
             })
         })
         .collect())

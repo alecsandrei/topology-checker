@@ -43,13 +43,15 @@ pub(super) fn properly_inside(
         .lines
         .par_iter()
         .filter_map(|l| {
-            let inside = union.geometry.properly_contains(
-                l.geometry.as_ref(),
-                t.tolerance(),
-                &|segment, distance| {
-                    boundary(segment, target, location::locations(target), distance)
-                },
-            );
+            let inside = t.cancellable(|| {
+                union.geometry.properly_contains(
+                    l.geometry.as_ref(),
+                    t.tolerance(),
+                    &|segment, distance| {
+                        boundary(segment, target, location::locations(target), distance)
+                    },
+                )
+            });
             (!inside).then(|| {
                 violation(
                     spec,
@@ -649,12 +651,14 @@ pub(super) fn inside(
         .lines
         .par_iter()
         .flat_map_iter(|line| {
-            outside_pieces(
-                line.geometry.as_ref(),
-                target,
-                target_locations,
-                t.tolerance(),
-            )
+            t.cancellable(|| {
+                outside_pieces(
+                    line.geometry.as_ref(),
+                    target,
+                    target_locations,
+                    t.tolerance(),
+                )
+            })
             .into_iter()
             .map(|piece| {
                 violation(
