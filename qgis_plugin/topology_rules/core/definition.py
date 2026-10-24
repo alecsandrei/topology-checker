@@ -7,7 +7,7 @@ from pathlib import Path
 from qgis.core import QgsProject, QgsVectorLayer
 
 from ..exceptions import RunError
-from ..utils import not_none
+from ..utils import not_none, tr
 from .binary import Rule
 from .layers import plain_dataset, same_file
 from .toml import TomlUnavailable, loads
@@ -31,10 +31,14 @@ class Imported:
     tolerance: float | None
 
 
-def unknown(keys: t.Iterable[str], allowed: set[str], where: str) -> None:
+def unknown(
+    keys: t.Iterable[str], allowed: set[str], message: str, **values: object
+) -> None:
+    """Says which keys are not allowed, with the message that has {keys}
+    for them."""
     extra = sorted(set(keys) - allowed)
     if extra:
-        raise DefinitionError(f'Unknown {where}: {", ".join(extra)}')
+        raise DefinitionError(message.format(keys=', '.join(extra), **values))
 
 
 def project_match(path: Path, name: str | None) -> QgsVectorLayer | None:
@@ -59,15 +63,19 @@ def read_definition(path: Path, known: dict[str, Rule]) -> Imported:
         config = loads(path.read_text(encoding='utf-8'))
     except OSError as error:
         raise DefinitionError(
-            f'Cannot read {path}: {error.strerror}'
+            tr('Cannot read {path}: {error}').format(
+                path=path, error=error.strerror
+            )
         ) from error
     except TomlUnavailable as error:
         raise DefinitionError(str(error)) from error
     except (ValueError, UnicodeDecodeError) as error:
         raise DefinitionError(
-            f'{path.name} is not valid TOML: {error}'
+            tr('{name} is not valid TOML: {error}').format(
+                name=path.name, error=error
+            )
         ) from error
-    unknown(config, TOP, 'keys')
+    unknown(config, TOP, tr('Unknown keys: {keys}'))
     sources = config.get('layers')
     rules = config.get('rules')
     if (
@@ -75,7 +83,9 @@ def read_definition(path: Path, known: dict[str, Rule]) -> Imported:
         or not isinstance(rules, list)
         or not rules
     ):
-        raise DefinitionError(f'{path.name} needs [layers] and [[rules]].')
+        raise DefinitionError(
+            tr('{name} needs [layers] and [[rules]].').format(name=path.name)
+        )
     tolerance = config.get('tolerance')
     # A boolean is a number to Python, and not to the file
     if tolerance is not None and not (
@@ -83,29 +93,44 @@ def read_definition(path: Path, known: dict[str, Rule]) -> Imported:
         and not isinstance(tolerance, bool)
         and tolerance >= 0
     ):
-        raise DefinitionError('The tolerance must be a number, not negative.')
+        raise DefinitionError(
+            tr('The tolerance must be a number, not negative.')
+        )
     layers: dict[str, QgsVectorLayer] = {}
     new_layers: list[QgsVectorLayer] = []
 
     def layer_of(alias: object) -> QgsVectorLayer:
         found = sources.get(str(alias))
         if not isinstance(found, dict):
-            raise DefinitionError(f'Unknown layer: {alias}')
+            raise DefinitionError(
+                tr('Unknown layer: {alias}').format(alias=alias)
+            )
         if str(alias) in layers:
             return layers[str(alias)]
-        unknown(found, LAYER_KEYS, f'keys of layer {alias}')
+        unknown(
+            found,
+            LAYER_KEYS,
+            tr('Unknown keys of layer {alias}: {keys}'),
+            alias=alias,
+        )
         # A file written on Windows may have backslashes
         relative = str(found.get('path', '')).replace('\\', '/')
         where = (path.parent / relative).resolve()
         name = found.get('layer')
         if not where.is_file():
-            raise DefinitionError(f'The data of {alias} is missing: {where}')
+            raise DefinitionError(
+                tr('The data of {alias} is missing: {where}').format(
+                    alias=alias, where=where
+                )
+            )
         layer = project_match(where, name)
         if layer is None:
             uri = f'{where}|layername={name}' if name else str(where)
             layer = QgsVectorLayer(uri, str(alias), 'ogr')
             if not layer.isValid():
-                raise DefinitionError(f'Cannot read the data of {alias}.')
+                raise DefinitionError(
+                    tr('Cannot read the data of {alias}.').format(alias=alias)
+                )
             new_layers.append(layer)
         layers[str(alias)] = layer
         return layer
@@ -113,14 +138,18 @@ def read_definition(path: Path, known: dict[str, Rule]) -> Imported:
     chosen: list[tuple[Rule, QgsVectorLayer, QgsVectorLayer | None]] = []
     for entry in rules:
         if not isinstance(entry, dict):
-            raise DefinitionError('Each rule must be a table.')
-        unknown(entry, RULE_KEYS, 'keys of a rule')
+            raise DefinitionError(tr('Each rule must be a table.'))
+        unknown(entry, RULE_KEYS, tr('Unknown keys of a rule: {keys}'))
         rule = known.get(str(entry.get('rule')))
         if rule is None:
-            raise DefinitionError(f'Unknown rule: {entry.get("rule")}')
+            raise DefinitionError(
+                tr('Unknown rule: {rule}').format(rule=entry.get('rule'))
+            )
         other = entry.get('other')
         if (other is None) != (rule.other is None):
-            raise DefinitionError(f'Wrong number of layers for {rule.name}.')
+            raise DefinitionError(
+                tr('Wrong number of layers for {rule}.').format(rule=rule.name)
+            )
         chosen.append(
             (
                 rule,

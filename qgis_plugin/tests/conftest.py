@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 from qgis.core import QgsApplication, QgsProject, QgsSettings
 from qgis.gui import QgisInterface
-from qgis.PyQt.QtCore import QSettings
+from qgis.PyQt.QtCore import QCoreApplication, QSettings, QTranslator
 from qgis.PyQt.QtGui import QFontDatabase, QFontInfo
 from qgis.PyQt.QtWidgets import QApplication, QMainWindow
 
@@ -324,3 +324,28 @@ def bare(
     dock.refresh()
     yield dock
     dock.deleteLater()
+
+
+class Marked(QTranslator):
+    """Gives each text of the plugin a translation that shows the text."""
+
+    def translate(
+        self,
+        context: str | None,
+        source: str | None,
+        disambiguation: str | None = None,
+        n: int = -1,
+    ) -> str:
+        if context == 'TopologyRules':
+            return f'<{source}>'
+        return source or ''
+
+
+@pytest.fixture
+def marked() -> c.Iterator[None]:
+    """Translates each text of the plugin as itself in <>, which shows what
+    is translated and what is put together around it."""
+    translator = Marked()
+    QCoreApplication.installTranslator(translator)
+    yield
+    QCoreApplication.removeTranslator(translator)

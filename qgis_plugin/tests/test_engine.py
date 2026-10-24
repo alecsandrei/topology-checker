@@ -4,7 +4,6 @@ the engine of each run, and a run of the package that is canceled."""
 
 from __future__ import annotations
 
-import collections.abc as c
 import dataclasses
 import importlib.abc
 import importlib.machinery
@@ -23,7 +22,6 @@ from qgis.core import (
     QgsSettings,
 )
 from qgis.gui import QgisInterface
-from qgis.PyQt.QtCore import QCoreApplication, QTranslator
 
 from topology_rules.core import binary, engine, folders
 from topology_rules.core.checks import Job, run_jobs
@@ -288,29 +286,6 @@ def test_an_old_package_with_a_new_one_installed_needs_a_restart(
     ) as raised:
         engine.find_package()
     assert brief(raised) == 'restart QGIS'
-
-
-class Marked(QTranslator):
-    """Gives each text of the plugin a translation that shows the text."""
-
-    def translate(
-        self,
-        context: str | None,
-        source: str | None,
-        disambiguation: str | None = None,
-        n: int = -1,
-    ) -> str:
-        if context == 'TopologyRules':
-            return f'<{source}>'
-        return source or ''
-
-
-@pytest.fixture
-def marked() -> c.Iterator[None]:
-    translator = Marked()
-    QCoreApplication.installTranslator(translator)
-    yield
-    QCoreApplication.removeTranslator(translator)
 
 
 @pytest.mark.usefixtures('marked')

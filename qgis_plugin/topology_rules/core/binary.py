@@ -14,7 +14,7 @@ from qgis.core import QgsSettings
 
 from ..enums import EXECUTABLE_NAME, ExitCode, Group, Setting
 from ..exceptions import ExecutableError, MissingError, RunError
-from ..utils import title
+from ..utils import title, tr
 from .runner import error_message, run
 
 if t.TYPE_CHECKING:
@@ -152,7 +152,10 @@ def find_executable() -> Path:
         path = Path(configured)
         if path.is_dir():
             raise ExecutableError(
-                f'This is a folder, not the topology-checker executable: {path}'
+                tr(
+                    'This is a folder, not the topology-checker executable: '
+                    '{path}'
+                ).format(path=path)
             )
         # A path pasted without the extension that Windows hides
         program = Path(f'{configured}.exe')
@@ -165,17 +168,21 @@ def find_executable() -> Path:
             return program
         if not path.is_file():
             raise ExecutableError(
-                f'The topology-checker executable does not exist: {path}'
+                tr(
+                    'The topology-checker executable does not exist: {path}'
+                ).format(path=path)
             )
         return path
     found = shutil.which(EXECUTABLE_NAME)
     if found is None:
         # Said where nothing else offers a way: the panel has its own
         raise MissingError(
-            'topology-checker was not found. Install the Python package from '
-            'the Topology Rules panel, or set the path of the executable '
-            'under Settings > Options > Processing > Providers > '
-            'Topology Rules.'
+            tr(
+                'topology-checker was not found. Install the Python package '
+                'from the Topology Rules panel, or set the path of the '
+                'executable under Settings > Options > Processing > '
+                'Providers > Topology Rules.'
+            )
         )
     return Path(found)
 
@@ -191,11 +198,12 @@ def known(name: str) -> bool:
     )
 
 
-# What to do about an executable that cannot be used
-CHOOSE = (
-    "Choose a newer build with 'Choose topology-checker…' or under "
-    'Settings > Options > Processing > Providers > Topology Rules.'
-)
+def choose_newer() -> str:
+    """What to do about an executable that cannot be used."""
+    return tr(
+        "Choose a newer build with 'Choose executable…' or under "
+        'Settings > Options > Processing > Providers > Topology Rules.'
+    )
 
 
 def parse_rules(text: str, path: str = '') -> tuple[Rule, ...]:
@@ -216,20 +224,26 @@ def parse_rules(text: str, path: str = '') -> tuple[Rule, ...]:
         )
     except (ValueError, KeyError, TypeError) as error:
         raise ExecutableError(
-            f'{who(path)} is too old for the plugin, which needs '
-            'topology-checker 0.2.0 or newer: it does not list the layers '
-            f'each rule needs. {CHOOSE}'
+            tr(
+                '{who} is too old for the plugin, which needs '
+                'topology-checker 0.2.0 or newer: it does not list the layers '
+                'each rule needs. {choose}'
+            ).format(who=who(path), choose=choose_newer())
         ) from error
     if not rules:
-        raise ExecutableError(f'{who(path)} lists no rules. {CHOOSE}')
+        raise ExecutableError(
+            tr('{who} lists no rules. {choose}').format(
+                who=who(path), choose=choose_newer()
+            )
+        )
     return rules
 
 
 def who(path: str) -> str:
     """The executable, by its path where it is known."""
-    return (
-        f'The topology-checker at {path}' if path else 'This topology-checker'
-    )
+    if path:
+        return tr('The topology-checker at {path}').format(path=path)
+    return tr('This topology-checker')
 
 
 class Probe:
@@ -357,11 +371,14 @@ class Probe:
         try:
             completed = run([path, '--json', 'rules'], timeout=PROBE_TIMEOUT)
         except RunError as error:
-            raise ExecutableError(f'{error} {CHOOSE}') from error
+            raise ExecutableError(f'{error} {choose_newer()}') from error
         if completed.exit_code != ExitCode.VALID.value:
             raise ExecutableError(
-                f'{who(path)} does not work: '
-                f'{error_message(completed)} {CHOOSE}'
+                tr('{who} does not work: {error} {choose}').format(
+                    who=who(path),
+                    error=error_message(completed),
+                    choose=choose_newer(),
+                )
             )
         return parse_rules(completed.stdout, path)
 
@@ -383,7 +400,9 @@ def locate() -> tuple[str, int]:
     try:
         modified = path.stat().st_mtime_ns
     except OSError as error:
-        raise ExecutableError(f'Could not read {path}: {error}') from error
+        raise ExecutableError(
+            tr('Could not read {path}: {error}').format(path=path, error=error)
+        ) from error
     return str(path), modified
 
 
