@@ -25,13 +25,14 @@ from .narrow import shrink_buttons
 from .wrapping import wrap_long_text
 
 COLUMNS = ('Rule', 'Errors')
-# A rule that can be ticked, and one that a run keeps as it is
-EDITABLE = (
+# A rule that can be ticked, and one that a run keeps as it is. PyQt5
+# types the union of two flags as an int.
+EDITABLE: t.Any = (
     Qt.ItemFlag.ItemIsSelectable
     | Qt.ItemFlag.ItemIsEnabled
     | Qt.ItemFlag.ItemIsUserCheckable
 )
-READ_ONLY = Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled
+READ_ONLY: t.Any = Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled
 
 
 class RuleList(QWidget):
