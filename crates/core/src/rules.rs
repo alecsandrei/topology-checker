@@ -203,6 +203,14 @@ impl Helpers {
     /// per CPU but one, and a batch never waits for them: without any it runs on the
     /// calling thread alone.
     fn take(want: usize) -> Self {
+        #[cfg(test)]
+        if let Some(free) = tests::free() {
+            return Self {
+                threads: want.min(free),
+                shared: 0,
+                budget: &HELPERS,
+            };
+        }
         // Tests that fix the thread count get it whatever runs beside them.
         #[cfg(test)]
         if tests::threads().is_some() || Workers::forced_here().is_some() {
@@ -331,10 +339,11 @@ fn feature_kinds(rule: Rule) -> &'static [ViolationKind] {
 /// order. Geometry scratch belongs to one feature and its candidate targets, and no
 /// complete feature-pair report is retained. Batches of `per_thread` features per
 /// thread run in parallel and each feature runs once: its first kind is emitted with
-/// its batch, and later kinds wait until every feature has emitted the first. The
-/// first feature runs alone, so it builds the caches every feature shares, such as the
-/// line graph, with every thread it may use. Features of a batch smaller than its
-/// threads split their own steps over the spare ones. Batches run on the calling thread
+/// its batch, and later kinds wait until every feature has emitted the first. Caches
+/// every feature shares, such as the line graph, build on every thread of the
+/// validation, whichever feature needs them first and whatever helpers are free. The
+/// first feature runs alone, so the others need not wait for them. Features of a batch
+/// smaller than its threads split their own steps over the spare ones. Batches run on the calling thread
 /// and helpers of their own, never on a shared pool, so cancelling stops them as soon
 /// as their features check, whatever else runs in the process.
 fn per_feature_into<E>(
@@ -352,10 +361,13 @@ fn per_feature_into<E>(
     let kinds = feature_kinds(spec.rule);
     // Holding later kinds saves a rerun per kind; a million held added about 10% to peak.
     let mut later = kinds.iter().skip(1).map(|_| Vec::new()).collect::<Vec<_>>();
+    let all = Workers::all().threads();
+    #[cfg(test)]
+    let all = tests::threads().unwrap_or(all).max(1);
     let feature = |fid: i64, threads: usize| {
         // The selection checks this topology's token on whichever thread runs it.
         t.cancellable(|| {
-            parallel::capped(threads, || {
+            parallel::task(threads, all, || {
                 #[cfg(test)]
                 tests::visit(t, spec, fid)?;
                 let mut snapshot = t.snapshot();
@@ -370,10 +382,7 @@ fn per_feature_into<E>(
     let mut first = true;
     while !rest.is_empty() {
         crate::cancel::check();
-        let threads = Workers::all().threads();
-        #[cfg(test)]
-        let threads = tests::threads().unwrap_or(threads).max(1);
-        let helpers = Helpers::take(threads - 1);
+        let helpers = Helpers::take(all - 1);
         let threads = 1 + helpers.threads;
         let size = if first {
             1
@@ -484,6 +493,22 @@ mod tests {
             }
         }
         let _restore = Restore(THREADS.with(|c| c.replace(Some(threads))));
+        f()
+    }
+    thread_local! { static FREE: Cell<Option<usize>> = const { Cell::new(None) }; }
+    /// Helpers free for feature batches started on this thread, whatever the budget holds.
+    pub(super) fn free() -> Option<usize> {
+        FREE.with(Cell::get)
+    }
+    /// Run `f` as if `free` helpers were left in the budget.
+    fn with_free<T>(free: usize, f: impl FnOnce() -> T) -> T {
+        struct Restore(Option<usize>);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                FREE.with(|c| c.set(self.0));
+            }
+        }
+        let _restore = Restore(FREE.with(|c| c.replace(Some(free))));
         f()
     }
 
@@ -1715,6 +1740,39 @@ mod tests {
         let starts = starts.lock().unwrap_or_else(PoisonError::into_inner);
         assert_eq!(starts.len(), 23);
         assert!(starts.iter().all(|&at| at >= started + hold));
+    }
+
+    #[test]
+    fn shared_caches_build_the_same_whatever_helpers_are_free() {
+        // The first feature builds the line graph and its matches for every feature.
+        let features = (0..20_000_i64)
+            .map(|fid| {
+                let (x, y) = ((fid % 200) as f64, (fid / 200) as f64);
+                let (dx, dy) = [(1., 0.), (0., 0.5), (0.5, 0.5), (2., 0.)][(fid % 4) as usize];
+                let line = LineString::from(vec![(x, y), (x + dx, y + dy)]);
+                (fid, Geometry::from(line))
+            })
+            .collect::<Vec<_>>();
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .unwrap();
+        let visits = |free| {
+            let mut t = Topology::new(0.001).unwrap();
+            let layer = t.add_layer(Layer::from_features("shared", features.clone()));
+            t.add_rule(Rule::LineMustNotOverlap, layer, None).unwrap();
+            let token = crate::cancel::hooks::watched(None);
+            pool.install(|| {
+                with_free(free, || {
+                    t.validate_into_cancellable(token.clone(), |_, _| Ok::<_, Infallible>(()))
+                })
+            })
+            .unwrap();
+            crate::cancel::hooks::record(&token).visits
+        };
+        let all = visits(3);
+        assert!(all["pairs.join"] > 1, "{all:?}");
+        assert_eq!(visits(0), all);
     }
 
     #[test]

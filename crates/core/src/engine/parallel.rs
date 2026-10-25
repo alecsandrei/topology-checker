@@ -30,26 +30,44 @@ const TASKS: usize = 8;
 thread_local! {
     static FORCED: std::cell::Cell<Option<Workers>> = const { std::cell::Cell::new(None) };
 }
+type Setting = std::thread::LocalKey<std::cell::Cell<Option<usize>>>;
 thread_local! {
     static CAP: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+    /// Within a task's own steps, the threads of the caches it shares with other tasks.
+    static SHARED: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
 }
 
-/// Run `f` with each step on at most `threads` threads, the calling one included,
-/// for callers that already run on threads of their own.
-pub(crate) fn capped<T>(threads: usize, f: impl FnOnce() -> T) -> T {
-    with_cap(Some(threads.max(1)), f)
+/// Run `f` as one of several tasks that already run on threads of their own: each
+/// of its steps uses at most `threads` threads, the calling one included, and the
+/// caches it shares with the other tasks build on `shared` threads.
+pub(crate) fn task<T>(threads: usize, shared: usize, f: impl FnOnce() -> T) -> T {
+    with(&SHARED, Some(shared.max(1)), || {
+        with(&CAP, Some(threads.max(1)), f)
+    })
 }
-fn with_cap<T>(cap: Option<usize>, f: impl FnOnce() -> T) -> T {
-    struct Restore(Option<usize>);
+/// Whether this thread runs a [`task`]'s own steps, so caches made now are its own.
+pub(crate) fn local() -> bool {
+    SHARED.with(std::cell::Cell::get).is_some()
+}
+/// Build a cache that [`task`]s share on their `shared` threads, whichever task needs
+/// it first and whatever threads that task holds, so the build is the same each time.
+pub(crate) fn shared<T>(f: impl FnOnce() -> T) -> T {
+    match SHARED.with(std::cell::Cell::get) {
+        Some(threads) => with(&SHARED, None, || with(&CAP, Some(threads), f)),
+        None => f(),
+    }
+}
+fn with<T>(setting: &'static Setting, value: Option<usize>, f: impl FnOnce() -> T) -> T {
+    struct Restore(&'static Setting, Option<usize>);
     impl Drop for Restore {
         fn drop(&mut self) {
-            CAP.with(|c| c.set(self.0));
+            self.0.with(|c| c.set(self.1));
         }
     }
-    let _restore = Restore(CAP.with(|c| c.replace(cap)));
+    let _restore = Restore(setting, setting.with(|c| c.replace(value)));
     f()
 }
-/// The thread limit of the [`capped`] call running on this thread, if any.
+/// The thread limit of the [`task`] step running on this thread, if any.
 pub(crate) fn cap() -> Option<usize> {
     CAP.with(std::cell::Cell::get)
 }
@@ -79,10 +97,11 @@ impl Workers {
         if let Some(forced) = Self::forced_here() {
             return forced;
         }
-        Self::with_threads(rayon::current_num_threads().min(cap().unwrap_or(usize::MAX)))
+        // A task's helper threads are outside its pool, so its limit is all they know.
+        Self::with_threads(cap().unwrap_or_else(rayon::current_num_threads))
     }
     /// The workers of a [`forced`](Self::forced) call on this thread, within the
-    /// thread limit of a [`capped`] call.
+    /// thread limit of a [`task`].
     #[cfg(test)]
     pub(crate) fn forced_here() -> Option<Self> {
         FORCED.with(std::cell::Cell::get).map(|forced| Self {
@@ -142,7 +161,7 @@ impl Workers {
         // Within a capped step, each task keeps its nested steps to its own thread.
         let nested = cap().map(|_| 1);
         let work = || {
-            with_cap(nested, || {
+            with(&CAP, nested, || {
                 panic::catch_unwind(AssertUnwindSafe(|| {
                     while !failed.load(atomic::Ordering::Relaxed) {
                         let i = next.fetch_add(1, atomic::Ordering::Relaxed);
@@ -157,6 +176,7 @@ impl Workers {
             })
         };
         let token = cancel::current();
+        let shared = SHARED.with(std::cell::Cell::get);
         #[cfg(test)]
         let forced = FORCED.with(std::cell::Cell::get);
         let payload = std::thread::scope(|scope| {
@@ -172,7 +192,7 @@ impl Workers {
                             cancel::scope(token, || {
                                 #[cfg(test)]
                                 let _live = cancel::hooks::Live::start();
-                                work()
+                                with(&SHARED, shared, work)
                             })
                         })
                         .ok()

@@ -149,6 +149,8 @@ pub struct Topology {
     layers: Vec<Arc<Layer>>,
     specs: Vec<RuleSpec>,
     graphs: GraphCache,
+    /// Whether one parallel task made this topology for itself, and so its graphs.
+    local: bool,
 }
 impl Topology {
     /// Create an empty topology with tolerance in input coordinate units.
@@ -167,6 +169,7 @@ impl Topology {
             layers: Vec::new(),
             specs: Vec::new(),
             graphs: Arc::new(Mutex::new(BTreeMap::new())),
+            local: crate::engine::parallel::local(),
         })
     }
     /// Return the configured planar tolerance.
@@ -261,7 +264,7 @@ impl Topology {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .entry(layers.clone())
-                .or_default(),
+                .or_insert_with(|| Arc::new(Cache::owned(self.local))),
         );
         slot.get_or_init(|| {
             let mut full = self.snapshot();
@@ -386,6 +389,7 @@ impl Topology {
             layers: self.layers.clone(),
             specs: self.specs.clone(),
             graphs: Arc::clone(&self.graphs),
+            local: self.local,
         }
     }
     /// Send aggregated violations to a consumer in rule, kind and feature order.
