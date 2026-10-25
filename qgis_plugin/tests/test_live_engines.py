@@ -8,7 +8,10 @@ import collections.abc as c
 import contextlib
 import gc
 import sqlite3
+import sys
+import threading
 import typing as t
+import weakref
 from pathlib import Path
 
 import pytest
@@ -421,6 +424,11 @@ def test_the_shapes_have_what_they_are_named_after(
 MANY = 3000
 
 
+def held_rows() -> int:
+    """How many rows of errors are held."""
+    return sum(isinstance(item, Found) for item in gc.get_objects())
+
+
 class Counted(Progress):
     """A feedback that counts the errors that the run holds as each rule is
     done, and keeps nothing of what it is told."""
@@ -430,9 +438,7 @@ class Counted(Progress):
         self.held: list[int] = []
 
     def checked(self, done: Checked) -> None:
-        self.held.append(
-            sum(isinstance(item, Found) for item in gc.get_objects())
-        )
+        self.held.append(held_rows())
 
 
 def apart(name: str) -> Input:
@@ -467,6 +473,85 @@ def test_a_run_holds_the_errors_of_one_rule_at_a_time(
     assert outcome.counts == [MANY] * len(jobs)
     assert feedback.held == [MANY] * len(jobs)
     assert sum(map(len, file_rows(output).values())) == MANY * len(jobs)
+
+
+# Canceling
+
+
+def test_a_canceled_run_of_the_package_lets_go_of_the_rule(
+    package: Package, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Processing keeps the error of a canceled run, and the frames of its
+    traceback: they hold nothing of the rule whose errors were made rows."""
+    from topology_rules.core import package as runner
+
+    feedback = Recorder()
+    held: list[weakref.ref[object]] = []
+    next_report = runner.Reports.next
+    attributes = runner.attributes
+
+    def reported(self: runner.Reports, *args: t.Any) -> t.Any:
+        report = next_report(self, *args)
+        if report is not None:
+            held.append(weakref.ref(report))
+        return report
+
+    def cancel_at_first(index: int, violation: t.Any, *rest: t.Any) -> t.Any:
+        held.append(weakref.ref(violation))
+        feedback.cancel()
+        return attributes(index, violation, *rest)
+
+    monkeypatch.setattr(runner.Reports, 'next', reported)
+    monkeypatch.setattr(runner, 'attributes', cancel_at_first)
+    jobs = jobs_of(package, [('line/must-not-have-dangles', apart('lines'))])
+    gc.collect()
+    rows = held_rows()
+    with pytest.raises(RunError, match='Canceled') as caught:
+        run_told(package, jobs, tmp_path / 'run', feedback=feedback)
+    for thread in threading.enumerate():
+        if thread.name.startswith('topology-reports'):
+            thread.join(30)
+    gc.collect()
+    assert caught.value.__traceback__ is not None
+    assert len(held) == 2
+    assert [ref() for ref in held] == [None, None]
+    assert held_rows() == rows
+
+
+def test_a_canceled_run_of_the_executable_lets_go_of_the_rule(
+    executable: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Processing keeps the error of a canceled run, and the frames of its
+    traceback: they hold neither the line of the rule whose errors were
+    made rows nor the rows."""
+    from topology_rules.core import report
+
+    feedback = Recorder()
+    said: list[str] = []
+    line = report.Report.line
+    found_in = report.found_in
+
+    def read(self: report.Report, text: str) -> bool:
+        said.append(text)
+        return line(self, text)
+
+    def cancel_at_first(*args: t.Any) -> t.Any:
+        feedback.cancel()
+        return found_in(*args)
+
+    monkeypatch.setattr(report.Report, 'line', read)
+    monkeypatch.setattr(report, 'found_in', cancel_at_first)
+    jobs = jobs_of(executable, [('line/must-not-have-dangles', apart('lines'))])
+    gc.collect()
+    rows = held_rows()
+    with pytest.raises(RunError, match='Canceled') as caught:
+        run_told(executable, jobs, tmp_path / 'run', feedback=feedback)
+    gc.collect()
+    assert caught.value.__traceback__ is not None
+    # A new string, held as the line is: by the list alone
+    alone = ['line ' + str(len(said))]
+    assert sys.getrefcount(said[-1]) == sys.getrefcount(alone[0])
+    assert held_rows() == rows
 
 
 # Failures

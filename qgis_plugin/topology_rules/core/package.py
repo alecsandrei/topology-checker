@@ -509,6 +509,27 @@ def validate(
     if feedback.isCanceled():
         raise RunError(tr('Canceled'))
     staged(feedback, Stage.CHECKING, 0, len(jobs))
+    try:
+        warnings = gather(topology, names, gathered, feedback)
+    except (ValueError, tc.PrecisionError) as error:
+        raise RunError(str(error)) from error
+    if warnings is None:
+        if not gathered.counts:
+            # Raised here, where no report was held: the error keeps the
+            # frames of its traceback, and Processing keeps the error
+            raise RunError(tr('Canceled'))
+        warnings = topology.warnings()
+    return gathered.errors(warnings)
+
+
+def gather(
+    topology: tc.Topology,
+    names: c.Mapping[tc.LayerId, str],
+    gathered: Gathered,
+    feedback: QgsProcessingFeedback,
+) -> tuple[str, ...] | None:
+    """Gathers the errors of each rule as soon as it is done. The warnings
+    of the run, or None when it is canceled first."""
     index = 0
     try:
         with Reports(topology) as stream:
@@ -516,7 +537,7 @@ def validate(
                 found: list[Found] = []
                 for violation in report.violations:
                     if feedback.isCanceled():
-                        raise Canceled
+                        return None
                     values = attributes(index, violation, names)
                     index += 1
                     found += found_in(from_wkb(violation.wkb), values)
@@ -527,14 +548,9 @@ def validate(
                 del report
                 gathered.add(found, count, stream.ready())
                 del found
-            summary = not_none(stream.summary)
+            return not_none(stream.summary).warnings
     except Canceled:
-        if not gathered.counts:
-            raise RunError(tr('Canceled')) from None
-        return gathered.errors(topology.warnings())
-    except (ValueError, tc.PrecisionError) as error:
-        raise RunError(str(error)) from error
-    return gathered.errors(summary.warnings)
+        return None
 
 
 def attributes(

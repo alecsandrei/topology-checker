@@ -149,42 +149,50 @@ def run(
         ) from error
     started = time.monotonic()
 
-    def check(stopping: c.Callable[[], None]) -> None:
+    def failure() -> RunError | None:
+        """Why the run stops early, if it does: it is canceled, or out of
+        time."""
         if feedback is not None and feedback.isCanceled():
-            stopping()
-            raise RunError(tr('Canceled')) from None
+            return RunError(tr('Canceled'))
         if timeout is not None and time.monotonic() - started > timeout:
-            stopping()
-            raise RunError(
+            return RunError(
                 tr('{program} did not answer within {seconds:g} s').format(
                     program=command[0], seconds=timeout
                 )
-            ) from None
+            )
+        return None
 
     if lines is not None or out is not None:
-        return follow(process, (out, lines), check, done)
+        followed = follow(process, (out, lines), failure, done)
+        if isinstance(followed, RunError):
+            # Raised here, where no line of the tool was held: the error
+            # keeps the frames of its traceback, and Processing keeps it
+            raise followed
+        return followed
     while True:
-        try:
+        with contextlib.suppress(subprocess.TimeoutExpired):
             stdout, stderr = process.communicate(timeout=POLL_SECONDS)
             break
-        except subprocess.TimeoutExpired:
-            check(lambda: stop(process))
+        if (error := failure()) is not None:
+            stop(process)
+            raise error
     return Completed(process.returncode, stdout, stderr)
 
 
 def follow(
     process: subprocess.Popen[str],
     takers: tuple[Lines | None, Lines | None],
-    check: c.Callable[[c.Callable[[], None]], None],
+    failure: c.Callable[[], RunError | None],
     done: c.Callable[[], bool] | None = None,
-) -> Completed:
+) -> Completed | RunError:
     """Waits for the process, giving the takers each line of its output and
     of its error output as it comes. A thread reads each pipe, so that
     neither fills up while the other is read.
 
     A process that has told all, or has ended, and has not ended and let go
     of its pipes a moment later, is ended, with what it started: the lines
-    read by then are taken. However the wait ends, what is left of the
+    read by then are taken. A failure, such as a cancel, ends the wait at
+    once, and is returned. However the wait ends, what is left of the
     process is stopped and reaped.
     """
     pipes = (not_none(process.stdout), not_none(process.stderr))
@@ -216,6 +224,7 @@ def follow(
     ends = 0
     stopped = False
     ended = False
+    failed: RunError | None = None
     # When the process has had its moment to end
     deadline: float | None = None
 
@@ -239,7 +248,10 @@ def follow(
                 take = takers[source]
                 if take is None or not take(line):
                     kept[source].add(line)
-            check(stopping)
+            failed = failure()
+            if failed is not None:
+                stopping()
+                break
             if stopped:
                 continue
             if deadline is None:
@@ -261,6 +273,8 @@ def follow(
             if not reader.is_alive():
                 with contextlib.suppress(OSError, ValueError):
                     pipe.close()
+    if failed is not None:
+        return failed
     # One that could not be killed has no code
     code = -1 if process.returncode is None else process.returncode
     return Completed(code, kept[0].text(), kept[1].text(), ended)
