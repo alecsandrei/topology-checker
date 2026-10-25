@@ -3,6 +3,7 @@ use crate::{
     Error,
     engine::{
         index::{self, Entry, Packed},
+        parallel::copied,
         storage::Shared,
     },
 };
@@ -369,6 +370,7 @@ impl Parts {
                 family: usize,
             ) {
                 for (i, p) in parts.iter().enumerate() {
+                    crate::cancel::every(i, "parts.ranges");
                     let ranges = map
                         .entry(p.reference.fid)
                         .or_insert_with(|| [0..0, 0..0, 0..0]);
@@ -396,9 +398,9 @@ impl Parts {
         let r = ranges.get(&fid).unwrap_or(&empty);
         Self {
             source: self.source.clone(),
-            points: self.points[r[0].clone()].to_vec(),
-            lines: self.lines[r[1].clone()].to_vec(),
-            polygons: self.polygons[r[2].clone()].to_vec(),
+            points: copied(&self.points[r[0].clone()], "feature.points"),
+            lines: copied(&self.lines[r[1].clone()], "feature.lines"),
+            polygons: copied(&self.polygons[r[2].clone()], "feature.polygons"),
             ..Self::default()
         }
     }
@@ -819,6 +821,77 @@ mod tests {
                     );
                     assert_eq!(record.live, 0);
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn feature_selection_stops_in_each_step_when_cancelled() {
+        use crate::cancel::{self, hooks};
+        // More points in one feature than are copied between checks.
+        let points = (0..cancel::COPY + 1000).map(|i| Point::new(i as f64, 0.));
+        let square = |x: f64| Rect::new((x, 0.), (x + 1., 1.)).to_polygon();
+        let lines = vec![
+            line_string![(x: 0., y: 0.), (x: 1., y: 1.)],
+            line_string![(x: 2., y: 0.), (x: 3., y: 1.)],
+        ];
+        let features: Vec<(i64, Geometry)> = vec![
+            (1, points.collect::<geo::MultiPoint>().into()),
+            (2, MultiLineString(lines).into()),
+            (3, MultiPolygon(vec![square(0.), square(2.)]).into()),
+        ];
+        let sizes = |parts: &Parts| {
+            (1..=3)
+                .map(|fid| {
+                    let feature = parts.feature(fid);
+                    let points = feature.points.iter().map(|p| p.geometry);
+                    (
+                        points.collect::<Vec<_>>(),
+                        feature.lines.len(),
+                        feature.polygons.len(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        let run = |layer: &Layer, token: &cancel::CancellationToken| {
+            let parts = layer.parts().unwrap();
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                cancel::scope(Some(token.clone()), || sizes(parts))
+            }))
+        };
+        let layer = || Layer::from_features("selected", features.clone());
+        let expected = sizes(layer().parts().unwrap());
+        assert_eq!(expected[0].0.len(), cancel::COPY + 1000);
+        assert_eq!((expected[1].1, expected[2].2), (2, 2));
+        let token = hooks::watched(None);
+        assert_eq!(run(&layer(), &token).expect("selection"), expected);
+        let visits = hooks::record(&token).visits;
+        // Every checkpoint is passed, so one taken out shows.
+        let steps = visits.keys().copied().collect::<Vec<_>>();
+        let expected_steps = [
+            "feature.lines",
+            "feature.points",
+            "feature.polygons",
+            "parts.ranges",
+        ];
+        assert_eq!(steps, expected_steps);
+        for (step, count) in visits {
+            for visit in [0, count / 2, count - 1] {
+                let layer = layer();
+                let token = hooks::watched(Some((step, visit)));
+                let result = run(&layer, &token);
+                assert!(
+                    result.expect_err("cancelled").is::<cancel::Cancelled>(),
+                    "{step} {visit}"
+                );
+                assert_eq!(
+                    hooks::record(&token).visits[step],
+                    visit + 1,
+                    "{step} {visit}"
+                );
+                // The layer selects as before afterwards.
+                let again = run(&layer, &cancel::CancellationToken::default());
+                assert_eq!(again.expect("selection"), expected, "{step} {visit}");
             }
         }
     }

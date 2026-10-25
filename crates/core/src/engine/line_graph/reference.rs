@@ -941,7 +941,8 @@ mod tests {
         cluster.batch cluster.ends cluster.points cluster.sort collapsed connected.components connected.join connected.sort connected.spans contacts \
         contacts.features contacts.nodes contacts.sort contacts.values crack cuts dangles \
         directions edges edges.count edges.cursor edges.group edges.incident edges.incident.init \
-        edges.offsets edges.sort ends ends.init ends.sort fill gather.contacts gather.edges index \
+        edges.offsets edges.sort ends ends.init ends.sort feature.lines fill gather.contacts \
+        gather.edges index \
         index.arrange index.bounds index.nodes matches.features matches.index matches.pairs \
         matches.retain matches.sort \
         noding order pairs pairs.join parts pseudos retain.components retain.confined \
