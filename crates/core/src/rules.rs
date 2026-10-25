@@ -330,7 +330,7 @@ pub(super) fn each_pair<R: Send>(
             if chunk.is_empty() {
                 return results;
             }
-            if workers.threads() == 1 {
+            if chunk.len() <= PAIR_TASK || workers.alone() {
                 results.extend(chunk.into_iter().filter_map(&task));
             } else {
                 results.extend(pair_tasks(workers, &chunk, &task).into_iter().flatten());
@@ -391,10 +391,11 @@ fn feature_kinds(rule: Rule) -> &'static [ViolationKind] {
 /// every feature shares, such as the line graph, build on every thread of the
 /// validation, whichever feature needs them first and whatever helpers are free. The
 /// first feature runs alone, so the others need not wait for them. Features of a batch
-/// smaller than its threads split their own steps over the spare ones. Batches run on
-/// the calling thread, or after a [slow](SLOW_BATCH) one on a thread apart, and on
-/// helpers of their own, never on a shared pool, so cancelling stops them as soon as
-/// their features check, whatever else runs in the process.
+/// smaller than its threads split their own steps over the spare ones, and threads out
+/// of features join the steps of those still running. Batches run on the calling
+/// thread, or after a [slow](SLOW_BATCH) one on a thread apart, and on helpers of their
+/// own, never on a shared pool, so cancelling stops them as soon as their features
+/// check, whatever else runs in the process.
 fn per_feature_into<E>(
     t: &Topology,
     spec: RuleSpec,
@@ -428,8 +429,9 @@ fn per_feature_into<E>(
     };
     // A snapshot per thread, as cheap features slow down sharing its making.
     let batch = |(fids, threads, steps): (&[i64], usize, usize)| {
-        Workers::with_threads(threads).run_with(
+        Workers::with_threads(threads).run_sharing(
             fids.len(),
+            steps,
             || t.snapshot(),
             |snapshot, i| feature(snapshot, fids[i], steps),
         )

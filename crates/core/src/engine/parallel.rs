@@ -13,10 +13,11 @@ use std::{
     ops::Range,
     panic::{self, AssertUnwindSafe},
     sync::{
-        Mutex, PoisonError,
+        Arc, Mutex, PoisonError,
         atomic::{self, AtomicBool, AtomicUsize},
         mpsc,
     },
+    time::{Duration, Instant},
 };
 
 /// Steps over fewer units run on the calling thread.
@@ -27,6 +28,9 @@ const GRAIN: usize = 4096;
 const BUCKETS: usize = 1 << 16;
 /// Tasks per thread, so uneven tasks still share the work.
 const TASKS: usize = 8;
+/// A step takes spare threads once it has run this long, so starting them, some
+/// 20 µs each, stays a small part of it.
+const BORROW_AFTER: Duration = Duration::from_millis(1);
 
 #[cfg(test)]
 thread_local! {
@@ -37,11 +41,14 @@ thread_local! {
     static CAP: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
     /// Within a task's own steps, the threads of the caches it shares with other tasks.
     static SHARED: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
+    /// Within a task of [`Workers::run_sharing`], the threads its other tasks left.
+    static SPARE: std::cell::RefCell<Option<Arc<Spare>>> = const { std::cell::RefCell::new(None) };
 }
 
 /// Run `f` as one of several tasks that already run on threads of their own: each
-/// of its steps uses at most `threads` threads, the calling one included, and the
-/// caches it shares with the other tasks build on `shared` threads.
+/// of its steps uses at most `threads` threads, the calling one included, plus those
+/// a [`Workers::run_sharing`] call lends it, and the caches it shares with the other
+/// tasks build on `shared` threads.
 pub(crate) fn task<T>(threads: usize, shared: usize, f: impl FnOnce() -> T) -> T {
     with(&SHARED, Some(shared.max(1)), || {
         with(&CAP, Some(threads.max(1)), f)
@@ -55,9 +62,62 @@ pub(crate) fn local() -> bool {
 /// it first and whatever threads that task holds, so the build is the same each time.
 pub(crate) fn shared<T>(f: impl FnOnce() -> T) -> T {
     match SHARED.with(std::cell::Cell::get) {
-        Some(threads) => with(&SHARED, None, || with(&CAP, Some(threads), f)),
+        Some(threads) => with(&SHARED, None, || {
+            with(&CAP, Some(threads), || sparing(None, f))
+        }),
         None => f(),
     }
+}
+/// Threads that the threads of a [`Workers::run_sharing`] call lend to each other's
+/// steps once they run out of tasks.
+#[derive(Debug)]
+struct Spare {
+    /// Threads free now.
+    free: AtomicUsize,
+    /// Most threads one step can take.
+    most: usize,
+}
+impl Spare {
+    /// Take up to `want` of the threads free now, returning how many.
+    fn take(&self, want: usize) -> usize {
+        let mut now = self.free.load(atomic::Ordering::Relaxed);
+        loop {
+            let taken = want.min(now);
+            if taken == 0 {
+                return 0;
+            }
+            match self.free.compare_exchange_weak(
+                now,
+                now - taken,
+                atomic::Ordering::Relaxed,
+                atomic::Ordering::Relaxed,
+            ) {
+                Ok(_) => return taken,
+                Err(changed) => now = changed,
+            }
+        }
+    }
+    fn give(&self, threads: usize) {
+        self.free.fetch_add(threads, atomic::Ordering::Relaxed);
+    }
+}
+/// One spare thread taken, given back when dropped.
+struct Lent(Arc<Spare>);
+impl Drop for Lent {
+    fn drop(&mut self) {
+        self.0.give(1);
+    }
+}
+/// Run `f` with `spare` as the threads its steps may take beyond their own.
+fn sparing<T>(spare: Option<Arc<Spare>>, f: impl FnOnce() -> T) -> T {
+    struct Restore(Option<Arc<Spare>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            SPARE.with(|s| *s.borrow_mut() = self.0.take());
+        }
+    }
+    let _restore = Restore(SPARE.with(|s| s.replace(spare)));
+    f()
 }
 fn with<T>(setting: &'static Setting, value: Option<usize>, f: impl FnOnce() -> T) -> T {
     struct Restore(&'static Setting, Option<usize>);
@@ -143,6 +203,8 @@ pub(crate) fn apart<J: Send, R: Send, T>(
 pub(crate) struct Workers {
     threads: usize,
     grain: usize,
+    /// Whether the step takes the spare threads of a [`Workers::run_sharing`] task.
+    borrows: bool,
 }
 impl Workers {
     /// Workers for a step over `work` similar units, decided on the calling thread.
@@ -157,14 +219,17 @@ impl Workers {
             Self::all()
         }
     }
-    /// Every thread a step on this thread may use.
+    /// Every thread a step on this thread may use, and spare ones as they free up.
     pub(crate) fn all() -> Self {
         #[cfg(test)]
         if let Some(forced) = Self::forced_here() {
             return forced;
         }
         // A task's helper threads are outside its pool, so its limit is all they know.
-        Self::with_threads(cap().unwrap_or_else(rayon::current_num_threads))
+        Self {
+            borrows: true,
+            ..Self::with_threads(cap().unwrap_or_else(rayon::current_num_threads))
+        }
     }
     /// The workers of a [`forced`](Self::forced) call on this thread, within the
     /// thread limit of a [`task`].
@@ -180,6 +245,7 @@ impl Workers {
         Self {
             threads: threads.max(1),
             grain: GRAIN,
+            borrows: false,
         }
     }
     /// Run `f` with steps split into tasks of `grain` units on `threads`
@@ -195,19 +261,44 @@ impl Workers {
         let forced = Self {
             threads: threads.max(1),
             grain: grain.max(1),
+            borrows: false,
         };
         let _restore = Restore(FORCED.with(|c| c.replace(Some(forced))));
         f()
     }
+    /// Threads of the step's own, without spare ones.
     pub(crate) fn threads(&self) -> usize {
         self.threads
     }
+    /// Whether the step runs on the calling thread alone.
+    pub(crate) fn alone(&self) -> bool {
+        self.threads == 1 && !self.may_borrow()
+    }
+    /// Whether the step may take spare threads.
+    fn may_borrow(&self) -> bool {
+        self.borrows && SPARE.with(|s| s.borrow().is_some())
+    }
+    /// The spare threads the step may take.
+    fn spare(&self) -> Option<Arc<Spare>> {
+        if self.borrows {
+            SPARE.with(|s| s.borrow().clone())
+        } else {
+            None
+        }
+    }
     /// Consecutive ranges covering `0..len`, one per task.
     pub(crate) fn ranges(&self, len: usize) -> Vec<Range<usize>> {
-        let tasks = if self.threads == 1 {
+        // Enough tasks for spare threads too.
+        let most = if self.borrows {
+            SPARE.with(|s| s.borrow().as_ref().map_or(0, |spare| spare.most))
+        } else {
+            0
+        };
+        let threads = self.threads + most;
+        let tasks = if threads == 1 {
             1
         } else {
-            (len / self.grain).clamp(1, self.threads * TASKS)
+            (len / self.grain).clamp(1, threads * TASKS)
         };
         let size = len.div_ceil(tasks).max(1);
         (0..len)
@@ -228,32 +319,88 @@ impl Workers {
         state: impl Fn() -> S + Sync,
         task: impl Fn(&mut S, usize) -> R + Sync,
     ) -> Vec<R> {
+        self.lending(count, state, task, None)
+    }
+    /// [`run_with`](Self::run_with) for tasks whose steps each hold `share` threads.
+    /// A thread out of tasks lends its `share` to the steps of tasks still running,
+    /// which take spare threads between their own tasks, so a slow task need not
+    /// keep the others' threads idle. The threads lent take no more for themselves.
+    pub(crate) fn run_sharing<S, R: Send>(
+        &self,
+        count: usize,
+        share: usize,
+        state: impl Fn() -> S + Sync,
+        task: impl Fn(&mut S, usize) -> R + Sync,
+    ) -> Vec<R> {
         let threads = self.threads.min(count);
         if threads <= 1 {
-            let mut held = None;
-            return (0..count)
-                .map(|i| task(held.get_or_insert_with(&state), i))
-                .collect();
+            return self.run_with(count, state, task);
         }
-        let next = AtomicUsize::new(0);
+        let spare = Arc::new(Spare {
+            free: AtomicUsize::new(self.threads.saturating_sub(threads * share)),
+            most: self.threads.saturating_sub(share),
+        });
+        self.lending(count, state, task, Some((&spare, share)))
+    }
+    /// [`run_with`](Self::run_with), with each thread lending `lend.1` threads to
+    /// `lend.0` once out of tasks.
+    fn lending<S, R: Send>(
+        &self,
+        count: usize,
+        state: impl Fn() -> S + Sync,
+        task: impl Fn(&mut S, usize) -> R + Sync,
+        lend: Option<(&Arc<Spare>, usize)>,
+    ) -> Vec<R> {
+        let threads = self.threads.min(count);
+        let mut held = None;
+        let mut done = Vec::new();
+        // Spare threads join steps of more than two tasks while tasks are left for
+        // them, once the step has run long enough for starting them to pay off.
+        let borrow = if count > 2 { self.spare() } else { None };
+        let started = borrow.is_some().then(Instant::now);
+        let ripe = || {
+            borrow
+                .as_ref()
+                .is_some_and(|spare| spare.free.load(atomic::Ordering::Relaxed) > 0)
+                && started.is_some_and(|started| started.elapsed() >= BORROW_AFTER)
+        };
+        if threads <= 1 {
+            while done.len() < count && (count - done.len() < 2 || !ripe()) {
+                let result = task(held.get_or_insert_with(&state), done.len());
+                done.push(result);
+            }
+            if done.len() == count {
+                return done;
+            }
+        }
+        let start = done.len();
+        let next = AtomicUsize::new(start);
         let failed = AtomicBool::new(false);
-        let results = (0..count).map(|_| Mutex::new(None)).collect::<Vec<_>>();
+        let results = (start..count).map(|_| Mutex::new(None)).collect::<Vec<_>>();
         // Within a capped step, each task keeps its nested steps to its own thread.
         let nested = cap().map(|_| 1);
-        let work = || {
+        // Before each task, `more` hears how many are left after it.
+        let work = |held: &mut Option<S>, more: &mut dyn FnMut(usize)| {
             with(&CAP, nested, || {
-                panic::catch_unwind(AssertUnwindSafe(|| {
-                    let mut held = None;
-                    while !failed.load(atomic::Ordering::Relaxed) {
-                        let i = next.fetch_add(1, atomic::Ordering::Relaxed);
-                        if i >= count {
-                            break;
+                sparing(lend.map(|(spare, _)| Arc::clone(spare)), || {
+                    panic::catch_unwind(AssertUnwindSafe(|| {
+                        while !failed.load(atomic::Ordering::Relaxed) {
+                            let i = next.fetch_add(1, atomic::Ordering::Relaxed);
+                            if i >= count {
+                                break;
+                            }
+                            more(count - i - 1);
+                            let result = task(held.get_or_insert_with(&state), i);
+                            *results[i - start]
+                                .lock()
+                                .unwrap_or_else(PoisonError::into_inner) = Some(result);
                         }
-                        let result = task(held.get_or_insert_with(&state), i);
-                        *results[i].lock().unwrap_or_else(PoisonError::into_inner) = Some(result);
-                    }
-                }))
-                .inspect_err(|_| failed.store(true, atomic::Ordering::Relaxed))
+                        if let Some((spare, share)) = lend {
+                            spare.give(share);
+                        }
+                    }))
+                    .inspect_err(|_| failed.store(true, atomic::Ordering::Relaxed))
+                })
             })
         };
         let token = cancel::current();
@@ -261,25 +408,37 @@ impl Workers {
         #[cfg(test)]
         let forced = FORCED.with(std::cell::Cell::get);
         let payload = std::thread::scope(|scope| {
-            let handles = (1..threads)
-                .filter_map(|_| {
-                    let token = token.clone();
-                    let work = &work;
-                    // Without threads the calling thread does all the work.
-                    std::thread::Builder::new()
-                        .spawn_scoped(scope, move || {
+            let spawn = |lent: Option<Lent>| {
+                let token = token.clone();
+                let work = &work;
+                // Without threads the calling thread does all the work.
+                std::thread::Builder::new()
+                    .spawn_scoped(scope, move || {
+                        #[cfg(test)]
+                        FORCED.with(|c| c.set(forced));
+                        cancel::scope(token, || {
                             #[cfg(test)]
-                            FORCED.with(|c| c.set(forced));
-                            cancel::scope(token, || {
-                                #[cfg(test)]
-                                let _live = cancel::hooks::Live::start();
-                                with(&SHARED, shared, work)
-                            })
+                            let _live = cancel::hooks::Live::start();
+                            let done = with(&SHARED, shared, || work(&mut None, &mut |_| {}));
+                            // A spare thread is free again as soon as it is out of tasks.
+                            drop(lent);
+                            done
                         })
-                        .ok()
-                })
-                .collect::<Vec<_>>();
-            let mut payload = work().err();
+                    })
+                    .ok()
+            };
+            let mut handles = (1..threads).filter_map(|_| spawn(None)).collect::<Vec<_>>();
+            let mut more = |left: usize| {
+                if left > 0
+                    && let Some(spare) = &borrow
+                    && ripe()
+                {
+                    for _ in 0..spare.take(left) {
+                        handles.extend(spawn(Some(Lent(Arc::clone(spare)))));
+                    }
+                }
+            };
+            let mut payload = work(&mut held, &mut more).err();
             for handle in handles {
                 match handle.join() {
                     Ok(Ok(())) => {}
@@ -291,14 +450,12 @@ impl Workers {
         if let Some(payload) = payload {
             panic::resume_unwind(payload);
         }
-        results
-            .into_iter()
-            .map(|r| {
-                r.into_inner()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .expect("finished task")
-            })
-            .collect()
+        done.extend(results.into_iter().map(|r| {
+            r.into_inner()
+                .unwrap_or_else(PoisonError::into_inner)
+                .expect("finished task")
+        }));
+        done
     }
     /// `task(item)` for each item, results in order.
     pub(crate) fn each<I: Send, R: Send>(
@@ -306,7 +463,9 @@ impl Workers {
         items: Vec<I>,
         task: impl Fn(I) -> R + Sync,
     ) -> Vec<R> {
-        if self.threads.min(items.len()) <= 1 {
+        // Steps take spare threads only for more than two tasks.
+        let borrows = items.len() > 2 && self.may_borrow();
+        if self.threads.min(items.len()) <= 1 && !borrows {
             return items.into_iter().map(task).collect();
         }
         let items = items
@@ -729,6 +888,53 @@ mod tests {
             found.iter().all(|f| (f.1, f.2, f.3) == (true, 1, 5)),
             "{found:?}"
         );
+    }
+
+    #[test]
+    fn threads_out_of_tasks_join_the_steps_of_tasks_still_running() {
+        let token = cancel::hooks::watched(None);
+        let ran = Mutex::new(std::collections::HashSet::new());
+        let found = cancel::scope(Some(token.clone()), || {
+            Workers::with_threads(3).run_sharing(
+                3,
+                1,
+                || (),
+                |(), i| {
+                    if i > 0 {
+                        return vec![i];
+                    }
+                    // A slow step on one thread, which the threads of the quick tasks join.
+                    let caller = std::thread::current().id();
+                    task(1, 3, || {
+                        Workers::all().run(50, |k| {
+                            let thread = std::thread::current().id();
+                            ran.lock().unwrap().insert(thread);
+                            std::thread::sleep(Duration::from_millis(2));
+                            // The threads lent take no more for themselves.
+                            assert!(thread == caller || Workers::all().alone());
+                            k
+                        })
+                    })
+                },
+            )
+        });
+        assert_eq!(found, [(0..50).collect(), vec![1], vec![2]]);
+        assert_eq!(ran.into_inner().unwrap().len(), 3);
+        // They serve the caller's token, as the two helpers and the two lent ones.
+        let record = cancel::hooks::record(&token);
+        assert_eq!((record.workers, record.live), (4, 0));
+        // Outside such tasks, and in caches they share, steps take none.
+        assert!(Workers::all().spare().is_none());
+        let outside = Workers::with_threads(2).run_sharing(
+            2,
+            1,
+            || (),
+            |(), _| {
+                let spare = || Workers::all().spare().is_some();
+                task(1, 2, || (spare(), shared(spare)))
+            },
+        );
+        assert_eq!(outside, [(true, false); 2]);
     }
 
     #[test]
