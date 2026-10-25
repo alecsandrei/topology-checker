@@ -8,12 +8,14 @@
 use crate::cancel;
 use std::{
     any::Any,
+    cell::Cell,
     cmp::Ordering,
     ops::Range,
     panic::{self, AssertUnwindSafe},
     sync::{
         Mutex, PoisonError,
         atomic::{self, AtomicBool, AtomicUsize},
+        mpsc,
     },
 };
 
@@ -70,6 +72,70 @@ fn with<T>(setting: &'static Setting, value: Option<usize>, f: impl FnOnce() -> 
 /// The thread limit of the [`task`] step running on this thread, if any.
 pub(crate) fn cap() -> Option<usize> {
     CAP.with(std::cell::Cell::get)
+}
+
+/// Call `f` with a function that runs `job` on a thread of its own and waits for its
+/// result. The allocator gives each thread an arena of its own, so the scratch of the
+/// jobs stays apart from what this thread keeps, such as the caches it built: scratch
+/// that lands in their gaps takes much longer to reach. The thread starts with the
+/// first job and serves the caller's cancellation token and settings. If it cannot
+/// start, jobs run on the calling thread.
+pub(crate) fn apart<J: Send, R: Send, T>(
+    job: impl Fn(J) -> R + Sync,
+    f: impl FnOnce(&mut dyn FnMut(J) -> R) -> T,
+) -> T {
+    let job = &job;
+    std::thread::scope(|scope| {
+        // Dropped as `f` returns or unwinds, which ends the thread before the scope waits.
+        let mut thread = None;
+        let mut started = false;
+        let mut run = |input: J| {
+            if !started {
+                started = true;
+                let (jobs, inputs) = mpsc::channel::<J>();
+                let (outputs, results) = mpsc::channel::<R>();
+                let token = cancel::current();
+                let settings = (CAP.with(Cell::get), SHARED.with(Cell::get));
+                #[cfg(test)]
+                let forced = FORCED.with(Cell::get);
+                thread = std::thread::Builder::new()
+                    .spawn_scoped(scope, move || {
+                        #[cfg(test)]
+                        FORCED.with(|c| c.set(forced));
+                        cancel::scope(token, || {
+                            #[cfg(test)]
+                            let _live = cancel::hooks::Live::start();
+                            with(&CAP, settings.0, || {
+                                with(&SHARED, settings.1, || {
+                                    for input in inputs {
+                                        if outputs.send(job(input)).is_err() {
+                                            break;
+                                        }
+                                    }
+                                })
+                            });
+                        });
+                    })
+                    .ok()
+                    .map(|handle| (jobs, results, handle));
+            }
+            let Some((jobs, results, _)) = &thread else {
+                return job(input);
+            };
+            // The thread only stops early when a job fails, so its payload is the error.
+            if jobs.send(input).is_ok()
+                && let Ok(result) = results.recv()
+            {
+                return result;
+            }
+            let (_, _, handle) = thread.take().expect("job thread");
+            match handle.join() {
+                Ok(()) => unreachable!("the job thread stops only when its jobs end"),
+                Err(payload) => panic::resume_unwind(payload),
+            }
+        };
+        f(&mut run)
+    })
 }
 
 /// Threads for one construction step.
@@ -462,6 +528,82 @@ mod tests {
         keep(&mut slot, Box::new("bug"));
         keep(&mut slot, Box::new(cancel::Cancelled));
         assert_eq!(slot.expect("payload").downcast_ref::<&str>(), Some(&"bug"));
+    }
+
+    #[test]
+    fn jobs_apart_run_in_turn_on_one_thread_of_the_request() {
+        let caller = std::thread::current().id();
+        let token = cancel::hooks::watched(None);
+        let found = cancel::scope(Some(token.clone()), || {
+            Workers::forced(3, 1, || {
+                apart(
+                    |i: usize| {
+                        let token = cancel::current().map(|t| cancel::hooks::record(&t).live);
+                        (
+                            i * 2,
+                            std::thread::current().id(),
+                            token,
+                            Workers::all().threads(),
+                        )
+                    },
+                    |run| (0..5).map(run).collect::<Vec<_>>(),
+                )
+            })
+        });
+        assert_eq!(
+            found.iter().map(|f| f.0).collect::<Vec<_>>(),
+            [0, 2, 4, 6, 8]
+        );
+        assert!(found.iter().all(|f| f.1 == found[0].1 && f.1 != caller));
+        // The thread serves the request's token, as the one worker it has, and settings.
+        assert!(found.iter().all(|f| f.2 == Some(1) && f.3 == 3));
+        let record = cancel::hooks::record(&token);
+        assert_eq!((record.workers, record.live), (1, 0));
+        // Without jobs no thread starts.
+        let token = cancel::hooks::watched(None);
+        cancel::scope(Some(token.clone()), || apart(|()| (), |_| ()));
+        assert_eq!(cancel::hooks::record(&token).workers, 0);
+    }
+
+    #[test]
+    fn failures_apart_reach_the_caller_and_end_the_thread() {
+        // A job's panic, cancellation in a job and a panic of the caller between jobs.
+        let token = cancel::hooks::watched(None);
+        let payload = failure(&token, || {
+            apart(
+                |i: usize| {
+                    if i == 2 {
+                        panic::resume_unwind(Box::new("job failed"));
+                    }
+                },
+                |run| (0..4).for_each(run),
+            );
+        });
+        assert_eq!(payload.downcast_ref::<&str>(), Some(&"job failed"));
+        let payload = failure(&token, || {
+            apart(
+                |()| cancel::check(),
+                |run| {
+                    run(());
+                    token.cancel();
+                    run(());
+                },
+            );
+        });
+        assert!(payload.is::<cancel::Cancelled>());
+        let token = cancel::hooks::watched(None);
+        let payload = failure(&token, || {
+            apart(
+                |()| (),
+                |run| {
+                    run(());
+                    panic::resume_unwind(Box::new("caller failed"));
+                },
+            );
+        });
+        assert_eq!(payload.downcast_ref::<&str>(), Some(&"caller failed"));
+        let record = cancel::hooks::record(&token);
+        assert_eq!((record.workers, record.live), (1, 0));
     }
 
     #[test]

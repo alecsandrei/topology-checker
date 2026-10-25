@@ -20,9 +20,12 @@ use line::LineCheck;
 use line_polygon::LinePolygon;
 use point_polygon::{PointCount, PointTest};
 use rayon::prelude::*;
-use std::sync::{
-    OnceLock,
-    atomic::{self, AtomicUsize},
+use std::{
+    sync::{
+        OnceLock,
+        atomic::{self, AtomicUsize},
+    },
+    time::{Duration, Instant},
 };
 
 pub(crate) fn run(t: &Topology, spec: RuleSpec) -> Result<Vec<Violation>, Error> {
@@ -190,6 +193,11 @@ pub(crate) fn run_into<E>(
 /// for a whole batch, so batches stay small enough to stream early and to bound the
 /// violations held at once, and large enough to balance uneven features.
 const FEATURES_PER_THREAD: usize = 8;
+/// A batch of [`per_feature_into`] that takes at least this long hands the next one to
+/// a thread apart from the calling thread, which holds the caches the first feature
+/// built. The scratch of slow features is faster to reach there, which outweighs the
+/// 10 µs or so each handover costs.
+const SLOW_BATCH: Duration = Duration::from_millis(1);
 /// Helper threads in use by the feature batches of every validation in the process.
 static HELPERS: AtomicUsize = AtomicUsize::new(0);
 /// Helper threads of one feature batch, returned when it ends.
@@ -343,9 +351,10 @@ fn feature_kinds(rule: Rule) -> &'static [ViolationKind] {
 /// every feature shares, such as the line graph, build on every thread of the
 /// validation, whichever feature needs them first and whatever helpers are free. The
 /// first feature runs alone, so the others need not wait for them. Features of a batch
-/// smaller than its threads split their own steps over the spare ones. Batches run on the calling thread
-/// and helpers of their own, never on a shared pool, so cancelling stops them as soon
-/// as their features check, whatever else runs in the process.
+/// smaller than its threads split their own steps over the spare ones. Batches run on
+/// the calling thread, or after a [slow](SLOW_BATCH) one on a thread apart, and on
+/// helpers of their own, never on a shared pool, so cancelling stops them as soon as
+/// their features check, whatever else runs in the process.
 fn per_feature_into<E>(
     t: &Topology,
     spec: RuleSpec,
@@ -378,34 +387,50 @@ fn per_feature_into<E>(
             })
         })
     };
-    let mut rest = &fids[..];
-    let mut first = true;
-    while !rest.is_empty() {
-        crate::cancel::check();
-        let helpers = Helpers::take(all - 1);
-        let threads = 1 + helpers.threads;
-        let size = if first {
-            1
-        } else {
-            threads * per_thread.max(1)
-        };
-        let (fids, tail) = rest.split_at(size.min(rest.len()));
-        (rest, first) = (tail, false);
-        // Fewer features than threads split their own steps over the rest.
-        let steps = (threads / fids.len()).max(1);
-        let results = Workers::with_threads(threads).run(fids.len(), |i| feature(fids[i], steps));
-        drop(helpers);
-        for violations in results {
-            for v in violations? {
-                match kinds.iter().position(|&kind| kind == v.kind) {
-                    Some(0) => send(v, sink)?,
-                    Some(i) => later[i - 1].push(v),
-                    None if kinds.is_empty() => send(v, sink)?,
-                    None => {}
+    let batch = |(fids, threads, steps): (&[i64], usize, usize)| {
+        Workers::with_threads(threads).run(fids.len(), |i| feature(fids[i], steps))
+    };
+    #[cfg(not(test))]
+    let slow = SLOW_BATCH;
+    #[cfg(test)]
+    let slow = tests::slow_batch();
+    parallel::apart(batch, |apart| {
+        let mut rest = &fids[..];
+        let (mut first, mut after_slow) = (true, false);
+        while !rest.is_empty() {
+            crate::cancel::check();
+            let helpers = Helpers::take(all - 1);
+            let threads = 1 + helpers.threads;
+            let size = if first {
+                1
+            } else {
+                threads * per_thread.max(1)
+            };
+            let (fids, tail) = rest.split_at(size.min(rest.len()));
+            // Fewer features than threads split their own steps over the rest.
+            let steps = (threads / fids.len()).max(1);
+            let started = Instant::now();
+            let results = if after_slow {
+                apart((fids, threads, steps))
+            } else {
+                batch((fids, threads, steps))
+            };
+            after_slow = started.elapsed() >= slow;
+            (rest, first) = (tail, false);
+            drop(helpers);
+            for violations in results {
+                for v in violations? {
+                    match kinds.iter().position(|&kind| kind == v.kind) {
+                        Some(0) => send(v, sink)?,
+                        Some(i) => later[i - 1].push(v),
+                        None if kinds.is_empty() => send(v, sink)?,
+                        None => {}
+                    }
                 }
             }
         }
-    }
+        Ok::<_, crate::SinkError<E>>(())
+    })?;
     later.into_iter().flatten().try_for_each(|v| send(v, sink))
 }
 fn emit<E>(
@@ -511,6 +536,23 @@ mod tests {
         let _restore = Restore(FREE.with(|c| c.replace(Some(free))));
         f()
     }
+    thread_local! { static SLOW: Cell<Duration> = const { Cell::new(Duration::ZERO) }; }
+    /// How long a batch started on this thread takes to count as slow. Every batch does
+    /// in tests, so the batches after the first one run apart.
+    pub(super) fn slow_batch() -> Duration {
+        SLOW.with(Cell::get)
+    }
+    /// Run `f` with batches slow from `slow` on.
+    fn with_slow_batch<T>(slow: Duration, f: impl FnOnce() -> T) -> T {
+        struct Restore(Duration);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                SLOW.with(|c| c.set(self.0));
+            }
+        }
+        let _restore = Restore(SLOW.with(|c| c.replace(slow)));
+        f()
+    }
 
     /// Longest wait for another thread in a test.
     const PATIENCE: Duration = Duration::from_secs(60);
@@ -566,6 +608,8 @@ mod tests {
         Panic(&'static str),
         Hold(Duration),
         Note(Arc<Mutex<Vec<Instant>>>),
+        /// Note the feature and the thread it runs on.
+        Thread(Arc<Mutex<Vec<(i64, ThreadId)>>>),
         /// Arrive at the gate and go on, but wait until it opens when this many
         /// arrived before.
         Arrive(Arc<Gate>, usize),
@@ -605,6 +649,10 @@ mod tests {
                 .lock()
                 .unwrap_or_else(PoisonError::into_inner)
                 .push(Instant::now()),
+            Some(Action::Thread(threads)) => threads
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push((fid, std::thread::current().id())),
             Some(Action::Arrive(gate, wait)) => {
                 let earlier = gate.arrive();
                 if earlier == wait {
@@ -1741,6 +1789,47 @@ mod tests {
         let starts = starts.lock().unwrap_or_else(PoisonError::into_inner);
         assert_eq!(starts.len(), 23);
         assert!(starts.iter().all(|&at| at >= started + hold));
+    }
+
+    #[test]
+    fn the_batch_after_a_slow_one_runs_apart_from_the_calling_thread() {
+        // Batches on one thread: [0], 1 to 8 with slow feature 3, 9 to 16, 17 to 24.
+        let mut t = Topology::new(0.).unwrap();
+        let lines = (0..25).map(|fid| {
+            let x = fid as f64;
+            let line = if fid % 2 == 0 {
+                LineString::from(vec![(x, -1.), (x, 13.)])
+            } else {
+                LineString::from(vec![(-1., x / 2.), (25., x / 2.)])
+            };
+            (fid, line.into())
+        });
+        let layer = t.add_layer(Layer::from_features("apart", lines));
+        let spec = t.add_rule(Rule::LineMustNotIntersect, layer, None).unwrap();
+        let expected = reference(&t, spec).unwrap();
+        assert!(!expected.is_empty());
+        // Far apart, so that only the held feature makes its batch slow.
+        let slow = SLOW_BATCH * 250;
+        let threads = Arc::new(Mutex::new(Vec::new()));
+        let name = on(&t, spec, 3, Action::Hold(slow + slow / 5));
+        for fid in (0..25).filter(|&fid| fid != 3) {
+            on(&t, spec, fid, Action::Thread(Arc::clone(&threads)));
+        }
+        let streamed = with_threads(1, || with_slow_batch(slow, || streamed(&t, spec, None)));
+        clear(&name);
+        assert_eq!(streamed.unwrap(), expected);
+        let caller = std::thread::current().id();
+        let threads = threads.lock().unwrap_or_else(PoisonError::into_inner);
+        assert_eq!(threads.len(), 24);
+        let apart = threads
+            .iter()
+            .filter(|&&(_, thread)| thread != caller)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            apart.iter().map(|&&(fid, _)| fid).collect::<Vec<_>>(),
+            (9..17).collect::<Vec<_>>()
+        );
+        assert!(apart.iter().all(|&&(_, thread)| thread == apart[0].1));
     }
 
     #[test]
