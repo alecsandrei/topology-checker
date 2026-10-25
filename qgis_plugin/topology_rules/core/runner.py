@@ -46,7 +46,9 @@ class Completed:
     ended: bool = False
 
 
-# A line of what the tool says, which says whether it took the line
+# A line of what the tool says, with its end, which says whether it took the
+# line. The end stays on, as taking it off copies the line, and the line of a
+# rule with a million errors takes hundreds of megabytes
 Lines = c.Callable[[str], bool]
 
 
@@ -112,11 +114,11 @@ def run(
     """Runs the command without a shell, stopping it if the feedback cancels
     or the timeout in seconds passes.
 
-    The lines, if given, get each line of the error output as soon as the
-    tool says it, and `out` each line of the output; those they take are not
-    in what is returned, which has the end of the others. Once `done` says
-    that the tool has told all, it has a moment to end, as it has once it
-    ends to let go of its pipes; then it is ended.
+    The lines, if given, get each line of the error output, with its end, as
+    soon as the tool says it, and `out` each line of the output; those they
+    take are not in what is returned, which has the end of the others. Once
+    `done` says that the tool has told all, it has a moment to end, as it
+    has once it ends to let go of its pipes; then it is ended.
     """
     flags = 0
     if sys.platform == 'win32':
@@ -192,6 +194,8 @@ def follow(
         try:
             for line in pipes[source]:
                 found.put((source, line))
+                # Not held while the next line is waited for
+                del line
         except (OSError, ValueError):
             pass
         finally:
@@ -233,7 +237,7 @@ def follow(
                 ends += 1
             elif line:
                 take = takers[source]
-                if take is None or not take(line.rstrip('\r\n')):
+                if take is None or not take(line):
                     kept[source].add(line)
             check(stopping)
             if stopped:
@@ -285,7 +289,7 @@ def execute(
     def told(line: str) -> bool:
         if lines is not None and lines(line):
             return True
-        log.add(line)
+        log.add(line.rstrip('\r\n'))
         return False
 
     try:

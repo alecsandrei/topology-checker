@@ -112,7 +112,8 @@ def test_each_line_is_read_as_soon_as_the_tool_says_it(
     tmp_path: Path, pipe: str
 ):
     """The tool says its next line only once the test has read the last:
-    a run that read the lines at the end would wait for ever."""
+    a run that read the lines at the end would wait for ever. Each line comes
+    with its end."""
     other = 'stderr' if pipe == 'stdout' else 'stdout'
     gates = tmp_path / 'gates'
     gates.mkdir()
@@ -135,7 +136,7 @@ say(b'other\\n', sys.{other})
     taker = {'out': take} if pipe == 'stdout' else {'lines': take}
     completed = runner.run([command], QgsProcessingFeedback(), **taker)
     assert completed.exit_code == 0
-    assert seen == ['line 0', 'line 1', 'line 2']
+    assert seen == ['line 0\n', 'line 1\n', 'line 2\n']
     assert getattr(completed, other) == 'other\n'
     assert getattr(completed, pipe) == ''
 
@@ -169,11 +170,11 @@ sys.stdout.flush()
     # A run that read one pipe only would stop here
     completed = runner.run([command], timeout=60, lines=take, out=take_out)
     assert completed.exit_code == 0
-    assert out == [f'o{n:04d}' + 'o' * 400 for n in range(1, 2000, 2)]
+    assert out == [f'o{n:04d}' + 'o' * 400 + '\n' for n in range(1, 2000, 2)]
     assert completed.stdout == ''.join(
         f'o{n:04d}' + 'o' * 400 + '\n' for n in range(0, 2000, 2)
     )
-    assert taken == [f'e{n}' for n in range(0, 2000, 2)]
+    assert taken == [f'e{n}\n' for n in range(0, 2000, 2)]
     assert completed.stderr == ''.join(f'e{n}\n' for n in range(1, 2000, 2))
 
 
@@ -293,7 +294,7 @@ time.sleep(600)
     canceled: list[float] = []
 
     def take(line: str) -> bool:
-        if line == 'ready':
+        if line == 'ready\n':
             feedback.cancel()
             canceled.append(time.monotonic())
         return True
@@ -331,7 +332,7 @@ time.sleep(600)
     canceled: list[float] = []
 
     def take(line: str) -> bool:
-        if line == 'ready':
+        if line == 'ready\n':
             feedback.cancel()
             canceled.append(time.monotonic())
         return True
@@ -1049,7 +1050,7 @@ def test_the_report_is_read_on_windows(
         return False
 
     completed = runner.run(['tc.exe'], QgsProcessingFeedback(), out=take)
-    assert told == ['{"rule": 1}', '{"rule": 2}']
+    assert told == ['{"rule": 1}\r\n', '{"rule": 2}\r\n']
     assert completed == runner.Completed(0, 'something else\r\n', 'reading\r\n')
     (call,) = calls
     assert call['creationflags'] == CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP
