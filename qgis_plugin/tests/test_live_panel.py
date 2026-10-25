@@ -47,6 +47,7 @@ from .helpers import (
     error_layers,
     line_layer,
     message_text,
+    point_layer,
     polygon_layer,
     process_alive,
     rows_match_layers,
@@ -1387,15 +1388,42 @@ def test_a_rule_of_thousands_of_errors_does_not_hold_up_the_panel(
 
 @dataclasses.dataclass
 class Shown:
-    """All that the panel shows at the end of a run, and the errors it
-    holds, each with its error layer, id and fingerprint."""
+    """All that the panel shows at the end of a run, the error that each
+    error of the tree opens, and the errors it holds: those of each group in
+    their order, and each with its error layer, id and fingerprint."""
 
     view: Seen
     message: str
     invalid: dict[str, int]
     current: int
+    opened: list[tuple[str, str, int]]
+    ordered: dict[str, list[tuple[str, int]]]
     rows: list[tuple[object, ...]]
     subsets: dict[str, str]
+
+
+def opened(dock: Dock) -> list[tuple[str, str, int]]:
+    """The error that each error of the tree opens, in the order of the
+    tree: its group, its error layer and its id there."""
+    model = dock.results.model
+    found: list[tuple[str, str, int]] = []
+    for row in range(model.rowCount()):
+        group = not_none(model.item(row))
+        for k in range(group.rowCount()):
+            kind = not_none(group.child(k))
+            for i in range(kind.rowCount()):
+                error = t.cast(Row, not_none(kind.child(i)).data(ROLE))
+                found.append((error.key, error.family, error.error_fid))
+    return found
+
+
+def ordered(dock: Dock) -> dict[str, list[tuple[str, int]]]:
+    """The errors that the panel holds of each group, in their order: their
+    error layers and ids."""
+    found: dict[str, list[tuple[str, int]]] = {}
+    for row in dock.results.rows:
+        found.setdefault(row.key, []).append((row.family, row.error_fid))
+    return found
 
 
 def shown_now(dock: Dock, bar: t.Any) -> Shown:
@@ -1404,6 +1432,8 @@ def shown_now(dock: Dock, bar: t.Any) -> Shown:
         last_message(bar),
         dict(dock.rule_list.invalid),
         dock.tabs.currentIndex(),
+        opened(dock),
+        ordered(dock),
         sorted(map(dataclasses.astuple, dock.results.rows), key=repr),
         {layer.name(): layer.subsetString() for layer in error_layers()},
     )
@@ -1436,6 +1466,41 @@ def one_rule(dock: Dock) -> None:
     add(dock, DANGLES, roads())
 
 
+def mixed_families(dock: Dock) -> None:
+    """Rules whose errors are of all three families. A rule finds them in
+    another order than that of the layers of errors: one road meets a
+    parcel along a line and the next parcel at a point, in that order."""
+    lines = project_layer(
+        line_layer(
+            # An overlap, then a crossing
+            'LINESTRING(0 30, 10 30)',
+            'LINESTRING(2 30, 8 30)',
+            'LINESTRING(20 25, 20 35)',
+            'LINESTRING(15 30, 25 30)',
+            # Through the first parcel, to a corner of the second
+            'LINESTRING(15 5, 25 5, 30 10)',
+            'LINESTRING(12 2, 18 8)',
+            name='roads',
+        )
+    )
+    polygons = project_layer(
+        polygon_layer(
+            'POLYGON((10 0, 20 0, 20 10, 10 10, 10 0))',
+            'POLYGON((30 0, 40 0, 40 10, 30 10, 30 0))',
+            'POLYGON((60 0, 70 0, 70 10, 60 10, 60 0))',
+            name='parcels',
+        )
+    )
+    points = project_layer(
+        point_layer(
+            'POINT(35 5)', 'POINT(36 5)', 'POINT(100 100)', name='wells'
+        )
+    )
+    add(dock, 'polygon/must-contain-one-point', polygons, points)
+    add(dock, INTERSECTS, lines)
+    add(dock, 'line/must-not-intersect-polygons', lines, polygons)
+
+
 def selected_only(dock: Dock) -> None:
     lines, _ = add_rules(dock)
     lines.selectByIds([1, 4])
@@ -1448,6 +1513,7 @@ RUNS: dict[str, c.Callable[[Dock], object]] = {
     'invalid': rules_with_invalid,
     'no-errors': rules_without_errors,
     'one-rule': one_rule,
+    'mixed-families': mixed_families,
     'selected-only': selected_only,
 }
 
