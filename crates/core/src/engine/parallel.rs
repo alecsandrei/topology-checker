@@ -687,6 +687,51 @@ mod tests {
     }
 
     #[test]
+    fn steps_use_the_threads_of_their_pool_or_task() {
+        let global = rayon::current_num_threads();
+        let threads = |work| (Workers::new(work).threads(), Workers::all().threads());
+        for size in [2, global + 3] {
+            let pool = rayon::ThreadPoolBuilder::new()
+                .num_threads(size)
+                .build()
+                .expect("pool");
+            assert_eq!(pool.install(|| threads(INLINE)), (size, size));
+            // A task's limit holds whatever its pool, and shared caches use their own.
+            let found =
+                pool.install(|| task(3, 5, || (threads(INLINE), shared(|| threads(INLINE)))));
+            assert_eq!(found, ((3, 3), (5, 5)), "{size}");
+        }
+        let plain = std::thread::spawn(move || threads(INLINE)).join().unwrap();
+        assert_eq!(plain, (global, global));
+    }
+
+    #[test]
+    fn helpers_of_a_task_step_keep_its_shared_threads() {
+        // Each helper takes one of the tasks, as they wait for each other.
+        let all = std::sync::Barrier::new(3);
+        let found = task(3, 5, || {
+            Workers::with_threads(3).run(3, |_| {
+                all.wait();
+                (
+                    std::thread::current().id(),
+                    local(),
+                    Workers::all().threads(),
+                    shared(|| Workers::all().threads()),
+                )
+            })
+        });
+        let ids = found
+            .iter()
+            .map(|f| f.0)
+            .collect::<std::collections::HashSet<_>>();
+        assert_eq!(ids.len(), 3);
+        assert!(
+            found.iter().all(|f| (f.1, f.2, f.3) == (true, 1, 5)),
+            "{found:?}"
+        );
+    }
+
+    #[test]
     fn long_steps_stop_at_their_checkpoints() {
         let v = (0..1_u64 << 16)
             .map(|i| i.wrapping_mul(0x9e37_79b9_7f4a_7c15))
