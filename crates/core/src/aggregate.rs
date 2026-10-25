@@ -1,5 +1,5 @@
 //! Merge part-level violations into one violation per rule, kind and feature pair.
-use crate::{FeatureRef, LayerId, Rule, Violation, ViolationKind, engine::parallel::Workers};
+use crate::{FeatureRef, Violation, engine::parallel::Workers};
 use geo::{
     Geometry, GeometryCollection, LineString, MultiLineString, MultiPoint, MultiPolygon, Point,
     Polygon,
@@ -134,59 +134,48 @@ impl Collected {
 /// Groups are found by sorting, without an allocation each, so a cancelled
 /// aggregation frees little, and merge on several threads.
 pub(crate) fn aggregate(violations: Vec<Violation>, merge: Merge) -> Vec<Violation> {
-    type Key = (
-        Rule,
-        ViolationKind,
-        Option<(LayerId, i64)>,
-        Option<(LayerId, i64)>,
-    );
     let len = violations.len();
     let workers = Workers::new(len);
-    // Positions break ties, so each group keeps the order of its violations.
-    let mut order: Vec<(Key, usize)> = Vec::with_capacity(len);
+    let mut order = Vec::with_capacity(len);
     let mut slots = Vec::with_capacity(len);
     for (i, v) in violations.into_iter().enumerate() {
         crate::cancel::every(i, "aggregate");
-        let key = (
-            v.rule,
-            v.kind,
-            v.origin.map(FeatureRef::feature),
-            v.destination.map(FeatureRef::feature),
-        );
-        order.push((key, i));
+        order.push(place(&v, i));
         slots.push(Some(v));
     }
     workers.sort(&mut order, "aggregate.sort", Ord::cmp);
-    // Whole groups for each task: their keys, the number of groups before them and
-    // their violations in order.
+    let same = |a: &Place, b: &Place| a[..GROUP] == b[..GROUP];
+    // Whole groups for each task: their places, the number of groups before them
+    // and their violations in order.
     let mut tasks = Vec::new();
     let (mut start, mut groups) = (0, 0);
     for range in workers.ranges(len) {
         let mut end = range.end.max(start);
-        while end < len && order[end].0 == order[end - 1].0 {
+        while end < len && same(&order[end], &order[end - 1]) {
             end += 1;
         }
         if end == start {
             continue;
         }
-        let mut members = Vec::with_capacity(end - start);
-        for k in start..end {
-            crate::cancel::every(k, "aggregate.gather");
-            members.push(slots[order[k].1].take().expect("one group per violation"));
+        let places = &order[start..end];
+        let mut members = Vec::with_capacity(places.len());
+        for (k, place) in places.iter().enumerate() {
+            crate::cancel::every(start + k, "aggregate.gather");
+            let at = usize::try_from(place[GROUP]).expect("a position");
+            members.push(slots[at].take().expect("one group per violation"));
         }
-        let keys = &order[start..end];
-        tasks.push((keys, groups, members));
-        groups += 1 + keys.windows(2).filter(|w| w[0].0 != w[1].0).count();
+        tasks.push((places, groups, members));
+        groups += 1 + places.windows(2).filter(|w| !same(&w[0], &w[1])).count();
         start = end;
     }
     drop(slots);
-    let merged = workers.each(tasks, |(keys, before, members)| {
+    let merged = workers.each(tasks, |(places, before, members)| {
         let mut members = members.into_iter();
         let mut out = Vec::new();
         let mut k = 0;
-        while k < keys.len() {
+        while k < places.len() {
             crate::cancel::every(before + out.len(), "aggregate.merge");
-            let size = keys[k..].partition_point(|other| other.0 == keys[k].0);
+            let size = places[k..].partition_point(|other| same(other, &places[k]));
             out.push(merged(members.by_ref().take(size), merge));
             k += size;
         }
@@ -199,6 +188,24 @@ pub(crate) fn aggregate(violations: Vec<Violation>, merge: Merge) -> Vec<Violati
     }
     out
 }
+
+/// Words of a violation's group, then its position, which sort as the rule, kind,
+/// origin and destination features, then the order of the violations.
+type Place = [u64; GROUP + 1];
+/// Words of the group in a [`Place`].
+const GROUP: usize = 5;
+fn place(v: &Violation, position: usize) -> Place {
+    // Layers count from one, so a missing feature sorts first.
+    let feature = |f: Option<FeatureRef>| {
+        f.map_or([0, 0], |f| {
+            [f.layer.0 as u64 + 1, f.fid.cast_unsigned() ^ (1 << 63)]
+        })
+    };
+    let ([a, b], [c, d]) = (feature(v.origin), feature(v.destination));
+    let kind = (v.rule as u64) << 32 | v.kind as u64;
+    [kind, a, b, c, d, position as u64]
+}
+
 /// One violation for a nonempty group sharing a key, in group order.
 fn merged(mut group: impl Iterator<Item = Violation>, merge: Merge) -> Violation {
     let mut first = group.next().expect("aggregation groups are nonempty");
@@ -222,6 +229,7 @@ fn merged(mut group: impl Iterator<Item = Violation>, merge: Merge) -> Violation
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{LayerId, Rule, ViolationKind};
     use geo::{Rect, coord};
 
     fn violation(geometry: Geometry, part: u32) -> Violation {
@@ -329,14 +337,18 @@ mod tests {
         assert_eq!(single, Geometry::LineString(line.into()));
     }
 
-    /// Violations of a few rules and feature pairs, with points and lines.
+    /// Violations of a few rules and feature pairs, with points, lines and polygons,
+    /// which merge in input order.
     fn many(n: usize, features: usize) -> Vec<Violation> {
         (0..n)
             .map(|i| {
                 let x = (i * 7 % 13) as f64;
-                let geometry = match i % 3 {
+                let geometry = match i % 4 {
                     0 => Point::new(x, 0.).into(),
                     1 => LineString::from(vec![(x, 0.), (x + 1., 1.)]).into(),
+                    2 => Rect::new(coord! {x: x, y: 0.}, coord! {x: x + 1., y: i as f64 + 1.})
+                        .to_polygon()
+                        .into(),
                     _ => Point::new(x, 1.).into(),
                 };
                 let feature = |layer, fid: usize| FeatureRef {
