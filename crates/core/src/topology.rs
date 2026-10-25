@@ -9,10 +9,10 @@ use serde::Serialize;
 use std::{
     collections::BTreeMap,
     fmt,
-    sync::{Arc, Mutex},
+    sync::{Arc, RwLock},
 };
 type GraphSlot = Arc<Cache<Result<Arc<LineGraph>, Error>>>;
-type GraphCache = Arc<Mutex<BTreeMap<Vec<(LayerId, InputMode)>, GraphSlot>>>;
+type GraphCache = Arc<RwLock<BTreeMap<Vec<(LayerId, InputMode)>, GraphSlot>>>;
 
 fn violations_only<E>(
     mut sink: impl FnMut(RuleSpec, Violation) -> Result<(), E>,
@@ -168,7 +168,7 @@ impl Topology {
             selection: None,
             layers: Vec::new(),
             specs: Vec::new(),
-            graphs: Arc::new(Mutex::new(BTreeMap::new())),
+            graphs: Arc::new(RwLock::new(BTreeMap::new())),
             local: crate::engine::parallel::local(),
         })
     }
@@ -259,13 +259,23 @@ impl Topology {
         layers.dedup();
         // A poisoned map still contains valid Arc/Cache entries: initialization
         // happens outside this lock, and no partially built graph is stored in it.
-        let slot = Arc::clone(
-            self.graphs
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .entry(layers.clone())
-                .or_insert_with(|| Arc::new(Cache::owned(self.local))),
-        );
+        // Features checked on several threads look their graph up at once, so a
+        // found one only takes the lock to read.
+        let found = self
+            .graphs
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get(&layers)
+            .map(Arc::clone);
+        let slot = found.unwrap_or_else(|| {
+            Arc::clone(
+                self.graphs
+                    .write()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .entry(layers.clone())
+                    .or_insert_with(|| Arc::new(Cache::owned(self.local))),
+            )
+        });
         slot.get_or_init(|| {
             let mut full = self.snapshot();
             full.selection = None;

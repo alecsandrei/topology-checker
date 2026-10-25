@@ -193,6 +193,14 @@ pub(crate) fn run_into<E>(
 /// for a whole batch, so batches stay small enough to stream early and to bound the
 /// violations held at once, and large enough to balance uneven features.
 const FEATURES_PER_THREAD: usize = 8;
+/// Most features per thread in a batch of [`per_feature_into`] that grew after
+/// [quick](QUICK_PER_HELPER) ones.
+const MOST_PER_THREAD: usize = 256;
+/// A parallel batch of [`per_feature_into`] that takes less than this per helper
+/// thread doubles the features per thread of the next one, so that starting its
+/// helpers, some 20 µs each, stays a small part of it. One that takes four times as
+/// long starts over.
+const QUICK_PER_HELPER: Duration = Duration::from_micros(500);
 /// A batch of [`per_feature_into`] that takes at least this long hands the next one to
 /// a thread apart from the calling thread, which holds the caches the first feature
 /// built. The scratch of slow features is faster to reach there, which outweighs the
@@ -373,39 +381,40 @@ fn per_feature_into<E>(
     let all = Workers::all().threads();
     #[cfg(test)]
     let all = tests::threads().unwrap_or(all).max(1);
-    let feature = |fid: i64, threads: usize| {
+    let feature = |snapshot: &mut Topology, fid: i64, threads: usize| {
         // The selection checks this topology's token on whichever thread runs it.
         t.cancellable(|| {
             parallel::task(threads, all, || {
                 #[cfg(test)]
                 tests::visit(t, spec, fid)?;
-                let mut snapshot = t.snapshot();
                 snapshot.select_feature(spec.layer, fid)?;
-                let mut violations = run(&snapshot, spec)?;
+                let mut violations = run(snapshot, spec)?;
                 sort(&mut violations);
                 Ok::<_, Error>(violations)
             })
         })
     };
+    // A snapshot per thread, as cheap features slow down sharing its making.
     let batch = |(fids, threads, steps): (&[i64], usize, usize)| {
-        Workers::with_threads(threads).run(fids.len(), |i| feature(fids[i], steps))
+        Workers::with_threads(threads).run_with(
+            fids.len(),
+            || t.snapshot(),
+            |snapshot, i| feature(snapshot, fids[i], steps),
+        )
     };
     #[cfg(not(test))]
-    let slow = SLOW_BATCH;
+    let (slow, quick) = (SLOW_BATCH, QUICK_PER_HELPER);
     #[cfg(test)]
-    let slow = tests::slow_batch();
+    let (slow, quick) = (tests::slow_batch(), tests::quick_per_helper());
     parallel::apart(batch, |apart| {
         let mut rest = &fids[..];
         let (mut first, mut after_slow) = (true, false);
+        let mut grown = per_thread.max(1);
         while !rest.is_empty() {
             crate::cancel::check();
             let helpers = Helpers::take(all - 1);
             let threads = 1 + helpers.threads;
-            let size = if first {
-                1
-            } else {
-                threads * per_thread.max(1)
-            };
+            let size = if first { 1 } else { threads * grown };
             let (fids, tail) = rest.split_at(size.min(rest.len()));
             // Fewer features than threads split their own steps over the rest.
             let steps = (threads / fids.len()).max(1);
@@ -415,7 +424,12 @@ fn per_feature_into<E>(
             } else {
                 batch((fids, threads, steps))
             };
-            after_slow = started.elapsed() >= slow;
+            let took = started.elapsed();
+            after_slow = took >= slow;
+            if !first && helpers.threads > 0 {
+                let helpers = u32::try_from(helpers.threads).unwrap_or(u32::MAX);
+                grown = grow(grown, per_thread, took, quick.saturating_mul(helpers));
+            }
             (rest, first) = (tail, false);
             drop(helpers);
             for violations in results {
@@ -432,6 +446,19 @@ fn per_feature_into<E>(
         Ok::<_, crate::SinkError<E>>(())
     })?;
     later.into_iter().flatten().try_for_each(|v| send(v, sink))
+}
+/// Features per thread for the batch after one of `per` that took `took`: twice as
+/// many after one [quicker](QUICK_PER_HELPER) than `quick`, and `least` again after
+/// one four times as slow.
+fn grow(per: usize, least: usize, took: Duration, quick: Duration) -> usize {
+    let least = least.max(1);
+    if took < quick {
+        per.saturating_mul(2).min(MOST_PER_THREAD.max(least))
+    } else if took >= quick.saturating_mul(4) {
+        least
+    } else {
+        per
+    }
 }
 fn emit<E>(
     mut violations: Vec<Violation>,
@@ -551,6 +578,23 @@ mod tests {
             }
         }
         let _restore = Restore(SLOW.with(|c| c.replace(slow)));
+        f()
+    }
+    thread_local! { static QUICK: Cell<Duration> = const { Cell::new(Duration::ZERO) }; }
+    /// How long a parallel batch started on this thread may take per helper to grow
+    /// the next. None does in tests, so batches keep their size.
+    pub(super) fn quick_per_helper() -> Duration {
+        QUICK.with(Cell::get)
+    }
+    /// Run `f` with parallel batches quick below `quick` per helper.
+    fn with_quick_per_helper<T>(quick: Duration, f: impl FnOnce() -> T) -> T {
+        struct Restore(Duration);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                QUICK.with(|c| c.set(self.0));
+            }
+        }
+        let _restore = Restore(QUICK.with(|c| c.replace(quick)));
         f()
     }
 
@@ -1830,6 +1874,65 @@ mod tests {
             (9..17).collect::<Vec<_>>()
         );
         assert!(apart.iter().all(|&&(_, thread)| thread == apart[0].1));
+    }
+
+    #[test]
+    fn parallel_batches_grow_while_they_are_quick() {
+        let mut t = Topology::new(0.).unwrap();
+        // Pairs of overlapping lines, the first of which reports their overlap.
+        let lines = (0..40).map(|fid| {
+            let x = (fid / 2 * 5 + fid % 2) as f64;
+            (fid, LineString::from(vec![(x, 0.), (x + 2., 0.)]).into())
+        });
+        let layer = t.add_layer(Layer::from_features("grow", lines));
+        let spec = t.add_rule(Rule::LineMustNotOverlap, layer, None).unwrap();
+        let expected = reference(&t, spec).unwrap();
+        // Features run before each violation is emitted, which ends a batch.
+        let ends = |quick: Duration| {
+            let visits = Arc::new(Mutex::new(Vec::new()));
+            let name = on(&t, spec, 0, Action::Thread(Arc::clone(&visits)));
+            for fid in 1..40 {
+                on(&t, spec, fid, Action::Thread(Arc::clone(&visits)));
+            }
+            let (mut out, mut ends) = (Vec::new(), Vec::new());
+            let result = with_threads(2, || {
+                with_quick_per_helper(quick, || {
+                    per_feature_into(&t, spec, 1, &mut |v| {
+                        out.push(v);
+                        ends.push(visits.lock().unwrap_or_else(PoisonError::into_inner).len());
+                        Ok::<_, Infallible>(())
+                    })
+                })
+            });
+            clear(&name);
+            result.unwrap();
+            assert_eq!(out, expected);
+            ends.dedup();
+            ends
+        };
+        // Batches of 1, then 1 feature on each of 2 threads: the last, of 39, emits none.
+        let pairs = (1..=39).step_by(2).collect::<Vec<_>>();
+        assert_eq!(ends(Duration::ZERO), pairs);
+        // Batches of 1, then 2, 4, 8, 16 and the 9 features left.
+        assert_eq!(ends(Duration::from_secs(3600)), [1, 3, 7, 15, 31, 40]);
+    }
+
+    #[test]
+    fn quick_batches_grow_to_a_bound_and_slow_ones_start_over() {
+        // What a batch on 8 threads may take to grow.
+        let quick = QUICK_PER_HELPER * 7;
+        let grown =
+            std::iter::successors(Some(8), |&per| Some(grow(per, 8, Duration::ZERO, quick)));
+        assert_eq!(
+            grown.take(8).collect::<Vec<_>>(),
+            [8, 16, 32, 64, 128, 256, 256, 256]
+        );
+        assert_eq!(grow(64, 8, quick, quick), 64);
+        assert_eq!(grow(64, 8, quick * 4 - Duration::from_nanos(1), quick), 64);
+        assert_eq!(grow(64, 8, quick * 4, quick), 8);
+        // Batches asked to be larger than the bound keep their size.
+        assert_eq!(grow(512, 512, Duration::ZERO, quick), 512);
+        assert_eq!(grow(0, 0, quick * 4, quick), 1);
     }
 
     #[test]

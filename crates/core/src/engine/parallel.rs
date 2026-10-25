@@ -217,9 +217,23 @@ impl Workers {
     }
     /// `task(i)` for each `i` in `0..count`, results in order.
     pub(crate) fn run<R: Send>(&self, count: usize, task: impl Fn(usize) -> R + Sync) -> Vec<R> {
+        self.run_with(count, || (), |(), i| task(i))
+    }
+    /// `task(state, i)` for each `i` in `0..count`, results in order, with `state`
+    /// made once on each thread that runs tasks, so small tasks need not each set up
+    /// what they share.
+    pub(crate) fn run_with<S, R: Send>(
+        &self,
+        count: usize,
+        state: impl Fn() -> S + Sync,
+        task: impl Fn(&mut S, usize) -> R + Sync,
+    ) -> Vec<R> {
         let threads = self.threads.min(count);
         if threads <= 1 {
-            return (0..count).map(task).collect();
+            let mut held = None;
+            return (0..count)
+                .map(|i| task(held.get_or_insert_with(&state), i))
+                .collect();
         }
         let next = AtomicUsize::new(0);
         let failed = AtomicBool::new(false);
@@ -229,12 +243,13 @@ impl Workers {
         let work = || {
             with(&CAP, nested, || {
                 panic::catch_unwind(AssertUnwindSafe(|| {
+                    let mut held = None;
                     while !failed.load(atomic::Ordering::Relaxed) {
                         let i = next.fetch_add(1, atomic::Ordering::Relaxed);
                         if i >= count {
                             break;
                         }
-                        let result = task(i);
+                        let result = task(held.get_or_insert_with(&state), i);
                         *results[i].lock().unwrap_or_else(PoisonError::into_inner) = Some(result);
                     }
                 }))
@@ -486,6 +501,51 @@ mod tests {
         v.clear();
         Workers::forced(4, 1, || Workers::new(0)).sort(&mut v, "sort", u64::cmp);
         assert!(v.is_empty());
+    }
+
+    #[test]
+    fn tasks_share_a_state_per_thread() {
+        for threads in [1, 4] {
+            let made = Mutex::new(Vec::new());
+            let state = || {
+                let thread = std::thread::current().id();
+                made.lock().unwrap().push(thread);
+                (thread, 0)
+            };
+            // Each task counts itself in the state of the thread it runs on.
+            let found = Workers::with_threads(threads).run_with(200, state, |state, i| {
+                assert_eq!(state.0, std::thread::current().id());
+                state.1 += 1;
+                (i * 2, state.0, state.1)
+            });
+            assert_eq!(
+                found.iter().map(|f| f.0).collect::<Vec<_>>(),
+                (0..200).map(|i| i * 2).collect::<Vec<_>>()
+            );
+            let made = made.into_inner().unwrap();
+            assert!((1..=threads).contains(&made.len()));
+            let mut ran = 0;
+            for thread in &made {
+                let mut counts = found
+                    .iter()
+                    .filter(|f| f.1 == *thread)
+                    .map(|f| f.2)
+                    .collect::<Vec<_>>();
+                counts.sort_unstable();
+                assert_eq!(counts, (1..=counts.len()).collect::<Vec<_>>());
+                ran += counts.len();
+            }
+            assert_eq!(ran, 200);
+        }
+        // Without tasks, no state is made.
+        let made = AtomicUsize::new(0);
+        let make = || {
+            made.fetch_add(1, atomic::Ordering::Relaxed);
+        };
+        for threads in [1, 4] {
+            Workers::with_threads(threads).run_with(0, make, |(), i| i);
+        }
+        assert_eq!(made.into_inner(), 0);
     }
 
     /// The payload `run` fails with, on a token for its tasks.
