@@ -1,42 +1,20 @@
 from __future__ import annotations
 
+import array
 import collections.abc as c
 import dataclasses
 import hashlib
-import typing as t
-
-from qgis.core import QgsFeature, QgsVectorLayer
+import itertools
+import sys
 
 from ..core.binary import named_with, plain_name, short_name
-from ..core.style import INVALID, Grouping, rule_grouping
-
-# The fields of an error that a row is made from
-COLUMNS = (
-    'rule',
-    'error_type',
-    'origin_layer',
-    'origin_fid',
-    'destination_layer',
-    'destination_fid',
-)
+from ..core.progress import Checked
+from ..core.style import INVALID
 
 
-def field_text(feature: QgsFeature, index: int) -> str:
-    """The text of the field at the index, empty for a null value or for a
-    field that the layer does not have, whose index is -1."""
-    if index < 0:
-        return ''
-    value = feature.attribute(index)
-    return '' if value is None or str(value) == 'NULL' else str(value)
-
-
-def shape_of(feature: QgsFeature) -> str:
-    geometry = feature.geometry()
-    if geometry.isNull():
-        return ''
-    # data() is bytes at run time; some stubs type it as str
-    wkb = t.cast('bytes', geometry.asWkb().data())
-    return hashlib.blake2b(wkb, digest_size=8).hexdigest()
+def wkb_shape(wkb: bytes) -> str:
+    """Tells a geometry, as WKB, from another one; empty for no geometry."""
+    return hashlib.blake2b(wkb, digest_size=8).hexdigest() if wkb else ''
 
 
 def number(text: str) -> int | None:
@@ -64,7 +42,7 @@ def plural(error: str) -> str:
     return text + 's'
 
 
-@dataclasses.dataclass(frozen=True)
+@dataclasses.dataclass(frozen=True, slots=True)
 class Row:
     """An error, as the tree shows it."""
 
@@ -78,8 +56,9 @@ class Row:
     # The names of the layers in the errors, which the run gave
     layer_alias: str
     other_alias: str
-    # Where the error itself is
-    error_layer: str
+    # Where the error itself is: the error layer of its family, such as
+    # 'line', and its id there
+    family: str
     error_fid: int
     # The group of the error, which is the rule of the list that found it
     key: str = ''
@@ -115,37 +94,91 @@ class Row:
         return ' · '.join(parts)
 
 
-def read_rows(
-    layers: c.Iterable[QgsVectorLayer],
-    names: dict[str, str],
-    grouping: Grouping | None = None,
+def value_text(value: object) -> str:
+    """A value of an error as text, empty for none."""
+    return '' if value is None or str(value) == 'NULL' else str(value)
+
+
+def shared(*texts: str) -> tuple[str, ...]:
+    """The texts that many errors have, such as the rule, the kind and the
+    layers, as one string each for all the errors."""
+    return tuple(map(sys.intern, texts))
+
+
+def found_rows(
+    done: Checked, names: c.Mapping[str, str], key: str
 ) -> list[Row]:
-    """The errors of the error layers, with the names of the layers of the
-    project for the aliases of the run."""
-    grouping = grouping or rule_grouping()
+    """The errors of a rule that is done, or the features that were left
+    out of the run, as the tree shows them in the group of the key, with the
+    names of the layers of the project by their ids. Each error has the id
+    that it gets in the layer of its family, after those that the layer has
+    before it."""
     rows: list[Row] = []
-    for layer in layers:
-        # The fields are looked up once for the layer, not for each feature
-        fields = layer.fields()
-        indexes = [fields.indexOf(name) for name in COLUMNS]
-        for feature in t.cast('c.Iterable[QgsFeature]', layer.getFeatures()):
-            rule, error, origin, fid, other, other_fid = (
-                field_text(feature, index) for index in indexes
+    fids = {**done.written}
+    for found in done.errors:
+        (
+            _violation,
+            rule,
+            error,
+            origin,
+            fid,
+            _part,
+            other,
+            other_fid,
+            _other_part,
+        ) = (value_text(value) for value in found.values)
+        rule, error, origin, other = shared(rule, error, origin, other)
+        fids[found.family] = fids.get(found.family, 0) + 1
+        rows.append(
+            Row(
+                rule_name=rule,
+                error=error,
+                layer=names.get(done.layers.get(origin, ''), origin),
+                feature=number(fid),
+                other=names.get(done.layers.get(other, ''), other),
+                other_feature=number(other_fid),
+                layer_alias=origin,
+                other_alias=other,
+                family=found.family,
+                error_fid=fids[found.family],
+                key=key,
+                shape=wkb_shape(found.wkb),
             )
-            rows.append(
-                Row(
-                    rule,
-                    error,
-                    names.get(origin, origin),
-                    number(fid),
-                    names.get(other, other),
-                    number(other_fid),
-                    origin,
-                    other,
-                    layer.id(),
-                    feature.id(),
-                    grouping.key_of(feature),
-                    shape_of(feature),
-                )
-            )
+        )
     return rows
+
+
+@dataclasses.dataclass(frozen=True, slots=True)
+class Shapes:
+    """The geometries of the errors of a rule in the layer of a family, to
+    zoom to while they have no layer: their WKB one after another, in the
+    order of their ids from the first. One string for all of them takes a
+    fraction of the memory of one for each."""
+
+    first: int
+    wkb: bytes
+    # Where the WKB of each error ends
+    ends: array.array[int]
+
+    def of(self, fid: int) -> bytes:
+        """The WKB of the error of the id, empty for an id it has not."""
+        index = fid - self.first
+        if not 0 <= index < len(self.ends):
+            return b''
+        start = self.ends[index - 1] if index else 0
+        return self.wkb[start : self.ends[index]]
+
+
+def found_shapes(done: Checked) -> dict[str, Shapes]:
+    """The geometries of the errors of a rule that is done, by family."""
+    found: dict[str, list[bytes]] = {}
+    for item in done.errors:
+        found.setdefault(item.family, []).append(item.wkb)
+    return {
+        family: Shapes(
+            done.written.get(family, 0) + 1,
+            b''.join(wkbs),
+            array.array('Q', itertools.accumulate(map(len, wkbs))),
+        )
+        for family, wkbs in found.items()
+    }

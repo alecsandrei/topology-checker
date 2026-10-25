@@ -25,6 +25,8 @@ ICONS = {
     'help': ('mActionHelpContents', QStyle.StandardPixmap.SP_DialogHelpButton),
     'menu': ('mActionOptions', QStyle.StandardPixmap.SP_TitleBarMenuButton),
     'close': ('mIconClose', QStyle.StandardPixmap.SP_TitleBarCloseButton),
+    # The rule that a run checks now
+    'running': ('mTaskRunning', QStyle.StandardPixmap.SP_BrowserReload),
 }
 
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import functools
 import json
 import os
 import shutil
@@ -116,12 +117,15 @@ def without_noun(name: str, full: str) -> str:
     return rest[:1].upper() + rest[1:]
 
 
+# Each error of a run is shown under the name of its rule
+@functools.cache
 def short_name(name: str) -> str:
     """'line/must-not-have-dangles' as 'Must not have dangles', for where
     the geometry is already on the screen."""
     return without_noun(name, display_name(name))
 
 
+@functools.cache
 def plain_name(name: str) -> str:
     """The short name with the words of the rule as they are, so that a rule
     that takes a second layer ends in 'with', for the name of that layer to

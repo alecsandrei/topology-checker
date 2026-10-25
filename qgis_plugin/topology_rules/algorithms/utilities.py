@@ -19,7 +19,7 @@ from qgis.core import (
 
 from .._typing import Parameters
 from ..core import engine
-from ..core.checks import UNREADABLE
+from ..core.checks import UNREADABLE_GEOMETRY
 from ..core.commands import utility_command
 from ..core.inputs import Skipped, prepare
 from ..core.layers import Input, require_kind
@@ -194,7 +194,7 @@ class UtilityAlgorithm(Planned):
         if (
             completed.exit_code != 0
             and found.ids is None
-            and UNREADABLE.search(error_message(completed))
+            and UNREADABLE_GEOMETRY.search(error_message(completed))
         ):
             # The tool cannot read the file as it is: the export leaves out
             # what it would reject

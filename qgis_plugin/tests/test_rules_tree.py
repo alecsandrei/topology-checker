@@ -9,7 +9,8 @@ from pathlib import Path
 import pytest
 from qgis.core import QgsProject, QgsVectorLayer
 from qgis.PyQt.QtCore import QPoint, QRect, Qt
-from qgis.PyQt.QtWidgets import QApplication, QTreeWidget
+from qgis.PyQt.QtGui import QFont, QFontMetrics
+from qgis.PyQt.QtWidgets import QApplication, QStyle, QTreeWidget
 
 from topology_rules.panel.dock import Dock
 
@@ -33,6 +34,13 @@ DANGLES = 'line/must-not-have-dangles'
 OVERLAPS = 'line/must-not-overlap'
 COVERED = 'point/must-be-covered-by-lines'
 CHAIN = ('LINESTRING(0 0, 10 0)', 'LINESTRING(10 0, 20 0)')
+# Ints in Qt5 and flags in Qt6
+RIGHT = getattr(
+    Qt.AlignmentFlag.AlignRight, 'value', Qt.AlignmentFlag.AlignRight
+)
+MIDDLE = getattr(
+    Qt.AlignmentFlag.AlignVCenter, 'value', Qt.AlignmentFlag.AlignVCenter
+)
 
 
 def lines(tmp_path: Path, name: str = 'roads') -> QgsVectorLayer:
@@ -285,3 +293,34 @@ def test_the_second_column_is_narrow(dock: Dock, tmp_path: Path):
     add(dock, DANGLES, lines(tmp_path))
     click_run(dock)
     assert dock.rules_tree.columnWidth(1) <= 60
+
+
+@pytest.mark.usefixtures('real_font')
+def test_a_count_is_on_the_line_of_its_rule_and_clear_of_it(
+    dock: Dock, tmp_path: Path
+):
+    """At the right of its cell and in the middle of the line, as the name
+    of the rule is, and within the cell however many digits it has."""
+    shown_dock(dock)
+    roads = lines(tmp_path)
+    add(dock, DANGLES, roads)
+    add(dock, OVERLAPS, roads)
+    click_run(dock)
+    entry = dock.entries[1]
+    entry.errors = 123456
+    dock.rule_list.set_count(entry)
+    QApplication.processEvents()
+    assert '123456' in queue_column(dock, 3)
+    tree = dock.rules_tree
+    margin = (
+        tree.style().pixelMetric(QStyle.PixelMetric.PM_FocusFrameHMargin) + 1
+    )
+    font = QFont(tree.font())
+    font.setBold(True)
+    metrics = QFontMetrics(font)
+    for item in rule_items(dock):
+        alignment = int(item.textAlignment(1))
+        assert alignment & RIGHT
+        assert alignment & MIDDLE
+        width = tree.visualRect(tree.indexFromItem(item, 1)).width()
+        assert metrics.horizontalAdvance(item.text(1)) + 2 * margin <= width

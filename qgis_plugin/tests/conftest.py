@@ -23,7 +23,7 @@ from qgis.PyQt.QtCore import QCoreApplication, QSettings, QTranslator
 from qgis.PyQt.QtGui import QFontDatabase, QFontInfo
 from qgis.PyQt.QtWidgets import QApplication, QMainWindow
 
-from topology_rules.core import binary, engine, install
+from topology_rules.core import binary, commands, engine, install
 from topology_rules.core.engine import Engine, Package
 from topology_rules.enums import Setting
 from topology_rules.exceptions import ExecutableError
@@ -35,6 +35,7 @@ from topology_rules.utils import not_none
 from .helpers import (
     isolate_network_cache,
     real_executable,
+    real_streams,
     usable_package,
     wait_for,
 )
@@ -166,6 +167,18 @@ def forget_tools() -> None:
         probe.done.update(rules)
         probe.readable.update(formats)
         probe.versions.update(versions)
+
+
+@pytest.fixture(autouse=True)
+def streams_known(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Whether the real tool streams its report is known before each test,
+    as after its first run, and what a fake tool did is forgotten. The tests
+    of a tool that is asked afresh forget it all."""
+    known: set[tuple[str, int]] = set()
+    real = real_executable()
+    if real is not None and not real_streams():
+        known.add((real, commands.modified(real)))
+    monkeypatch.setattr(commands, 'WITHOUT_STREAM', known)
 
 
 @pytest.fixture(scope='session')

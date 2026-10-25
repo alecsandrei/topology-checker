@@ -47,23 +47,26 @@ def add_errors(
     path: Path,
     legends: c.Mapping[ColourBy, Legend],
     crs: QgsCoordinateReferenceSystem,
-) -> list[QgsVectorLayer]:
+) -> dict[str, QgsVectorLayer]:
     """Adds the error layers of a run that have errors, in a group on top,
-    drawn by the groups of the run. They are in the CRS of the run, which the
-    executable may write to the file as another one."""
+    drawn by the groups of the run, by family. They are in the CRS of the
+    run, which the executable may write to the file as another one. Each
+    error keeps the id that it has in the file."""
     project = not_none(QgsProject.instance())
     group = not_none(
         not_none(project.layerTreeRoot()).insertGroup(0, group_name())
     )
     group.setCustomProperty(PROPERTY, True)
-    layers: list[QgsVectorLayer] = []
+    layers: dict[str, QgsVectorLayer] = {}
     for name in ERROR_LAYERS:
         kind = name.removeprefix('errors_')
         found = QgsVectorLayer(f'{path}|layername={name}', name, 'ogr')
         if not found.isValid() or found.featureCount() == 0:
             continue
         # A copy in memory, which the map can filter and count, and which
-        # does not point into a folder that Processing empties
+        # does not point into a folder that Processing empties. The features
+        # keep their ids: the file numbers them from 1 as they are written,
+        # and the copy as it reads them, in that order
         layer = not_none(found.materialize(QgsFeatureRequest()))
         if crs.isValid():
             layer.setCrs(crs)
@@ -72,7 +75,7 @@ def add_errors(
         style_layer(layer, legends)
         project.addMapLayer(layer, False)
         group.addLayer(layer)
-        layers.append(layer)
+        layers[kind] = layer
     if not layers:
         parent = group.parent()
         if isinstance(parent, QgsLayerTreeGroup):

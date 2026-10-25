@@ -211,7 +211,6 @@ class RuleAlgorithm(SinkAlgorithm):
                     context,
                     outcome.crs,
                     source,
-                    outcome.ids,
                     outcome.invalid,
                     self.rule.display_name,
                 )

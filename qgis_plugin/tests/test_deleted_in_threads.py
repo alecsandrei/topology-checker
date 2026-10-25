@@ -35,10 +35,12 @@ from qgis.PyQt import sip
 from qgis.PyQt.QtCore import QCoreApplication
 
 from topology_rules.core import package
-from topology_rules.core.checks import renumber_errors
+from topology_rules.core.checks import Outcome
+from topology_rules.core.errors import ErrorsFile, add_invalid
 from topology_rules.core.inputs import chosen, prepare
-from topology_rules.core.invalid import Invalid, append_invalid, error_fields
+from topology_rules.core.invalid import Invalid, error_fields
 from topology_rules.core.layers import Input
+from topology_rules.core.progress import Found
 
 from .helpers import saved_layer
 from .test_sources import CHAIN, FAR, fail_to_open, rewrites_open_files
@@ -192,14 +194,24 @@ def origin_ids(path: str | Path, kind: str) -> list[int]:
     return sorted(error['origin_fid'] for error in errors.getFeatures())
 
 
-def test_renumbering_the_errors(tmp_path: Path, worker: Worker):
-    first = tmp_path / 'errors.gpkg'
-    worker.source = errors_file(first, 'point', 'MULTIPOINT((0 0))')
+def test_writing_the_errors(tmp_path: Path, worker: Worker):
+    worker.source = errors_file(
+        tmp_path / 'errors.gpkg', 'point', 'MULTIPOINT((0 0))'
+    )
     for index in range(ROUNDS):
-        path = shutil.copy(first, tmp_path / f'errors{index}.gpkg')
-        worker.after(
-            functools.partial(renumber_errors, str(path), {'lines': (7,)})
-        )
+        path = tmp_path / f'errors{index}.gpkg'
+        values = (0, 'rule', 'dangle', 'lines', 7, 0, None, None, None)
+        point = QgsGeometry.fromWkt('MULTIPOINT((0 0))')
+        found = Found('point', bytes(point.asWkb()), values)
+
+        def write(path: Path = path, found: Found = found) -> None:
+            ErrorsFile(
+                str(path),
+                QgsCoordinateReferenceSystem('EPSG:3857'),
+                QgsProcessingContext(),
+            ).add([found])
+
+        worker.after(write)
         assert origin_ids(path, 'point') == [7]
     assert worker.deleted() == 0
 
@@ -210,16 +222,24 @@ def test_adding_the_invalid_features(tmp_path: Path, worker: Worker):
         first, 'polygon', 'MULTIPOLYGON(((0 0, 1 0, 0 1, 0 0)))'
     )
     bow = QgsGeometry.fromWkt('POLYGON((0 0, 1 1, 1 0, 0 1, 0 0))')
-    invalid = [Invalid('polygons', 4, bow, 'invalid polygon')]
+    # After the error of a rule, which the file has
+    outcome = Outcome(
+        [1],
+        {'polygons': 'polygons'},
+        [Invalid('polygons', 4, bow, 'invalid polygon')],
+        QgsCoordinateReferenceSystem('EPSG:3857'),
+        {'polygon': 1},
+    )
     for index in range(ROUNDS):
         path = shutil.copy(first, tmp_path / f'errors{index}.gpkg')
         worker.after(
             functools.partial(
-                append_invalid,
+                add_invalid,
                 str(path),
-                invalid,
-                QgsCoordinateReferenceSystem('EPSG:3857'),
+                outcome,
+                1,
                 QgsProcessingContext(),
+                QgsProcessingFeedback(),
             )
         )
         assert origin_ids(path, 'polygon') == [1, 4]

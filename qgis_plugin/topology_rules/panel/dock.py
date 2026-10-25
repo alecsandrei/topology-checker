@@ -45,6 +45,7 @@ from .offer import stop_offering
 from .results import ResultsPanel
 from .rules_page import RulesPage
 from .setup import SetupPage
+from .stage import StageLabel
 from .state import ProjectState
 from .tolerance import show_unit
 
@@ -122,9 +123,14 @@ class Dock(QgsDockWidget):
         )
         self.menu_button.setMenu(self.menu)
         self.style_menu = self.menu.style_menu
+        # The rules that are done, as the stage counts them
         self.progress = QProgressBar()
         self.progress.setRange(0, 0)
+        self.progress.setTextVisible(False)
         self.progress.hide()
+        # What the run does now
+        self.stage = StageLabel()
+        self.stage.hide()
 
         self.tabs = QTabWidget()
         shrink_tabs(self.tabs)
@@ -135,6 +141,7 @@ class Dock(QgsDockWidget):
         layout.setContentsMargins(0, 2, 0, 2)
         layout.addWidget(self.setup_page)
         layout.addWidget(self.tabs, 1)
+        layout.addWidget(self.stage)
         layout.addWidget(self.progress)
         bottom = QHBoxLayout()
         bottom.addWidget(self.run_button, 1)
@@ -388,7 +395,7 @@ class Dock(QgsDockWidget):
 
     def dispose(self) -> None:
         """Stops a run and lets go of the project, before the panel goes."""
-        controller.abandon(self)
+        controller.stop(self)
         project = not_none(QgsProject.instance())
         for signal, slot in (
             (project.layersRemoved, self.layers_removed),

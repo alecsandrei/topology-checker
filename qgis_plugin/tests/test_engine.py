@@ -106,7 +106,7 @@ def package_module(violation: type) -> types.ModuleType:
     class Topology:
         def add_layer(self) -> None: ...
         def add_rule(self) -> None: ...
-        def iter_validate(self) -> None: ...
+        def iter_reports(self) -> None: ...
 
     module = types.ModuleType(engine.MODULE)
     module.__file__ = str(Path('somewhere', engine.MODULE, '__init__.py'))
@@ -218,6 +218,33 @@ def test_a_package_that_gives_no_wkb_of_the_errors_is_too_old(
     monkeypatch.setitem(sys.modules, engine.MODULE, package_module(Violation))
     with pytest.raises(PackageError, match=r'too old .* no Violation\.wkb'):
         engine.find_package()
+
+
+def test_a_package_that_reports_no_rule_before_the_end_is_too_old(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """The package before 0.3 streams the errors, and not the report of each
+    rule as soon as it is done."""
+
+    @dataclasses.dataclass
+    class Violation:
+        wkb: bytes
+
+    module = package_module(Violation)
+
+    class Topology:
+        def add_layer(self) -> None: ...
+        def add_rule(self) -> None: ...
+        def iter_validate(self) -> None: ...
+
+    module.__dict__['Topology'] = Topology
+    monkeypatch.setitem(sys.modules, engine.MODULE, module)
+    with pytest.raises(
+        PackageError, match=r'too old .* no Topology\.iter_reports'
+    ):
+        engine.find_package()
+    engine.choose(Engine.AUTOMATIC)
+    assert engine.resolved() is Engine.EXECUTABLE
 
 
 def too_old(monkeypatch: pytest.MonkeyPatch) -> None:

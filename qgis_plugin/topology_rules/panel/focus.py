@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from qgis.core import (
+    QgsCoordinateReferenceSystem,
     QgsCoordinateTransform,
     QgsGeometry,
     QgsProject,
@@ -42,33 +43,70 @@ class Focus:
         self.clear()
         feature = layer.getFeature(fid)
         geometry = feature.geometry()
-        if not feature.isValid() or geometry.isNull():
+        # A feature whose coordinates are not finite is stored with an empty
+        # geometry, and there is nothing to show
+        if not feature.isValid() or geometry.isEmpty():
             return
         canvas = self.canvas()
-        self.zoom(canvas, layer, geometry)
-        marker = QgsHighlight(canvas, geometry, layer)
+        self.zoom(canvas, layer.crs(), geometry)
+        self.mark(QgsHighlight(canvas, geometry, layer))
+        self.flash(canvas, geometry, layer.crs())
+
+    def show_geometry(
+        self, geometry: QgsGeometry, crs: QgsCoordinateReferenceSystem
+    ) -> None:
+        """The same for an error that is not in a layer yet."""
+        self.clear()
+        if geometry.isEmpty():
+            return
+        canvas = self.canvas()
+        self.zoom(canvas, crs, geometry)
+        self.mark(QgsHighlight(canvas, self.moved(canvas, crs, geometry), None))
+        self.flash(canvas, geometry, crs)
+
+    def mark(self, marker: QgsHighlight) -> None:
         marker.setColor(QColor(RED))
         marker.setFillColor(QColor(RED))
         marker.setWidth(3)
         marker.show()
         self.highlight = marker
+
+    def flash(
+        self,
+        canvas: QgsMapCanvas,
+        geometry: QgsGeometry,
+        crs: QgsCoordinateReferenceSystem,
+    ) -> None:
         canvas.flashGeometries(
-            [geometry], layer.crs(), QColor(255, 255, 255, 200), QColor(RED)
+            [geometry], crs, QColor(255, 255, 255, 200), QColor(RED)
         )
 
-    def zoom(
-        self, canvas: QgsMapCanvas, layer: QgsVectorLayer, geometry: QgsGeometry
-    ) -> None:
-        """Keeps the error in view with room around it. A point is only
-        centred, as there is no size to keep the room around."""
+    def moved(
+        self,
+        canvas: QgsMapCanvas,
+        crs: QgsCoordinateReferenceSystem,
+        geometry: QgsGeometry,
+    ) -> QgsGeometry:
+        """The geometry in the CRS of the map."""
         moved = QgsGeometry(geometry)
         moved.transform(
             QgsCoordinateTransform(
-                layer.crs(),
+                crs,
                 canvas.mapSettings().destinationCrs(),
                 not_none(QgsProject.instance()),
             )
         )
+        return moved
+
+    def zoom(
+        self,
+        canvas: QgsMapCanvas,
+        crs: QgsCoordinateReferenceSystem,
+        geometry: QgsGeometry,
+    ) -> None:
+        """Keeps the error in view with room around it. A point is only
+        centred, as there is no size to keep the room around."""
+        moved = self.moved(canvas, crs, geometry)
         box = moved.boundingBox()
         if box.width() == 0 and box.height() == 0:
             canvas.setCenter(box.center())

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import collections.abc as c
+import dataclasses
 import typing as t
 
-from qgis.core import Qgis, QgsProcessingFeedback
+from qgis.core import Qgis
 from qgis.gui import QgsMessageBar, QgsMessageBarItem
-from qgis.PyQt.QtCore import Qt
+from qgis.PyQt.QtCore import Qt, pyqtSignal
 from qgis.PyQt.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -15,7 +17,10 @@ from qgis.PyQt.QtWidgets import (
     QWidget,
 )
 
+from ..core.progress import Checked, Progress, Stage
 from ..utils import not_none, tr
+from .ignored import stamp
+from .rows import Row, Shapes, found_rows, found_shapes
 
 # How long a message that is not a failure stays
 SECONDS = 5
@@ -23,12 +28,45 @@ SECONDS = 5
 MARK = 'topology_rules/failure'
 
 
-class RunFeedback(QgsProcessingFeedback):
-    """Feedback of a run that remembers the errors that were reported."""
+Staged = tuple[Stage, int | None, int]
+# A rule that is done, with its errors as the tree shows them and their
+# geometries, which the panel zooms to while they have no layer
+Done = tuple[Checked, list[Row], dict[str, Shapes]]
 
-    def __init__(self) -> None:
+
+class RunFeedback(Progress):
+    """Feedback of a run that remembers the errors that were reported, and
+    tells the panel the stage of the run, each rule that is done and the
+    features that were left out. The signals come from the thread of the
+    run."""
+
+    stage_changed = pyqtSignal(object)
+    rule_done = pyqtSignal(object)
+    invalid_found = pyqtSignal(object)
+
+    def __init__(self, names: c.Mapping[str, str] | None = None) -> None:
         super().__init__()
         self.errors: list[str] = []
+        # The names of the layers of the run, by their ids
+        self.names = dict(names or {})
+
+    def staged(self, stage: Stage, index: int | None, total: int) -> None:
+        staged: Staged = (stage, index, total)
+        self.stage_changed.emit(staged)
+
+    def checked(self, done: Checked) -> None:
+        self.rule_done.emit(self.found(done, f'e{done.index}'))
+
+    def left_out(self, done: Checked) -> None:
+        # Their group comes after those of the rules
+        self.invalid_found.emit(self.found(done, ''))
+
+    def found(self, done: Checked, key: str) -> Done:
+        """The rows are made here, so that the panel only has to show them.
+        The rows and the geometries are all that the panel keeps of the
+        errors."""
+        rows = stamp(found_rows(done, self.names, key), done.layers)
+        return (dataclasses.replace(done, errors=()), rows, found_shapes(done))
 
     def reportError(self, error: str | None, fatalError: bool = False) -> None:
         self.errors.append(str(error))
