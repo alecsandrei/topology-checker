@@ -84,9 +84,9 @@ class ResultsPanel(QWidget):
         self.ignored = Ignored()
         self.grouping = rule_grouping()
         self.labels: dict[str, str] = {}
-        # The geometries of the errors of each group while they have no
-        # layer, during a run, in the CRS of the run
-        self.shapes: dict[str, Shapes] = {}
+        # The geometries of the errors of each group by family while they
+        # have no layer, during a run, in the CRS of the run
+        self.shapes: dict[str, dict[str, Shapes]] = {}
         self.crs = QgsCoordinateReferenceSystem()
         self.model = ErrorModel()
         self.model.setHorizontalHeaderLabels([tr('Errors')])
@@ -189,7 +189,7 @@ class ResultsPanel(QWidget):
         key: str,
         rows: list[Row],
         layers: c.Mapping[str, str],
-        shapes: Shapes,
+        shapes: dict[str, Shapes],
     ) -> None:
         """Shows the errors of a rule that is done where the list has the
         rule, or the features that were left out of the run last. The other
@@ -446,9 +446,8 @@ class ResultsPanel(QWidget):
     def shape_of(self, row: Row) -> bytes:
         """The geometry of an error that has no layer, as WKB, if it has
         one."""
-        first, wkbs = self.shapes.get(row.key, {}).get(row.family, (0, ()))
-        index = row.error_fid - first
-        return wkbs[index] if 0 <= index < len(wkbs) else b''
+        shapes = self.shapes.get(row.key, {}).get(row.family)
+        return b'' if shapes is None else shapes.of(row.error_fid)
 
     def selection_changed(self) -> None:
         self.update_select()

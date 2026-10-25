@@ -193,6 +193,7 @@ def test_the_errors_of_each_rule_are_written_once_it_is_told():
         'feedback',
         'file',
         'counts',
+        'written',
     }
 
 

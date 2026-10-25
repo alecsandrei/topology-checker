@@ -428,6 +428,8 @@ class Reports:
                     if self.stopped.is_set():
                         return
                     self.found.put(report)
+                    # Not kept while the next rule is checked
+                    del report
                 self.found.put(Ended(stream.summary))
         except BaseException as error:
             # Raised where the reports are read
@@ -518,7 +520,13 @@ def validate(
                     values = attributes(index, violation, names)
                     index += 1
                     found += found_in(from_wkb(violation.wkb), values)
-                gathered.add(found, report.error_count, stream.ready())
+                count = report.error_count
+                # Neither the report nor its rows are kept once the rule is
+                # told and written: a later failure keeps them in its
+                # traceback otherwise
+                del report
+                gathered.add(found, count, stream.ready())
+                del found
             summary = not_none(stream.summary)
     except Canceled:
         if not gathered.counts:

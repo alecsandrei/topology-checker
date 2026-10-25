@@ -31,7 +31,7 @@ MARK = 'topology_rules/failure'
 Staged = tuple[Stage, int | None, int]
 # A rule that is done, with its errors as the tree shows them and their
 # geometries, which the panel zooms to while they have no layer
-Done = tuple[Checked, list[Row], Shapes]
+Done = tuple[Checked, list[Row], dict[str, Shapes]]
 
 
 class RunFeedback(Progress):

@@ -1,17 +1,15 @@
 from __future__ import annotations
 
+import array
 import collections.abc as c
 import dataclasses
 import hashlib
+import itertools
 import sys
 
 from ..core.binary import named_with, plain_name, short_name
 from ..core.progress import Checked
 from ..core.style import INVALID
-
-# The geometries of the errors of a rule as WKB, by the family of their
-# layer: the id of the first, and the WKB of each in the order of the ids
-Shapes = dict[str, tuple[int, tuple[bytes, ...]]]
 
 
 def wkb_shape(wkb: bytes) -> str:
@@ -150,13 +148,37 @@ def found_rows(
     return rows
 
 
-def found_shapes(done: Checked) -> Shapes:
-    """The geometries of the errors of a rule that is done, to zoom to
-    while they have no layer."""
+@dataclasses.dataclass(frozen=True, slots=True)
+class Shapes:
+    """The geometries of the errors of a rule in the layer of a family, to
+    zoom to while they have no layer: their WKB one after another, in the
+    order of their ids from the first. One string for all of them takes a
+    fraction of the memory of one for each."""
+
+    first: int
+    wkb: bytes
+    # Where the WKB of each error ends
+    ends: array.array[int]
+
+    def of(self, fid: int) -> bytes:
+        """The WKB of the error of the id, empty for an id it has not."""
+        index = fid - self.first
+        if not 0 <= index < len(self.ends):
+            return b''
+        start = self.ends[index - 1] if index else 0
+        return self.wkb[start : self.ends[index]]
+
+
+def found_shapes(done: Checked) -> dict[str, Shapes]:
+    """The geometries of the errors of a rule that is done, by family."""
     found: dict[str, list[bytes]] = {}
     for item in done.errors:
         found.setdefault(item.family, []).append(item.wkb)
     return {
-        family: (done.written.get(family, 0) + 1, tuple(wkbs))
+        family: Shapes(
+            done.written.get(family, 0) + 1,
+            b''.join(wkbs),
+            array.array('Q', itertools.accumulate(map(len, wkbs))),
+        )
         for family, wkbs in found.items()
     }
