@@ -309,28 +309,42 @@ pub(super) fn flat_map<I: IntoIterator<Item: Send>>(
         (0..len).into_par_iter().flat_map_iter(task).collect()
     }
 }
-/// Candidate pairs a feature task holds at once.
+/// Candidate pairs held at once.
 const PAIRS: usize = 1 << 14;
-/// The results `task` returns for candidate pairs, run like [`each`]. A feature task
-/// takes [`PAIRS`] pairs at a time and keeps their order. On rayon, results come in
-/// any order.
+/// The results `task` returns for candidate pairs, in pair order, run like [`each`]
+/// on [`PAIRS`] pairs at a time. On rayon the next pairs are found meanwhile, as
+/// threads taking pairs one at a time from the search wait for each other.
 pub(super) fn each_pair<R: Send>(
     mut pairs: impl Iterator<Item = (usize, usize)> + Send,
     task: impl Fn((usize, usize)) -> Option<R> + Sync + Send,
 ) -> Vec<R> {
+    let mut results = Vec::new();
+    let mut next = || pairs.by_ref().take(PAIRS).collect::<Vec<_>>();
     if in_feature_task() {
         let workers = Workers::all();
-        let mut results = Vec::new();
         loop {
-            let chunk = pairs.by_ref().take(PAIRS).collect::<Vec<_>>();
+            let chunk = next();
             if chunk.is_empty() {
                 return results;
             }
             results.extend(workers.each(chunk, &task).into_iter().flatten());
         }
-    } else {
-        pairs.par_bridge().filter_map(task).collect()
     }
+    let mut chunk = next();
+    while !chunk.is_empty() {
+        let found;
+        (found, chunk) = rayon::join(
+            || {
+                chunk
+                    .par_iter()
+                    .filter_map(|&pair| task(pair))
+                    .collect::<Vec<_>>()
+            },
+            &mut next,
+        );
+        results.extend(found);
+    }
+    results
 }
 /// Kinds of a per-feature rule in emission order. Empty when each feature emits all
 /// of its violations together.
