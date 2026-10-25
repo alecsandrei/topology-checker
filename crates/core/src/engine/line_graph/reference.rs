@@ -937,8 +937,8 @@ mod tests {
     }
     /// The checkpoints it passes.
     const STEPS: &str = "\
-        aggregate aggregate.merge cluster cluster.batch cluster.ends cluster.points cluster.sort \
-        collapsed connected.components connected.join connected.sort connected.spans contacts \
+        aggregate aggregate.gather aggregate.join aggregate.merge aggregate.sort cluster \
+        cluster.batch cluster.ends cluster.points cluster.sort collapsed connected.components connected.join connected.sort connected.spans contacts \
         contacts.features contacts.nodes contacts.sort contacts.values crack cuts dangles \
         directions edges edges.count edges.cursor edges.group edges.incident edges.incident.init \
         edges.offsets edges.sort ends ends.init ends.sort fill gather.contacts gather.edges index \

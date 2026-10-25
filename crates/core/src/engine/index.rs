@@ -59,7 +59,27 @@ const NONE: usize = usize::MAX;
 /// without a box stay as placeholders that [`nearby`] skips.
 pub(crate) fn arranged(len: usize, bounds: impl Fn(usize) -> Option<Rect> + Sync) -> Vec<Entry> {
     let workers = Workers::new(len);
-    let mut entries = super::parallel::repeated(Entry::default(), len, "arranged");
+    let mut entries = boxed(len, bounds, &workers, "arranged");
+    arrange(&mut entries, &workers);
+    entries
+}
+/// A [`Packed`] index of the items `0..len` that `bounds` gives a box, which finds
+/// them in the order of the R-tree [`build`] makes. It builds on several threads
+/// and stops when cancelled.
+pub(crate) fn packed(len: usize, bounds: impl Fn(usize) -> Option<Rect> + Sync) -> Packed {
+    let workers = Workers::new(len);
+    let mut entries = boxed(len, bounds, &workers, "packed");
+    entries.retain(|e| e.id != NONE);
+    Packed::bulk(entries, &workers)
+}
+/// Entries of the items `0..len`, with placeholders for items without a box.
+fn boxed(
+    len: usize,
+    bounds: impl Fn(usize) -> Option<Rect> + Sync,
+    workers: &Workers,
+    step: &'static str,
+) -> Vec<Entry> {
+    let mut entries = super::parallel::repeated(Entry::default(), len, step);
     workers.fill(&mut entries, |i| {
         bounds(i).map_or(
             Entry {
@@ -69,14 +89,13 @@ pub(crate) fn arranged(len: usize, bounds: impl Fn(usize) -> Option<Rect> + Sync
             |rect| Entry::new(i, rect),
         )
     });
-    arrange(&mut entries, &workers);
     entries
 }
 /// [`candidates`] for `items` from [`arranged`], in their order, so that consecutive
 /// searches meet nearby parts of `b` whatever the order the items had.
 pub(crate) fn nearby<'a>(
     items: &'a [Entry],
-    b: &'a Index,
+    b: &'a impl Search,
     tolerance: f64,
 ) -> impl Iterator<Item = (usize, usize)> + 'a {
     let boxes = items.iter().filter(|e| e.id != NONE);
@@ -88,15 +107,12 @@ pub(crate) fn nearby<'a>(
 /// whichever thread runs it and however few pairs it finds.
 pub(crate) fn candidates<'a>(
     boxes: impl Iterator<Item = (usize, Rect)> + 'a,
-    b: &'a Index,
+    b: &'a impl Search,
     tolerance: f64,
 ) -> impl Iterator<Item = (usize, usize)> + 'a {
     Candidates {
         boxes,
-        search: move |rect| {
-            b.locate_in_envelope_intersecting(&expanded(rect, tolerance))
-                .map(|other| other.data)
-        },
+        search: move |rect| b.search(expanded(rect, tolerance)).map(|(id, _)| id),
         found: None,
         steps: 0,
         token: crate::cancel::current(),
@@ -151,7 +167,6 @@ pub(crate) trait Search: Sync {
         visit: impl Fn(usize, usize, &mut Vec<R>) + Sync,
     ) -> Vec<R>;
 }
-#[cfg(test)]
 impl Search for Index {
     fn search(&self, bounds: AABB<[f64; 2]>) -> impl Iterator<Item = (usize, AABB<[f64; 2]>)> {
         use rstar::RTreeObject;
@@ -739,6 +754,69 @@ mod tests {
         // Every checkpoint is passed, so one taken out shows.
         let steps = visits.keys().copied().collect::<Vec<_>>();
         assert_eq!(steps, ["arranged", "candidates", "fill", "index.arrange"]);
+        for (step, count) in visits {
+            for visit in [0, count / 2, count - 1] {
+                let token = hooks::watched(Some((step, visit)));
+                let result = run(&token);
+                let record = hooks::record(&token);
+                assert!(
+                    result.expect_err("cancelled").is::<cancel::Cancelled>(),
+                    "{step} {visit}"
+                );
+                // Each other thread passes at most one more checkpoint.
+                let after = record.visits[step];
+                assert!(
+                    (visit + 1..=visit + threads).contains(&after),
+                    "{step} {visit}: {after}"
+                );
+                assert_eq!(record.live, 0);
+            }
+        }
+    }
+
+    #[test]
+    fn packed_indexes_find_what_a_built_r_tree_finds() {
+        for (n, seed) in [(0, 11), (1, 12), (7, 13), (5000, 14)] {
+            let items = boxes(n, seed);
+            // Items without a box are left out of both.
+            let some = |i: usize| (!i.is_multiple_of(5)).then_some(items[i].1);
+            let tree = build((0..n).filter_map(|i| some(i).map(|rect| (i, rect))));
+            let queries = boxes(300, seed + 50);
+            let a = arranged(queries.len(), |i| Some(queries[i].1));
+            for threads in [1, 4] {
+                let index = Workers::forced(threads, 64, || packed(n, some));
+                for &(_, rect) in &queries {
+                    let query = expanded(rect, 0.5);
+                    assert!(
+                        index.search(query).eq(tree.search(query)),
+                        "{n} on {threads}"
+                    );
+                }
+                assert!(nearby(&a, &index, 0.5).eq(nearby(&a, &tree, 0.5)));
+            }
+        }
+    }
+
+    #[test]
+    fn packed_indexes_stop_in_each_step_when_cancelled() {
+        use crate::cancel::{self, hooks};
+        let threads = 4;
+        let items = boxes(20_000, 15);
+        let run = |token: &cancel::CancellationToken| {
+            std::panic::catch_unwind(|| {
+                cancel::scope(Some(token.clone()), || {
+                    Workers::forced(threads, 64, || {
+                        packed(items.len(), |i| Some(items[i].1)).entries().len()
+                    })
+                })
+            })
+        };
+        let token = hooks::watched(None);
+        assert_eq!(run(&token).expect("index"), items.len());
+        let visits = hooks::record(&token).visits;
+        // Every checkpoint is passed, so one taken out shows.
+        let steps = visits.keys().copied().collect::<Vec<_>>();
+        assert_eq!(steps, ["fill", "index.arrange", "packed"]);
         for (step, count) in visits {
             for visit in [0, count / 2, count - 1] {
                 let token = hooks::watched(Some((step, visit)));

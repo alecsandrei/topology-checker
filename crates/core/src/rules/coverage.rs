@@ -30,9 +30,9 @@ fn on_segments(
     tree.locate_in_envelope_intersecting(&index::at(point.0, tolerance))
         .any(|i| proximity::near_segment(point.0, segments[i.data].geometry, tolerance))
 }
-fn on_points(point: &Point, points: &[Part<Point>], tree: &index::Index, tolerance: f64) -> bool {
-    tree.locate_in_envelope_intersecting(&index::at(point.0, tolerance))
-        .any(|i| proximity::coincident(points[i.data].geometry.0, point.0, tolerance))
+fn on_points(point: &Point, points: &[Part<Point>], tree: &index::Packed, tolerance: f64) -> bool {
+    tree.locate(index::at(point.0, tolerance))
+        .any(|i| proximity::coincident(points[i.id].geometry.0, point.0, tolerance))
 }
 fn covered(point: &Point, target: Target, parts: &Parts, tolerance: f64) -> bool {
     match target {

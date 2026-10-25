@@ -1456,8 +1456,8 @@ mod tests {
             "pseudos violations.sort",
             "multipart violations.sort",
             "point.features",
-            "candidates aggregate aggregate.merge violations.sort",
-            "candidates aggregate aggregate.merge violations.sort",
+            "candidates aggregate aggregate.gather aggregate.merge violations.sort",
+            "candidates aggregate aggregate.gather aggregate.merge violations.sort",
         ];
         // Steps after the inputs are built.
         let steps = [
@@ -1467,6 +1467,7 @@ mod tests {
             "point.features",
             "candidates",
             "aggregate",
+            "aggregate.gather",
             "aggregate.merge",
             "violations.sort",
         ];

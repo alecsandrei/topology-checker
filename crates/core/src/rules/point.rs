@@ -66,9 +66,9 @@ pub(crate) fn overlap_into<E>(
             let p = &a.points[i];
             for item in b
                 .point_index()
-                .locate_in_envelope_intersecting(&index::at(p.geometry.0, t.tolerance()))
+                .locate(index::at(p.geometry.0, t.tolerance()))
             {
-                let q = &b.points[item.data];
+                let q = &b.points[item.id];
                 if spec.other.is_none() && ranks[&q.reference.fid] <= ranks[&fid] {
                     continue;
                 }

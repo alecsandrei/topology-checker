@@ -2,7 +2,7 @@ use crate::cache::Cache;
 use crate::{
     Error,
     engine::{
-        index::{self, Entry, Index},
+        index::{self, Entry, Index, Packed},
         storage::Shared,
     },
 };
@@ -326,7 +326,7 @@ pub(crate) struct Parts {
     pub points: Vec<Part<Point>>,
     pub lines: Vec<Part<Shared<LineString>>>,
     pub polygons: Vec<Part<Shared<Polygon>>>,
-    point_index: Cache<Index>,
+    point_index: Cache<Packed>,
     line_index: Cache<Index>,
     polygon_index: Cache<Index>,
     point_order: Cache<Vec<Entry>>,
@@ -402,14 +402,12 @@ impl Parts {
             ..Self::default()
         }
     }
-    pub fn point_index(&self) -> &Index {
+    pub fn point_index(&self) -> &Packed {
         self.point_index.get_or_init(|| {
-            index::build(
-                self.points
-                    .iter()
-                    .enumerate()
-                    .map(|(i, p)| (i, Rect::new(p.geometry.0, p.geometry.0))),
-            )
+            index::packed(self.points.len(), |i| {
+                let point = self.points[i].geometry.0;
+                Some(Rect::new(point, point))
+            })
         })
     }
     pub fn line_index(&self) -> &Index {
