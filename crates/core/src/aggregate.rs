@@ -132,16 +132,15 @@ impl Collected {
 /// Merge violations sharing a rule, kind and origin and destination features.
 /// Part indices are cleared when several parts contributed; groups follow key order.
 /// Groups are found by sorting, without an allocation each, so a cancelled
-/// aggregation frees little, and merge on several threads.
-pub(crate) fn aggregate(violations: Vec<Violation>, merge: Merge) -> Vec<Violation> {
+/// aggregation frees little, and merge on several threads. Each violation moves once
+/// before its merge, into the task of its group.
+pub(crate) fn aggregate(mut violations: Vec<Violation>, merge: Merge) -> Vec<Violation> {
     let len = violations.len();
     let workers = Workers::new(len);
     let mut order = Vec::with_capacity(len);
-    let mut slots = Vec::with_capacity(len);
-    for (i, v) in violations.into_iter().enumerate() {
+    for (i, v) in violations.iter().enumerate() {
         crate::cancel::every(i, "aggregate");
-        order.push(place(&v, i));
-        slots.push(Some(v));
+        order.push(place(v, i));
     }
     workers.sort(&mut order, "aggregate.sort", Ord::cmp);
     let same = |a: &Place, b: &Place| a[..GROUP] == b[..GROUP];
@@ -162,13 +161,13 @@ pub(crate) fn aggregate(violations: Vec<Violation>, merge: Merge) -> Vec<Violati
         for (k, place) in places.iter().enumerate() {
             crate::cancel::every(start + k, "aggregate.gather");
             let at = usize::try_from(place[GROUP]).expect("a position");
-            members.push(slots[at].take().expect("one group per violation"));
+            members.push(take(&mut violations[at]));
         }
         tasks.push((places, groups, members));
         groups += 1 + places.windows(2).filter(|w| !same(&w[0], &w[1])).count();
         start = end;
     }
-    drop(slots);
+    drop(violations);
     let merged = workers.each(tasks, |(places, before, members)| {
         let mut members = members.into_iter();
         let mut out = Vec::new();
@@ -181,12 +180,27 @@ pub(crate) fn aggregate(violations: Vec<Violation>, merge: Merge) -> Vec<Violati
         }
         out
     });
-    let mut out = Vec::with_capacity(merged.iter().map(Vec::len).sum());
+    let total = merged.iter().map(Vec::len).sum::<usize>();
+    let mut out = Vec::new();
     for part in merged {
         crate::cancel::checkpoint("aggregate.join");
-        out.extend(part);
+        // The others join the first part, which stays where it is.
+        if out.is_empty() {
+            out = part;
+            out.reserve(total - out.len());
+        } else {
+            out.extend(part);
+        }
     }
     out
+}
+/// Move a violation out, leaving it without a geometry.
+fn take(v: &mut Violation) -> Violation {
+    let empty = Geometry::GeometryCollection(GeometryCollection(Vec::new()));
+    Violation {
+        geometry: std::mem::replace(&mut v.geometry, empty),
+        ..*v
+    }
 }
 
 /// Words of a violation's group, then its position, which sort as the rule, kind,
