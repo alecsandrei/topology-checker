@@ -2,7 +2,7 @@ use crate::cache::Cache;
 use crate::{
     Error,
     engine::{
-        index::{self, Index},
+        index::{self, Entry, Index},
         storage::Shared,
     },
 };
@@ -329,6 +329,9 @@ pub(crate) struct Parts {
     point_index: Cache<Index>,
     line_index: Cache<Index>,
     polygon_index: Cache<Index>,
+    point_order: Cache<Vec<Entry>>,
+    line_order: Cache<Vec<Entry>>,
+    polygon_order: Cache<Vec<Entry>>,
     pub locations: Cache<Vec<crate::engine::location::Location>>,
     pub union: Cache<crate::engine::polygons::Union>,
     pub boundaries: Cache<Vec<Part<Shared<LineString>>>>,
@@ -427,6 +430,32 @@ impl Parts {
                     .enumerate()
                     .filter_map(|(i, p)| p.geometry.bounding_rect().map(|r| (i, r))),
             )
+        })
+    }
+    /// The points in [`index::arranged`] order, to search another index with.
+    pub fn point_order(&self) -> &[Entry] {
+        self.point_order.get_or_init(|| {
+            let point = |i: usize| {
+                Some(Rect::new(
+                    self.points[i].geometry.0,
+                    self.points[i].geometry.0,
+                ))
+            };
+            index::arranged(self.points.len(), point)
+        })
+    }
+    /// The lines in [`index::arranged`] order, to search another index with.
+    pub fn line_order(&self) -> &[Entry] {
+        self.line_order.get_or_init(|| {
+            index::arranged(self.lines.len(), |i| self.lines[i].geometry.bounding_rect())
+        })
+    }
+    /// The polygons in [`index::arranged`] order, to search another index with.
+    pub fn polygon_order(&self) -> &[Entry] {
+        self.polygon_order.get_or_init(|| {
+            index::arranged(self.polygons.len(), |i| {
+                self.polygons[i].geometry.bounding_rect()
+            })
         })
     }
 

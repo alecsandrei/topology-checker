@@ -74,10 +74,7 @@ pub(super) fn run(
     let a = t.parts(spec.layer)?;
     let b = t.parts(other)?;
     let bv = location::locations(b);
-    // A feature's own lines are searched in order, without an index of their own.
-    let lines = a.lines.iter().enumerate();
-    let lines = lines.filter_map(|(i, l)| l.geometry.bounding_rect().map(|r| (i, r)));
-    let pairs = index::candidates(lines, b.polygon_index(), t.tolerance());
+    let pairs = index::nearby(a.line_order(), b.polygon_index(), t.tolerance());
     let compare = |(i, j): (usize, usize)| {
         let found =
             t.cancellable(|| pair(t, spec, other, mode, &a.lines[i], &b.polygons[j], &bv[j]));

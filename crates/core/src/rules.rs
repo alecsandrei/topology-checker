@@ -1469,18 +1469,44 @@ mod tests {
 
     #[test]
     fn a_feature_whose_parts_find_no_pairs_stops_at_the_next_check() {
-        // No point of the feature is in the box of a line, so only the search runs.
+        // No part of the feature is in the box of the other layer's feature, so only
+        // the steps before and of the search run.
         let count = 10_000;
-        let far = (0..count).map(|i| Point::new(i as f64, 10.));
-        let far = MultiPoint::from(far.collect::<Vec<_>>());
-        let line = LineString::from(vec![(0., 0.), (count as f64, 0.)]);
-        let mut t = Topology::new(0.).unwrap();
-        let points = t.add_layer(Layer::from_features("far-points", [(1, far.into())]));
-        let lines = t.add_layer(Layer::from_features("far-lines", [(1, line.into())]));
-        t.add_rule(Rule::PointMustNotIntersectLines, points, Some(lines))
-            .unwrap();
-        let least = count / crate::cancel::CHECK;
-        assert_stops_at_each_check(&t, "candidates", least, "far points");
+        let far = |i: usize| (i as f64, 10.);
+        let points = MultiPoint::from((0..count).map(|i| Point::from(far(i))).collect::<Vec<_>>());
+        let lines = (0..count).map(|i| LineString::from(vec![far(i), (i as f64 + 0.5, 10.)]));
+        let squares = (0..count).map(|i| Rect::new(far(i), (i as f64 + 0.5, 10.5)).to_polygon());
+        let end = count as f64;
+        let cases: [(Rule, Geometry, Geometry, &[&str]); 3] = [
+            (
+                Rule::PointMustNotIntersectLines,
+                points.into(),
+                LineString::from(vec![(0., 0.), (end, 0.)]).into(),
+                &["candidates", "index.arrange"],
+            ),
+            (
+                Rule::LineMustNotIntersectPolygons,
+                MultiLineString::new(lines.collect()).into(),
+                Rect::new((0., -1.), (end, 0.)).to_polygon().into(),
+                &["candidates", "index.arrange"],
+            ),
+            (
+                Rule::PolygonMustNotContainPoints,
+                MultiPolygon::new(squares.collect()).into(),
+                Point::new(0., 0.).into(),
+                &["candidates", "index.arrange", "locations"],
+            ),
+        ];
+        for (rule, feature, other, steps) in cases {
+            let mut t = Topology::new(0.).unwrap();
+            let layer = t.add_layer(Layer::from_features("far", [(1, feature)]));
+            let other = t.add_layer(Layer::from_features("near", [(1, other)]));
+            t.add_rule(rule, layer, Some(other)).unwrap();
+            for &step in steps {
+                let least = count / crate::cancel::CHECK;
+                assert_stops_at_each_check(&t, step, least, &format!("{rule:?}"));
+            }
+        }
     }
 
     /// Validate `t` with `token`, counting the violations sent.

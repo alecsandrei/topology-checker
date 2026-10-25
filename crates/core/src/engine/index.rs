@@ -52,6 +52,36 @@ pub(crate) fn pairs<'a>(
     });
     candidates(boxes, b, tolerance).filter(move |&(i, j)| !same || i < j)
 }
+/// Marks an item of [`arranged`] without a box.
+const NONE: usize = usize::MAX;
+/// Items `0..len` with the boxes `bounds` gives, in the search order of an R-tree bulk
+/// loaded from them, found on several threads, checking for cancellation. Items
+/// without a box stay as placeholders that [`nearby`] skips.
+pub(crate) fn arranged(len: usize, bounds: impl Fn(usize) -> Option<Rect> + Sync) -> Vec<Entry> {
+    let workers = Workers::new(len);
+    let mut entries = super::parallel::repeated(Entry::default(), len, "arranged");
+    workers.fill(&mut entries, |i| {
+        bounds(i).map_or(
+            Entry {
+                id: NONE,
+                ..Entry::default()
+            },
+            |rect| Entry::new(i, rect),
+        )
+    });
+    arrange(&mut entries, &workers);
+    entries
+}
+/// [`candidates`] for `items` from [`arranged`], in their order, so that consecutive
+/// searches meet nearby parts of `b` whatever the order the items had.
+pub(crate) fn nearby<'a>(
+    items: &'a [Entry],
+    b: &'a Index,
+    tolerance: f64,
+) -> impl Iterator<Item = (usize, usize)> + 'a {
+    let boxes = items.iter().filter(|e| e.id != NONE);
+    candidates(boxes.map(|e| (e.id, e.rect())), b, tolerance)
+}
 /// Each item of `boxes` with each item of `b` whose box it meets, grown by `tolerance`.
 /// The search checks for cancellation every [`CHECK`](crate::cancel::CHECK) items
 /// and candidates, against the token of the thread that starts it, so it stops
@@ -662,6 +692,70 @@ mod tests {
             });
             assert!(result.expect_err("cancelled").is::<cancel::Cancelled>());
             assert_eq!(hooks::record(&token).visits["candidates"], 3);
+        }
+    }
+
+    #[test]
+    fn nearby_searches_in_the_order_of_a_bulk_loaded_tree() {
+        for (n, seed) in [(0, 1), (1, 2), (7, 3), (500, 4), (5000, 5)] {
+            let a = boxes(n, seed);
+            let b = build(boxes(2000, seed + 100));
+            let expected = pairs(&build(a.clone()), &b, 0.5, false).collect::<Vec<_>>();
+            for threads in [1, 4] {
+                let found = Workers::forced(threads, 64, || {
+                    nearby(&arranged(n, |i| Some(a[i].1)), &b, 0.5).collect::<Vec<_>>()
+                });
+                assert_eq!(found, expected, "{n} on {threads}");
+            }
+            // Items without a box are left out.
+            let some = |i: usize| (!i.is_multiple_of(3)).then_some(a[i].1);
+            let mut found = nearby(&arranged(n, some), &b, 0.5).collect::<Vec<_>>();
+            let mut expected = expected;
+            expected.retain(|&(i, _)| !i.is_multiple_of(3));
+            found.sort_unstable();
+            expected.sort_unstable();
+            assert_eq!(found, expected, "{n} with some");
+        }
+    }
+
+    #[test]
+    fn nearby_stops_in_each_step_when_cancelled() {
+        use crate::cancel::{self, hooks};
+        let threads = 4;
+        let a = boxes(20_000, 6);
+        let b = build(boxes(2000, 7));
+        let run = |token: &cancel::CancellationToken| {
+            std::panic::catch_unwind(|| {
+                cancel::scope(Some(token.clone()), || {
+                    Workers::forced(threads, 64, || {
+                        nearby(&arranged(a.len(), |i| Some(a[i].1)), &b, 0.).count()
+                    })
+                })
+            })
+        };
+        let token = hooks::watched(None);
+        run(&token).expect("pairs");
+        let visits = hooks::record(&token).visits;
+        // Every checkpoint is passed, so one taken out shows.
+        let steps = visits.keys().copied().collect::<Vec<_>>();
+        assert_eq!(steps, ["arranged", "candidates", "fill", "index.arrange"]);
+        for (step, count) in visits {
+            for visit in [0, count / 2, count - 1] {
+                let token = hooks::watched(Some((step, visit)));
+                let result = run(&token);
+                let record = hooks::record(&token);
+                assert!(
+                    result.expect_err("cancelled").is::<cancel::Cancelled>(),
+                    "{step} {visit}"
+                );
+                // Each other thread passes at most one more checkpoint.
+                let after = record.visits[step];
+                assert!(
+                    (visit + 1..=visit + threads).contains(&after),
+                    "{step} {visit}: {after}"
+                );
+                assert_eq!(record.live, 0);
+            }
         }
     }
 }
