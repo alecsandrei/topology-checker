@@ -128,11 +128,8 @@ pub(super) fn uncovered(
                 }
             } else {
                 let locations = crate::engine::location::locations(target);
-                for item in target
-                    .polygon_index()
-                    .locate_in_envelope_intersecting(&query)
-                {
-                    let location = &locations[item.data];
+                for item in target.polygon_index().locate(query) {
+                    let location = &locations[item.id];
                     for edge in location.tree.locate_in_envelope_intersecting(&query) {
                         cover(location.segments[edge.data]);
                     }

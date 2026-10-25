@@ -2,7 +2,7 @@ use crate::cache::Cache;
 use crate::{
     Error,
     engine::{
-        index::{self, Entry, Index, Packed},
+        index::{self, Entry, Packed},
         storage::Shared,
     },
 };
@@ -327,8 +327,8 @@ pub(crate) struct Parts {
     pub lines: Vec<Part<Shared<LineString>>>,
     pub polygons: Vec<Part<Shared<Polygon>>>,
     point_index: Cache<Packed>,
-    line_index: Cache<Index>,
-    polygon_index: Cache<Index>,
+    line_index: Cache<Packed>,
+    polygon_index: Cache<Packed>,
     point_order: Cache<Vec<Entry>>,
     line_order: Cache<Vec<Entry>>,
     polygon_order: Cache<Vec<Entry>>,
@@ -404,30 +404,24 @@ impl Parts {
     }
     pub fn point_index(&self) -> &Packed {
         self.point_index.get_or_init(|| {
-            index::packed(self.points.len(), |i| {
+            index::packed(self.points.len(), "index.points", |i| {
                 let point = self.points[i].geometry.0;
                 Some(Rect::new(point, point))
             })
         })
     }
-    pub fn line_index(&self) -> &Index {
+    pub fn line_index(&self) -> &Packed {
         self.line_index.get_or_init(|| {
-            index::build(
-                self.lines
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, p)| p.geometry.bounding_rect().map(|r| (i, r))),
-            )
+            index::packed(self.lines.len(), "index.lines", |i| {
+                self.lines[i].geometry.bounding_rect()
+            })
         })
     }
-    pub fn polygon_index(&self) -> &Index {
+    pub fn polygon_index(&self) -> &Packed {
         self.polygon_index.get_or_init(|| {
-            index::build(
-                self.polygons
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, p)| p.geometry.bounding_rect().map(|r| (i, r))),
-            )
+            index::packed(self.polygons.len(), "index.polygons", |i| {
+                self.polygons[i].geometry.bounding_rect()
+            })
         })
     }
     /// The points in [`index::arranged`] order, to search another index with.
@@ -689,6 +683,144 @@ mod tests {
             );
         }
         assert_eq!(layer.features().next().unwrap().1, &geometry);
+    }
+
+    /// Lines and polygons of mixed size, some repeated so that their boxes tie.
+    fn mixed(count: usize) -> Vec<(i64, Geometry)> {
+        let mut state = 0x2545_f491_4f6c_dd1d_u64;
+        let mut next = move |scale: u64| {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            (state % scale) as f64 / 4.
+        };
+        let mut features: Vec<(i64, Geometry)> = Vec::with_capacity(count);
+        for fid in 0..count {
+            let geometry: Geometry = if fid % 5 == 4 {
+                features[fid - 3].1.clone()
+            } else {
+                let (x, y) = (next(800), next(800));
+                let (w, h) = (next(64) + 0.25, next(64) + 0.25);
+                let square = |x: f64| Rect::new((x, y), (x + w, y + h)).to_polygon();
+                match fid % 3 {
+                    0 => line_string![(x: x, y: y), (x: x + w, y: y + h)].into(),
+                    1 => square(x).into(),
+                    _ => MultiPolygon(vec![square(x), square(x + w + 1.)]).into(),
+                }
+            };
+            features.push((fid as i64, geometry));
+        }
+        features
+    }
+
+    #[test]
+    fn line_and_polygon_indexes_search_in_the_order_of_a_bulk_loaded_r_tree() {
+        use crate::engine::{
+            index::{Index, Search},
+            parallel::Workers,
+        };
+        let features = mixed(3000);
+        let built = |boxes: Vec<Option<Rect>>| -> Index {
+            index::build(
+                boxes
+                    .into_iter()
+                    .enumerate()
+                    .filter_map(|(i, r)| r.map(|r| (i, r))),
+            )
+        };
+        let queries = (0..15 * 15)
+            .map(|k| {
+                let (x, y) = ((k % 15) as f64 * 15., (k / 15) as f64 * 15.);
+                index::expanded(Rect::new((x, y), (x + 10., y + 10.)), 0.5)
+            })
+            .collect::<Vec<_>>();
+        for threads in [1, 4] {
+            let layer = Layer::from_features("mixed", features.clone());
+            let parts = layer.parts().unwrap();
+            let lines = built(
+                parts
+                    .lines
+                    .iter()
+                    .map(|p| p.geometry.bounding_rect())
+                    .collect(),
+            );
+            let polygons = built(
+                parts
+                    .polygons
+                    .iter()
+                    .map(|p| p.geometry.bounding_rect())
+                    .collect(),
+            );
+            let (line_index, polygon_index) =
+                Workers::forced(threads, 64, || (parts.line_index(), parts.polygon_index()));
+            for (packed, tree) in [(line_index, &lines), (polygon_index, &polygons)] {
+                assert!(packed.items().eq(tree.items()), "{threads}");
+                for &query in &queries {
+                    assert!(packed.search(query).eq(tree.search(query)), "{threads}");
+                }
+                let pairs = index::pairs(packed, packed, 0., true);
+                assert!(pairs.eq(index::pairs(tree, tree, 0., true)), "{threads}");
+            }
+            let pairs = index::pairs(line_index, polygon_index, 0.5, false);
+            assert!(pairs.eq(index::pairs(&lines, &polygons, 0.5, false)));
+        }
+    }
+
+    #[test]
+    fn line_and_polygon_indexes_stop_in_each_step_when_cancelled() {
+        use crate::cancel::{self, hooks};
+        use crate::engine::{index::Search, parallel::Workers};
+        let threads = 4;
+        let features = mixed(20_000);
+        for lines in [true, false] {
+            let step = if lines {
+                "index.lines"
+            } else {
+                "index.polygons"
+            };
+            let run = |token: &cancel::CancellationToken| {
+                let layer = Layer::from_features("mixed", features.clone());
+                let parts = layer.parts().unwrap();
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    cancel::scope(Some(token.clone()), || {
+                        Workers::forced(threads, 64, || {
+                            let index = if lines {
+                                parts.line_index()
+                            } else {
+                                parts.polygon_index()
+                            };
+                            index.items().count()
+                        })
+                    })
+                }))
+            };
+            let token = hooks::watched(None);
+            assert!(run(&token).expect("index") > 5000);
+            let visits = hooks::record(&token).visits;
+            // Every checkpoint is passed, so one taken out shows.
+            let steps = visits.keys().copied().collect::<Vec<_>>();
+            let mut expected = vec!["fill", "index.arrange", "index.bounds", "index.nodes", step];
+            expected.sort_unstable();
+            assert_eq!(steps, expected);
+            for (step, count) in visits {
+                for visit in [0, count / 2, count - 1] {
+                    let token = hooks::watched(Some((step, visit)));
+                    let result = run(&token);
+                    let record = hooks::record(&token);
+                    assert!(
+                        result.expect_err("cancelled").is::<cancel::Cancelled>(),
+                        "{step} {visit}"
+                    );
+                    // Each other thread passes at most one more checkpoint.
+                    let after = record.visits[step];
+                    assert!(
+                        (visit + 1..=visit + threads).contains(&after),
+                        "{step} {visit}: {after}"
+                    );
+                    assert_eq!(record.live, 0);
+                }
+            }
+        }
     }
 
     #[test]

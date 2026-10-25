@@ -40,8 +40,8 @@ pub(super) fn points(
         let hits = t.cancellable(|| {
             let mut candidates = b
                 .polygon_index()
-                .locate_in_envelope_intersecting(&index::at(p.geometry.0, t.tolerance()))
-                .map(|i| i.data)
+                .locate(index::at(p.geometry.0, t.tolerance()))
+                .map(|i| i.id)
                 .collect::<Vec<_>>();
             candidates.sort_unstable();
             candidates

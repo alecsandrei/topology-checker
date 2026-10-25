@@ -26,9 +26,9 @@ pub(crate) fn inside(
         t.cancellable(|| {
             let inside = b
                 .polygon_index()
-                .locate_in_envelope_intersecting(&index::at(p.geometry.0, t.tolerance()))
+                .locate(index::at(p.geometry.0, t.tolerance()))
                 .any(|item| {
-                    let polygon = &locations[item.data];
+                    let polygon = &locations[item.id];
                     polygon.position(p.geometry.0) == 1
                         && !polygon.near(p.geometry.0, t.tolerance())
                 });

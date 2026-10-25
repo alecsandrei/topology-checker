@@ -942,7 +942,8 @@ mod tests {
         contacts.features contacts.nodes contacts.sort contacts.values crack cuts dangles \
         directions edges edges.count edges.cursor edges.group edges.incident edges.incident.init \
         edges.offsets edges.sort ends ends.init ends.sort fill gather.contacts gather.edges index \
-        index.arrange matches.features matches.index matches.pairs matches.retain matches.sort \
+        index.arrange index.bounds index.nodes matches.features matches.index matches.pairs \
+        matches.retain matches.sort \
         noding order pairs pairs.join parts pseudos retain.components retain.confined \
         retain.found retain.groups retain.ids retain.junctions retain.junctions.sort \
         retain.meetings retain.meetings.sort retain.positions retain.runs retain.spans \

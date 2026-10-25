@@ -332,6 +332,10 @@ impl Workers {
     }
     /// Set each element from its index.
     pub(crate) fn fill<T: Send>(&self, out: &mut [T], value: impl Fn(usize) -> T + Sync) {
+        self.update(out, |i, slot| *slot = value(i));
+    }
+    /// `change(index, element)` for each element.
+    pub(crate) fn update<T: Send>(&self, out: &mut [T], change: impl Fn(usize, &mut T) + Sync) {
         let ranges = self.ranges(out.len());
         let mut slices = Vec::with_capacity(ranges.len());
         let mut rest = out;
@@ -343,7 +347,7 @@ impl Workers {
         self.each(slices, |(start, slice)| {
             for (k, slot) in slice.iter_mut().enumerate() {
                 cancel::every(k, "fill");
-                *slot = value(start + k);
+                change(start + k, slot);
             }
         });
     }

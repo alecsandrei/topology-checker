@@ -53,8 +53,8 @@ fn covered(point: &Point, target: Target, parts: &Parts, tolerance: f64) -> bool
             let locations = crate::engine::location::locations(parts);
             parts
                 .polygon_index()
-                .locate_in_envelope_intersecting(&index::at(point.0, tolerance))
-                .any(|item| locations[item.data].near(point.0, tolerance))
+                .locate(index::at(point.0, tolerance))
+                .any(|item| locations[item.id].near(point.0, tolerance))
         }
         Target::Points => on_points(point, &parts.points, parts.point_index(), tolerance),
     }

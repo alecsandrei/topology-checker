@@ -716,8 +716,8 @@ fn outside_pieces(
         };
         let mut candidates = target
             .polygon_index()
-            .locate_in_envelope_intersecting(&envelope)
-            .map(|item| item.data)
+            .locate(envelope)
+            .map(|item| item.id)
             .collect::<Vec<_>>();
         candidates.sort_unstable();
         #[cfg(test)]
@@ -843,11 +843,8 @@ fn boundary(
 ) -> Vec<(Line, Coord)> {
     let query = index::expanded(segment.bounding_rect(), distance);
     let mut edges = Vec::new();
-    for item in target
-        .polygon_index()
-        .locate_in_envelope_intersecting(&query)
-    {
-        let location = &locations[item.data];
+    for item in target.polygon_index().locate(query) {
+        let location = &locations[item.id];
         for s in location.tree.locate_in_envelope_intersecting(&query) {
             let (edge, next) = location.edge(s.data);
             if precision::squared_gap(edge, segment) <= distance * distance {
