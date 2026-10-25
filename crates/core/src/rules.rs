@@ -311,9 +311,12 @@ pub(super) fn flat_map<I: IntoIterator<Item: Send>>(
 }
 /// Candidate pairs held at once.
 const PAIRS: usize = 1 << 14;
+/// Candidate pairs a thread of a feature task takes at a time.
+const PAIR_TASK: usize = 64;
 /// The results `task` returns for candidate pairs, in pair order, run like [`each`]
-/// on [`PAIRS`] pairs at a time. On rayon the next pairs are found meanwhile, as
-/// threads taking pairs one at a time from the search wait for each other.
+/// on [`PAIRS`] pairs at a time. The threads of a feature task take [`PAIR_TASK`]
+/// pairs at a time. On rayon the next pairs are found meanwhile, as threads taking
+/// pairs one at a time from the search wait for each other.
 pub(super) fn each_pair<R: Send>(
     mut pairs: impl Iterator<Item = (usize, usize)> + Send,
     task: impl Fn((usize, usize)) -> Option<R> + Sync + Send,
@@ -327,7 +330,11 @@ pub(super) fn each_pair<R: Send>(
             if chunk.is_empty() {
                 return results;
             }
-            results.extend(workers.each(chunk, &task).into_iter().flatten());
+            if workers.threads() == 1 {
+                results.extend(chunk.into_iter().filter_map(&task));
+            } else {
+                results.extend(pair_tasks(workers, &chunk, &task).into_iter().flatten());
+            }
         }
     }
     let mut chunk = next();
@@ -345,6 +352,17 @@ pub(super) fn each_pair<R: Send>(
         results.extend(found);
     }
     results
+}
+/// The results of `task` for `pairs`, [`PAIR_TASK`] pairs to a task, in pair order.
+fn pair_tasks<R: Send>(
+    workers: Workers,
+    pairs: &[(usize, usize)],
+    task: &(impl Fn((usize, usize)) -> Option<R> + Sync),
+) -> Vec<Vec<R>> {
+    workers.run(pairs.len().div_ceil(PAIR_TASK), |k| {
+        let pairs = pairs.iter().skip(k * PAIR_TASK).take(PAIR_TASK);
+        pairs.filter_map(|&pair| task(pair)).collect()
+    })
 }
 /// Kinds of a per-feature rule in emission order. Empty when each feature emits all
 /// of its violations together.
@@ -1742,13 +1760,14 @@ mod tests {
 
     #[test]
     fn large_features_split_their_points_and_pairs_without_changing_the_output() {
-        // One feature with more candidate pairs than a feature task holds at once.
-        let count = PAIRS + PAIRS / 2;
+        // One feature with more candidate pairs than a feature task holds at once, the
+        // last of its threads' tasks short of PAIR_TASK pairs.
+        let count = PAIRS + PAIRS / 2 + 37;
         let points = (0..count)
             .map(|i| Point::new(i as f64, 0.))
             .collect::<Vec<_>>();
         // Even lines cover their points, odd ones only cross their boxes.
-        let lines = (0..count / 64).map(|k| {
+        let lines = (0..count.div_ceil(64)).map(|k| {
             let x = (k * 64) as f64;
             let rise = if k % 2 == 0 { 0. } else { 1. };
             let line = LineString::from(vec![(x - 0.5, -rise), (x + 63.5, rise)]);
