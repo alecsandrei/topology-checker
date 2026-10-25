@@ -367,7 +367,7 @@ pub(crate) struct LineGraph {
     pub coords: Vec<Coord>,
     pub parts: Vec<GraphPart>,
     pub incident: Incidences,
-    pub contacts: BTreeMap<usize, Vec<Contact>>,
+    pub contacts: Contacts,
     sources: Vec<Segment>,
     matches: Cache<Vec<Matched>>,
     #[cfg(test)]
@@ -388,12 +388,34 @@ pub(crate) struct Matched {
     pub overlap: bool,
 }
 /// Original incidences at one actual source contact, before node clustering.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct Contact {
     pub parts: [usize; 2],
     pub interior: [bool; 2],
     pub points: [Coord; 2],
     pub sources: [usize; 2],
+}
+/// Contacts by node in node order, each node's in the order found.
+#[derive(Debug)]
+pub(crate) struct Contacts {
+    nodes: Vec<usize>,
+    /// Where the contacts of each node start, and where the last end.
+    offsets: Vec<usize>,
+    values: Vec<Contact>,
+}
+impl Contacts {
+    /// Nodes with contacts, in order.
+    pub fn keys(&self) -> std::slice::Iter<'_, usize> {
+        self.nodes.iter()
+    }
+    pub fn get(&self, node: &usize) -> Option<&[Contact]> {
+        let i = self.nodes.binary_search(node).ok()?;
+        Some(&self.values[self.offsets[i]..self.offsets[i + 1]])
+    }
+    pub fn iter(&self) -> impl Iterator<Item = (usize, &[Contact])> {
+        let lists = self.offsets.windows(2).map(|o| &self.values[o[0]..o[1]]);
+        self.nodes.iter().copied().zip(lists)
+    }
 }
 /// Compact contiguous incidences; construction allocation is released on caching.
 #[derive(Debug)]
@@ -907,7 +929,6 @@ impl LineGraph {
     }
     /// The index of construction again, in its search order when known.
     fn source_index(&self, workers: &Workers) -> Packed {
-        checkpoint("matches.index");
         let entry = |i: usize| Entry::new(i, self.source(i).bounding_rect());
         let mut entries = parallel::repeated(Entry::default(), self.sources.len(), "matches.index");
         match &self.order {
@@ -2243,7 +2264,7 @@ impl LineGraph {
         self.contact_nodes
             .get_or_init(|| {
                 let mut features = BTreeMap::<_, Vec<_>>::new();
-                for (&node, contacts) in &self.contacts {
+                for (node, contacts) in self.contacts.iter() {
                     checkpoint("contacts.features");
                     for contact in contacts {
                         for part in contact.parts {
@@ -2337,7 +2358,7 @@ impl LineGraph {
             y: p.y + 0.,
         };
         let blank = ((LayerId(0), 0), Coord { x: 0., y: 0. });
-        let mut feature_ends = parallel::repeated(blank, ends.len(), "ends");
+        let mut feature_ends = parallel::repeated(blank, ends.len(), "ends.init");
         workers.fill(&mut feature_ends, |i| {
             let end = &ends[i];
             let feature = parts[segments[end.source].part].reference.feature();
@@ -2359,7 +2380,6 @@ impl LineGraph {
             }
         }
         feature_ends.truncate(end_counts.len());
-        checkpoint("index");
         let mut entries = parallel::repeated(Entry::default(), segments.len(), "index");
         workers.fill(&mut entries, |i| {
             Entry::new(i, segments[i].line(&parts).bounding_rect())
@@ -2733,6 +2753,24 @@ impl LineGraph {
         workers.fill(&mut keys, |k| (node_of[original_contacts[k].0], k));
         drop(node_of);
         workers.sort(&mut keys, "contacts.sort", Ord::cmp);
+        let mut values = parallel::repeated(Contact::default(), keys.len(), "contacts.values");
+        workers.fill(&mut values, |i| original_contacts[keys[i].1].1);
+        drop(original_contacts);
+        let (mut contact_nodes, mut offsets) = (Vec::new(), Vec::new());
+        for (i, &(node, _)) in keys.iter().enumerate() {
+            every(i, "contacts.nodes");
+            if contact_nodes.last() != Some(&node) {
+                contact_nodes.push(node);
+                offsets.push(i);
+            }
+        }
+        offsets.push(keys.len());
+        drop(keys);
+        let contacts = Contacts {
+            nodes: contact_nodes,
+            offsets,
+            values,
+        };
         let coords = sweep.finish();
         workers.sort(&mut raw_edges, "edges.sort", |a, b| {
             (a.0, a.1.part, a.1.source).cmp(&(b.0, b.1.part, b.1.source))
@@ -2740,7 +2778,7 @@ impl LineGraph {
         let mut uses = Vec::with_capacity(raw_edges.len());
         let mut groups = 0;
         for i in 0..raw_edges.len() {
-            every(i, "edges");
+            every(i, "edges.group");
             let (nodes, usage) = raw_edges[i];
             let start = uses.len();
             uses.push(usage);
@@ -2783,8 +2821,9 @@ impl LineGraph {
             every(i - 1, "edges.offsets");
             offsets[i] += offsets[i - 1];
         }
-        let mut cursor = parallel::copied(&offsets[..coords.len()], "edges.offsets");
-        let mut values = parallel::repeated(Incident { part: 0 }, uses.len() * 2, "edges.incident");
+        let mut cursor = parallel::copied(&offsets[..coords.len()], "edges.cursor");
+        let mut values =
+            parallel::repeated(Incident { part: 0 }, uses.len() * 2, "edges.incident.init");
         for (k, edge) in edges.iter().enumerate() {
             every(k, "edges.incident");
             for usage in &uses[edge.uses.clone()] {
@@ -2796,9 +2835,9 @@ impl LineGraph {
         }
         drop((cursor, edges, uses));
         let incident = Incidences { offsets, values };
-        // The many small lists of each part and node come last, without checks:
-        // freeing them on cancellation would take about as long as finishing.
-        let contacts = cancel::scope(None, || {
+        // The many small lists of each part come last, without checks: freeing
+        // them on cancellation would take about as long as finishing.
+        cancel::scope(None, || {
             let mut runs = Vec::new();
             let mut rest = &mut parts[..];
             for range in part_ranges(&workers, &starts) {
@@ -2811,24 +2850,6 @@ impl LineGraph {
                     part.nodes = nodes[span.clone()].to_vec();
                 }
             });
-            // Each task lists the nodes whose contacts start in its range.
-            let grouped = workers.chunks(keys.len(), |range| {
-                let mut out = Vec::new();
-                let mut i = range.start;
-                while i < range.end && i > 0 && keys[i - 1].0 == keys[i].0 {
-                    i += 1;
-                }
-                while i < range.end {
-                    let node = keys[i].0;
-                    let end = i + keys[i..].partition_point(|&(n, _)| n == node);
-                    let list = keys[i..end].iter().map(|&(_, k)| original_contacts[k].1);
-                    out.push((node, list.collect::<Vec<Contact>>()));
-                    i = end;
-                }
-                out
-            });
-            // In key order already, so the map is built in one pass.
-            grouped.into_iter().flatten().collect::<BTreeMap<_, _>>()
         });
         Ok(Self {
             matches: Cache::new(),

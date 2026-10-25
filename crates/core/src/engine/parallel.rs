@@ -247,15 +247,17 @@ impl Workers {
         });
     }
     /// Sort unstably. Elements that compare equal must be interchangeable,
-    /// so the order is the same for any number of threads.
+    /// so the order is the same for any number of threads. `step` names the
+    /// sort's first checkpoint, and each stage has its own.
     pub(crate) fn sort<T: Copy + Send + Sync>(
         &self,
         v: &mut Vec<T>,
         step: &'static str,
         compare: impl Fn(&T, &T) -> Ordering + Sync,
     ) {
+        cancel::checkpoint(step);
         if self.threads == 1 || v.len() < 2 * self.grain.max(1) {
-            sort(v, step, &compare);
+            sort(v, "sort.serial", &compare);
             return;
         }
         // Buckets bounded by evenly spaced samples, sorted on their own.
@@ -265,7 +267,7 @@ impl Workers {
             .step_by((v.len() / (buckets * 16)).max(1))
             .copied()
             .collect::<Vec<_>>();
-        sort(&mut samples, step, &compare);
+        sort(&mut samples, "sort.samples", &compare);
         let bounds = (1..buckets)
             .map(|k| samples[k * samples.len() / buckets])
             .collect::<Vec<_>>();
@@ -277,7 +279,7 @@ impl Workers {
                 .iter()
                 .enumerate()
                 .map(|(k, x)| {
-                    cancel::every(k, step);
+                    cancel::every(k, "sort.classes");
                     let bucket = bounds.partition_point(|b| compare(b, x) == Ordering::Less);
                     counts[bucket] += 1;
                     u16::try_from(bucket).expect("bucket number")
@@ -287,7 +289,7 @@ impl Workers {
         });
         // Safe code needs an initialised destination; a copy is cheaper than
         // anything else that fills it.
-        let mut out = copied(v, step);
+        let mut out = copied(v, "sort.copy");
         // Regions by bucket, then task, so each task fills its own regions.
         let mut regions = (0..ranges.len())
             .map(|_| Vec::with_capacity(buckets))
@@ -306,7 +308,7 @@ impl Workers {
             regions.into_iter().enumerate().collect(),
             |(task, mut regions)| {
                 // Moving elements runs at copying speed: one check per task.
-                cancel::checkpoint(step);
+                cancel::checkpoint("sort.moves");
                 let mut cursor = vec![0; buckets];
                 for (x, &bucket) in source[ranges[task].clone()].iter().zip(&classes[task].0) {
                     let bucket = usize::from(bucket);
@@ -322,7 +324,7 @@ impl Workers {
             slices.push(head);
             rest = tail;
         }
-        self.each(slices, |slice| sort(slice, step, &compare));
+        self.each(slices, |slice| sort(slice, "sort.buckets", &compare));
         *v = out;
     }
 }
@@ -463,23 +465,48 @@ mod tests {
         let v = (0..1_u64 << 16)
             .map(|i| i.wrapping_mul(0x9e37_79b9_7f4a_7c15))
             .collect::<Vec<_>>();
+        let stages = [
+            "sort",
+            "sort.buckets",
+            "sort.classes",
+            "sort.copy",
+            "sort.moves",
+            "sort.samples",
+        ];
         for threads in [1, 4] {
             let workers = Workers::forced(threads, 64, || Workers::new(0));
-            let steps: [(&str, &dyn Fn()); 5] = [
-                ("fill", &|| workers.fill(&mut vec![0; v.len()], |i| v[i])),
-                ("sort", &|| workers.sort(&mut v.clone(), "sort", u64::cmp)),
-                ("serial", &|| sort(&mut v.clone(), "serial", u64::cmp)),
-                ("repeated", &|| drop(repeated(1, 1 << 20, "repeated"))),
-                ("copied", &|| drop(copied(&v, "copied"))),
+            let sorted: &[&str] = if threads == 1 {
+                &["sort", "sort.serial"]
+            } else {
+                &stages
+            };
+            let steps: [(&[&str], &dyn Fn()); 5] = [
+                (&["fill"], &|| workers.fill(&mut vec![0; v.len()], |i| v[i])),
+                (sorted, &|| workers.sort(&mut v.clone(), "sort", u64::cmp)),
+                (&["serial"], &|| sort(&mut v.clone(), "serial", u64::cmp)),
+                (&["repeated"], &|| drop(repeated(1, 1 << 20, "repeated"))),
+                (&["copied"], &|| drop(copied(&v, "copied"))),
             ];
-            for (step, run) in steps {
-                let token = cancel::hooks::watched(Some((step, 0)));
-                assert!(failure(&token, run).is::<cancel::Cancelled>(), "{step}");
-                let record = cancel::hooks::record(&token);
-                assert_eq!(record.live, 0);
-                // Each other thread passes at most one more checkpoint.
-                let visits = record.visits[step];
-                assert!(visits <= threads, "{step} on {threads} threads: {visits}");
+            for (expected, run) in steps {
+                // Every checkpoint is passed, so one taken out shows.
+                let token = cancel::hooks::watched(None);
+                cancel::scope(Some(token.clone()), run);
+                let visits = cancel::hooks::record(&token).visits;
+                assert!(visits.keys().eq(expected), "{expected:?} on {threads}");
+                for (step, count) in visits {
+                    for visit in [0, count / 2] {
+                        let token = cancel::hooks::watched(Some((step, visit)));
+                        assert!(failure(&token, run).is::<cancel::Cancelled>(), "{step}");
+                        let record = cancel::hooks::record(&token);
+                        assert_eq!(record.live, 0);
+                        // Each other thread passes at most one more checkpoint.
+                        let after = record.visits[step];
+                        assert!(
+                            (visit + 1..=visit + threads).contains(&after),
+                            "{step} {visit} on {threads} threads: {after}"
+                        );
+                    }
+                }
             }
         }
     }

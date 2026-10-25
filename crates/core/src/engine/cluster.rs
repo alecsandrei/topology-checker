@@ -322,14 +322,22 @@ impl Sweep {
         if last {
             return;
         }
-        self.earlier = merge(std::mem::take(&mut self.earlier), found, step, |a, b| {
-            order(&a.0, &b.0)
-        });
-        super::parallel::sort(&mut made, step, Ord::cmp);
-        self.cells = merge(std::mem::take(&mut self.cells), made, step, Ord::cmp);
+        self.earlier = merge(
+            std::mem::take(&mut self.earlier),
+            found,
+            "sweep.earlier",
+            |a, b| order(&a.0, &b.0),
+        );
+        super::parallel::sort(&mut made, "sweep.cells.sort", Ord::cmp);
+        self.cells = merge(
+            std::mem::take(&mut self.cells),
+            made,
+            "sweep.cells",
+            Ord::cmp,
+        );
     }
 }
-/// Merge two sorted lists.
+/// Merge two sorted lists, those of `a` first among equal elements.
 fn merge<T>(
     a: Vec<T>,
     b: Vec<T>,
@@ -340,16 +348,15 @@ fn merge<T>(
         return b;
     }
     let mut out = Vec::with_capacity(a.len() + b.len());
+    let mut a = a.into_iter().peekable();
     let mut b = b.into_iter().peekable();
-    for x in a {
-        while let Some(y) = b.next_if(|y| {
-            crate::cancel::every(out.len(), step);
-            compare(y, &x).is_lt()
-        }) {
-            out.push(y);
-        }
+    while let Some(x) = a.peek() {
         crate::cancel::every(out.len(), step);
-        out.push(x);
+        let next = match b.next_if(|y| compare(y, x).is_lt()) {
+            Some(y) => y,
+            None => a.next().expect("peeked"),
+        };
+        out.push(next);
     }
     out.extend(b);
     out
@@ -429,5 +436,34 @@ mod tests {
                 "case {case}"
             );
         }
+    }
+
+    #[test]
+    fn sweeps_pass_every_checkpoint() {
+        use crate::cancel::{self, hooks};
+        let batch = |shift: f64| {
+            let mut points = (0..500)
+                .map(|i| Coord {
+                    x: f64::from(i * 7 % 101) + shift,
+                    y: f64::from(i % 13),
+                })
+                .collect::<Vec<_>>();
+            points.sort_by(order);
+            points.dedup();
+            points
+        };
+        let token = hooks::watched(None);
+        cancel::scope(Some(token.clone()), || {
+            let mut sweep = Sweep::new(0.25);
+            for (b, shift) in [0., 0.5, 0.75].into_iter().enumerate() {
+                sweep.batch(&batch(shift), |&p| p, b == 2, "sweep", |_, _| {});
+            }
+        });
+        let visits = hooks::record(&token).visits;
+        let steps = visits.keys().copied().collect::<Vec<_>>();
+        assert_eq!(
+            steps,
+            ["sweep", "sweep.cells", "sweep.cells.sort", "sweep.earlier"]
+        );
     }
 }
