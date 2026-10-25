@@ -24,8 +24,8 @@ from qgis.core import (
 
 from .._typing import Parameters
 from ..core import engine, folders
-from ..core.checks import Job, renumber_errors, run_jobs
-from ..core.invalid import append_invalid
+from ..core.checks import Job, run_jobs
+from ..core.errors import add_invalid
 from ..core.layers import Input, require_kind
 from ..utils import (
     QgsProcessingException,
@@ -237,9 +237,16 @@ class CheckRulesAlgorithm(Planned):
                     context,
                     feedback,
                 )
-            renumber_errors(output, outcome.ids)
-            append_invalid(output, outcome.invalid, outcome.crs, context)
+            add_invalid(output, outcome, len(plan.jobs), context, feedback)
         total = sum(outcome.counts) + len(outcome.invalid)
+        if len(outcome.counts) < len(plan.jobs):
+            # Canceled: what the rules that are done found, which the panel
+            # shows and Processing does not load
+            feedback.pushInfo(
+                tr('Canceled: {done} of {total} rules checked').format(
+                    done=len(outcome.counts), total=len(plan.jobs)
+                )
+            )
         feedback.pushInfo(tr('{count} topology errors').format(count=total))
         return {
             OUTPUT: output,

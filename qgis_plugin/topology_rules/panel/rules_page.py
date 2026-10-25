@@ -99,6 +99,19 @@ class RulesPage(QWidget):
             signal.connect(self.update_title)
         self.update_title()
 
+    def lock(self, locked: bool) -> None:
+        """Keeps what a run checks as it is. The list stays as readable as
+        ever, since its counts fill in as the rules are done."""
+        for widget in (
+            self.offer,
+            self.form,
+            self.import_button,
+            self.export_button,
+            self.options,
+        ):
+            widget.setEnabled(not locked)
+        self.rule_list.set_locked(locked)
+
     def update_title(self) -> None:
         """Says in the title of the box what is set in it, since it is
         closed most of the time."""

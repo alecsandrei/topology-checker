@@ -23,11 +23,13 @@ def fingerprint(row: Row, layers: c.Mapping[str, str]) -> str:
     )
 
 
-def stamp(rows: c.Iterable[Row], layers: c.Mapping[str, str]) -> list[Row]:
-    """The errors with their fingerprints, to look up as often as needed."""
-    return [
-        dataclasses.replace(row, mark=fingerprint(row, layers)) for row in rows
-    ]
+def stamp(rows: list[Row], layers: c.Mapping[str, str]) -> list[Row]:
+    """Gives the errors their fingerprints, to look up as often as needed.
+    The list is changed in place, so that a run of many errors does not
+    hold two of each, and returned."""
+    for index, row in enumerate(rows):
+        rows[index] = dataclasses.replace(row, mark=fingerprint(row, layers))
+    return rows
 
 
 class Ignored:

@@ -1,0 +1,577 @@
+"""What a run tells as it goes, with each engine: the stage it is at, and
+each rule as soon as it is done, with its errors. A run that tells all this
+writes the same errors as one that did not."""
+
+from __future__ import annotations
+
+import collections.abc as c
+import contextlib
+import gc
+import sqlite3
+import sys
+import threading
+import typing as t
+import weakref
+from pathlib import Path
+
+import pytest
+from qgis.core import QgsProcessingContext, QgsProcessingFeedback, QgsProject
+
+from topology_rules.core import engine
+from topology_rules.core.binary import Rule
+from topology_rules.core.checks import Job, run_jobs
+from topology_rules.core.engine import Package, Tool
+from topology_rules.core.errors import from_wkb
+from topology_rules.core.layers import Input
+from topology_rules.core.progress import (
+    Checked,
+    Found,
+    Progress,
+    Stage,
+    counted,
+    label,
+)
+from topology_rules.exceptions import RunError
+
+from .helpers import line_layer, point_layer, polygon_layer, real_streams
+from .live import (
+    Recorder,
+    expected_stages,
+    forwarding_executable,
+    found_rows,
+    hold_reports,
+    run_told,
+    untold,
+)
+from .test_engines_agree import (
+    BOWTIE,
+    CHAIN,
+    SCATTERED,
+    SHIFTED,
+    SQUARE,
+    project,
+    same_tables,
+    tables,
+    wkt,
+)
+
+FAR_SQUARE = 'POLYGON((40 0, 50 0, 50 10, 40 10, 40 0))'
+RING = 'LINESTRING(0 0, 10 0, 10 10, 0 0)'
+CROSSING = 'LINESTRING(0 -5, 5 5)'
+
+Spec = tuple[str, Input] | tuple[str, Input, Input]
+
+
+def lines() -> list[Spec]:
+    roads = project(line_layer(*CHAIN, CROSSING, name='roads'))
+    return [
+        ('line/must-not-have-dangles', roads),
+        ('line/must-not-intersect', roads),
+        ('line/must-not-self-intersect', roads),
+    ]
+
+
+def polygons() -> list[Spec]:
+    parcels = project(
+        polygon_layer(SQUARE, SHIFTED, FAR_SQUARE, name='parcels')
+    )
+    return [
+        ('polygon/must-not-overlap', parcels),
+        ('polygon/must-not-have-gaps', parcels),
+        ('geometry/must-not-be-multipart', parcels),
+    ]
+
+
+def points() -> list[Spec]:
+    wells = project(
+        point_layer(
+            'POINT(0 0)',
+            'POINT(0 0)',
+            'POINT(5 5)',
+            'POINT(10 0)',
+            name='wells',
+        )
+    )
+    roads = project(line_layer(*CHAIN, name='roads'))
+    return [
+        ('point/must-not-overlap', wells),
+        ('point/must-be-covered-by-lines', wells, roads),
+        ('point/must-be-covered-by-line-endpoints', wells, roads),
+    ]
+
+
+def two_layers() -> list[Spec]:
+    roads = project(line_layer(*CHAIN, name='roads'))
+    rivers = project(line_layer('LINESTRING(5 -5, 5 5)', name='rivers'))
+    parcels = project(polygon_layer(SQUARE, FAR_SQUARE, name='parcels'))
+    wells = project(point_layer('POINT(5 5)', 'POINT(70 70)', name='wells'))
+    return [
+        ('line/must-not-intersect-with', roads, rivers),
+        ('polygon/must-contain-point', parcels, wells),
+        ('line/must-be-inside', roads, parcels),
+    ]
+
+
+def invalid() -> list[Spec]:
+    """A polygon that crosses itself, which both engines leave out and
+    report, and errors of the others."""
+    parcels = project(polygon_layer(SQUARE, SHIFTED, BOWTIE, name='parcels'))
+    roads = project(line_layer(*CHAIN, name='roads'))
+    return [
+        ('polygon/must-not-overlap', parcels),
+        ('line/must-not-have-dangles', roads),
+    ]
+
+
+def zero_in_the_middle() -> list[Spec]:
+    roads = project(line_layer(*CHAIN, CROSSING, name='roads'))
+    return [
+        ('line/must-not-have-dangles', roads),
+        ('line/must-not-overlap', roads),
+        ('line/must-not-intersect', roads),
+    ]
+
+
+def all_zero() -> list[Spec]:
+    ring = project(line_layer(RING, name='ring'))
+    return [
+        ('line/must-not-have-dangles', ring),
+        ('line/must-not-intersect', ring),
+    ]
+
+
+def single() -> list[Spec]:
+    return [('line/must-not-have-dangles', project(line_layer(*CHAIN)))]
+
+
+def families() -> list[Spec]:
+    """Rules whose errors are points, lines and polygons, in turn."""
+    roads = project(line_layer(*CHAIN, 'LINESTRING(0 0, 10 0)', name='roads'))
+    parcels = project(polygon_layer(SQUARE, SHIFTED, name='parcels'))
+    return [
+        ('line/must-not-have-dangles', roads),
+        ('polygon/must-not-overlap', parcels),
+        ('line/must-not-overlap', roads),
+        ('line/must-not-have-dangles', roads),
+    ]
+
+
+def many() -> list[Spec]:
+    scattered = project(line_layer(*SCATTERED, name='scattered'))
+    return [
+        ('line/must-not-have-dangles', scattered),
+        ('line/must-not-intersect', scattered),
+    ]
+
+
+SHAPES: dict[str, c.Callable[[], list[Spec]]] = {
+    'lines': lines,
+    'polygons': polygons,
+    'points': points,
+    'two-layers': two_layers,
+    'invalid': invalid,
+    'zero-in-the-middle': zero_in_the_middle,
+    'all-zero': all_zero,
+    'single': single,
+    'families': families,
+    'many': many,
+}
+
+
+@pytest.fixture(params=['executable', 'package'])
+def tool(request: pytest.FixtureRequest, executable: str) -> c.Iterator[Tool]:
+    """Each engine in turn."""
+    if request.param == 'package':
+        yield request.getfixturevalue('package')
+    else:
+        yield executable
+
+
+def jobs_of(tool: Tool, specs: list[Spec]) -> list[Job]:
+    rules: dict[str, Rule] = {rule.name: rule for rule in engine.rules(tool)}
+    return [Job(rules[name], *inputs) for name, *inputs in specs]
+
+
+def last_attempt(recorder: Recorder) -> list[object]:
+    """What the run told from the last time it read the layers: a tool that
+    rejects a feature is run again without it."""
+    events = list(recorder.events)
+    starts = [
+        i
+        for i, event in enumerate(events)
+        if not isinstance(event, Checked) and event[0] is Stage.READING
+    ]
+    assert starts, events
+    return events[starts[-1] :]
+
+
+def streams(tool: Tool) -> bool:
+    """Whether the engine tells of each rule as soon as it is done."""
+    return isinstance(tool, Package) or real_streams()
+
+
+def told_in_order(
+    recorder: Recorder,
+    total: int,
+    streams: bool,
+    refused: bool = False,
+    together: bool = False,
+) -> None:
+    """A run reads, then checks the rules one after the other, telling of
+    each when it is done and which comes next, then writes the errors. One
+    that is told all rules at once does not go through them. With together,
+    a rule that is done by the time the one before it is told may not be
+    said to be checked."""
+    events = last_attempt(recorder)
+    stages = expected_stages(total, streams, refused)
+    done = [e for e in events if isinstance(e, Checked)]
+    assert [d.index for d in done] == list(range(total))
+    if not streams:
+        assert events == [*stages[:-1], *done, stages[-1]]
+        return
+    expected: list[object] = list(stages[:2])
+    for index in range(total):
+        expected += [done[index], stages[index + 2]]
+    if together:
+        expected = [
+            e
+            for e in expected
+            if e in events
+            or not (isinstance(e, tuple) and e[0] is Stage.CHECKING and e[1])
+        ]
+    assert events == expected
+
+
+def file_rows(path: Path) -> dict[str, list[list[object]]]:
+    """The errors of the GeoPackage by family, in the order of the file, as
+    the geometry and the columns."""
+    if not path.exists():
+        return {}
+    found: dict[str, list[list[object]]] = {}
+    with contextlib.closing(sqlite3.connect(path)) as db:
+        names = [
+            name
+            for (name,) in db.execute(
+                'select table_name from gpkg_geometry_columns'
+            )
+        ]
+        for name in sorted(names):
+            rows = db.execute(
+                'select geom, violation_id, rule, error_type, origin_layer, '
+                'origin_fid, origin_part, destination_layer, '
+                f'destination_fid, destination_part from "{name}" order by fid'
+            )
+            found[name.removeprefix('errors_')] = [
+                [wkt(geometry), *values] for geometry, *values in rows
+            ]
+    return found
+
+
+def rule_lines(log: str, jobs: list[Job]) -> list[str]:
+    labels = {label(job) for job in jobs}
+    return [
+        line for line in log.splitlines() if line.rpartition(': ')[0] in labels
+    ]
+
+
+@pytest.mark.parametrize('shape', list(SHAPES))
+def test_each_rule_is_told_as_soon_as_it_is_done(
+    tool: Tool, shape: str, tmp_path: Path
+):
+    jobs = jobs_of(tool, SHAPES[shape]())
+    told = run_told(tool, jobs, tmp_path / 'run')
+    told_in_order(
+        told.feedback,
+        len(jobs),
+        streams(tool),
+        together=isinstance(tool, Package),
+    )
+    done = told.feedback.checks()[-len(jobs) :]
+    assert [d.count for d in done] == told.outcome.counts
+    assert {d.total for d in done} == {len(jobs)}
+    for d in done:
+        assert dict(d.layers) == told.outcome.layers
+    # The rows that the rules told of are those of the file, in its order
+    assert found_rows(done) == file_rows(told.output)
+    # The log has a line for each rule, in the order of the rules
+    assert rule_lines(told.feedback.textLog(), jobs) == [
+        f'{label(job)}: {counted(count)}'
+        for job, count in zip(jobs, told.outcome.counts, strict=True)
+    ]
+
+
+def test_the_errors_of_a_rule_are_in_the_order_of_their_layers(
+    package: Package, tmp_path: Path
+):
+    """By family, as the panel reads them from the layers, then as they
+    were found."""
+    jobs = jobs_of(package, families())
+    told = run_told(package, jobs, tmp_path / 'run')
+    order = ['point', 'line', 'polygon']
+    for done in told.feedback.checks():
+        kinds = [order.index(found.family) for found in done.errors]
+        assert kinds == sorted(kinds)
+        for found in done.errors:
+            assert from_wkb(found.wkb).isMultipart()
+
+
+def test_a_rule_is_told_with_the_names_of_its_layers(
+    package: Package, tmp_path: Path
+):
+    jobs = jobs_of(package, two_layers())
+    told = run_told(package, jobs, tmp_path / 'run')
+    first = told.feedback.checks()[0]
+    names = {found.values[3] for found in first.errors} | {
+        found.values[6] for found in first.errors
+    }
+    assert names <= {'roads', 'rivers', None}
+    assert set(first.layers) == {'roads', 'rivers', 'parcels', 'wells'}
+
+
+def test_the_executable_is_asked_to_tell_of_each_rule(
+    executable: str, tmp_path: Path
+):
+    log = tmp_path / 'commands'
+    forwarding = str(forwarding_executable(tmp_path, log))
+    jobs = jobs_of(executable, lines())
+    told = run_told(forwarding, jobs, tmp_path / 'run')
+    validate = [
+        line for line in log.read_text().splitlines() if 'validate' in line
+    ]
+    # A tool that does not know the flag is asked again without it
+    assert len(validate) == (1 if real_streams() else 2)
+    assert '--stream' in validate[0].split()
+    assert len(told.feedback.checks()) == len(jobs)
+
+
+def test_a_run_of_the_toolbox_is_not_told(executable: str, tmp_path: Path):
+    """A feedback that is not the panel's gets the log and the progress."""
+    jobs = jobs_of(executable, lines())
+    feedback = QgsProcessingFeedback()
+    told = run_told(executable, jobs, tmp_path / 'run', feedback=None)
+    plain = run_told(
+        executable, jobs, tmp_path / 'plain', feedback=t.cast(t.Any, feedback)
+    )
+    assert plain.outcome.counts == told.outcome.counts
+    assert rule_lines(feedback.textLog(), jobs) == rule_lines(
+        told.feedback.textLog(), jobs
+    )
+
+
+def warnings_of(log: str) -> list[str]:
+    return sorted({line for line in log.splitlines() if 'warning' in line})
+
+
+@pytest.mark.parametrize('shape', list(SHAPES))
+def test_a_told_run_writes_what_a_run_did_before(
+    tool: Tool,
+    shape: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    jobs = jobs_of(tool, SHAPES[shape]())
+    told = run_told(tool, jobs, tmp_path / 'told')
+    with monkeypatch.context() as patched:
+        untold(patched)
+        before = run_told(
+            tool,
+            jobs,
+            tmp_path / 'before',
+            feedback=t.cast(t.Any, QgsProcessingFeedback()),
+        )
+    first = tables(told.output, {}) if told.output.exists() else None
+    second = tables(before.output, {}) if before.output.exists() else None
+    same_tables(first, second)
+    assert file_rows(told.output) == file_rows(before.output)
+    assert told.outcome.counts == before.outcome.counts
+    assert told.outcome.layers == before.outcome.layers
+    assert [(i.alias, i.fid, i.reason) for i in told.outcome.invalid] == [
+        (i.alias, i.fid, i.reason) for i in before.outcome.invalid
+    ]
+    assert warnings_of(told.feedback.textLog()) == warnings_of(
+        t.cast(t.Any, before.feedback).textLog()
+    )
+
+
+def test_the_shape_with_invalid_features_has_some(tool: Tool, tmp_path: Path):
+    """The test of invalid rows needs invalid rows."""
+    jobs = jobs_of(tool, invalid())
+    told = run_told(tool, jobs, tmp_path / 'run')
+    assert told.outcome.invalid
+
+
+def test_the_shapes_have_what_they_are_named_after(
+    package: Package, tmp_path: Path
+):
+    counts = {
+        shape: run_told(
+            package, jobs_of(package, make()), tmp_path / shape
+        ).outcome.counts
+        for shape, make in SHAPES.items()
+    }
+    assert counts['zero-in-the-middle'][1] == 0
+    assert counts['zero-in-the-middle'][0] > 0
+    assert counts['zero-in-the-middle'][2] > 0
+    assert counts['all-zero'] == [0, 0]
+    assert len(counts['single']) == 1
+    assert all(counts['families'])
+    assert sum(counts['many']) >= 80
+
+
+# Many errors
+
+# The errors of each rule of a run of many
+MANY = 3000
+
+
+def held_rows() -> int:
+    """How many rows of errors are held."""
+    return sum(isinstance(item, Found) for item in gc.get_objects())
+
+
+class Counted(Progress):
+    """A feedback that counts the errors that the run holds as each rule is
+    done, and keeps nothing of what it is told."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.held: list[int] = []
+
+    def checked(self, done: Checked) -> None:
+        self.held.append(held_rows())
+
+
+def apart(name: str) -> Input:
+    """Lines that touch nothing, with two dangles each."""
+    return project(
+        line_layer(
+            *(
+                f'LINESTRING({i * 10} 0, {i * 10 + 5} 0)'
+                for i in range(MANY // 2)
+            ),
+            name=name,
+        )
+    )
+
+
+def test_a_run_holds_the_errors_of_one_rule_at_a_time(
+    tool: Tool, tmp_path: Path
+):
+    """A rule's errors go to the file as soon as it is done, and are let go
+    of: the run does not keep the errors of the rules before."""
+    jobs = jobs_of(
+        tool,
+        [('line/must-not-have-dangles', apart(f'lines {n}')) for n in range(3)],
+    )
+    work = tmp_path / 'work'
+    work.mkdir()
+    output = tmp_path / 'errors.gpkg'
+    context = QgsProcessingContext()
+    context.setProject(QgsProject.instance())
+    feedback = Counted()
+    outcome = run_jobs(jobs, tool, None, str(output), work, context, feedback)
+    assert outcome.counts == [MANY] * len(jobs)
+    assert feedback.held == [MANY] * len(jobs)
+    assert sum(map(len, file_rows(output).values())) == MANY * len(jobs)
+
+
+# Canceling
+
+
+def test_a_canceled_run_of_the_package_lets_go_of_the_rule(
+    package: Package, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Processing keeps the error of a canceled run, and the frames of its
+    traceback: they hold nothing of the rule whose errors were made rows."""
+    from topology_rules.core import package as runner
+
+    feedback = Recorder()
+    held: list[weakref.ref[object]] = []
+    next_report = runner.Reports.next
+    attributes = runner.attributes
+
+    def reported(self: runner.Reports, *args: t.Any) -> t.Any:
+        report = next_report(self, *args)
+        if report is not None:
+            held.append(weakref.ref(report))
+        return report
+
+    def cancel_at_first(index: int, violation: t.Any, *rest: t.Any) -> t.Any:
+        held.append(weakref.ref(violation))
+        feedback.cancel()
+        return attributes(index, violation, *rest)
+
+    monkeypatch.setattr(runner.Reports, 'next', reported)
+    monkeypatch.setattr(runner, 'attributes', cancel_at_first)
+    jobs = jobs_of(package, [('line/must-not-have-dangles', apart('lines'))])
+    gc.collect()
+    rows = held_rows()
+    with pytest.raises(RunError, match='Canceled') as caught:
+        run_told(package, jobs, tmp_path / 'run', feedback=feedback)
+    for thread in threading.enumerate():
+        if thread.name.startswith('topology-reports'):
+            thread.join(30)
+    gc.collect()
+    assert caught.value.__traceback__ is not None
+    assert len(held) == 2
+    assert [ref() for ref in held] == [None, None]
+    assert held_rows() == rows
+
+
+def test_a_canceled_run_of_the_executable_lets_go_of_the_rule(
+    executable: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Processing keeps the error of a canceled run, and the frames of its
+    traceback: they hold neither the line of the rule whose errors were
+    made rows nor the rows."""
+    from topology_rules.core import report
+
+    feedback = Recorder()
+    said: list[str] = []
+    line = report.Report.line
+    found_in = report.found_in
+
+    def read(self: report.Report, text: str) -> bool:
+        said.append(text)
+        return line(self, text)
+
+    def cancel_at_first(*args: t.Any) -> t.Any:
+        feedback.cancel()
+        return found_in(*args)
+
+    monkeypatch.setattr(report.Report, 'line', read)
+    monkeypatch.setattr(report, 'found_in', cancel_at_first)
+    jobs = jobs_of(executable, [('line/must-not-have-dangles', apart('lines'))])
+    gc.collect()
+    rows = held_rows()
+    with pytest.raises(RunError, match='Canceled') as caught:
+        run_told(executable, jobs, tmp_path / 'run', feedback=feedback)
+    gc.collect()
+    assert caught.value.__traceback__ is not None
+    # A new string, held as the line is: by the list alone
+    alone = ['line ' + str(len(said))]
+    assert sys.getrefcount(said[-1]) == sys.getrefcount(alone[0])
+    assert held_rows() == rows
+
+
+# Failures
+
+
+@pytest.mark.parametrize('after', [0, 1, 2])
+def test_the_package_failing_after_some_rules_tells_of_those(
+    package: Package,
+    after: int,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    gate = hold_reports(monkeypatch)[0]
+    gate.fail_at = after
+    gate.failure = 'the package ran out of memory'
+    gate.let_all()
+    jobs = jobs_of(package, lines())
+    feedback = Recorder()
+    with pytest.raises(RunError, match='ran out of memory'):
+        run_told(package, jobs, tmp_path / 'run', feedback=feedback)
+    assert [d.index for d in feedback.checks()] == list(range(after))
+    assert len(rule_lines(feedback.textLog(), jobs)) == after
+    assert (Stage.WRITING, None, len(jobs)) not in feedback.stages()

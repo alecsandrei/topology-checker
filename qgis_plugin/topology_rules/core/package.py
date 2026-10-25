@@ -9,14 +9,14 @@ loads where it is not installed.
 from __future__ import annotations
 
 import collections.abc as c
+import contextlib
 import dataclasses
+import queue
+import threading
 import typing as t
 
 from qgis.core import (
-    Qgis,
     QgsCoordinateReferenceSystem,
-    QgsFeature,
-    QgsFields,
     QgsGeometry,
     QgsProcessingContext,
     QgsProcessingFeedback,
@@ -30,8 +30,17 @@ from ..utils import not_none, tr
 from .binary import Rule, known
 from .checks import Job, Outcome
 from .commands import unique
+from .errors import (
+    MULTI,
+    Errors,
+    ErrorsFile,
+    Gathered,
+    create_layer,
+    found_in,
+    from_wkb,
+    write_rows,
+)
 from .inputs import (
-    BATCH,
     Skipped,
     geometries,
     invalid_reason,
@@ -43,20 +52,14 @@ from .inputs import (
     require_readable,
     stem,
     straight,
-    write,
 )
-from .invalid import FIELDS, Invalid, Rejected, parse_failure
-from .layers import Dataset, Input, default_tolerance, geographic, wkb_kind
+from .invalid import Invalid, Rejected, parse_failure
+from .layers import Dataset, Input, default_tolerance, geographic
+from .progress import Found, Stage, staged
 
 if t.TYPE_CHECKING:
     import topology_checker as tc
 
-# The geometry of each layer that the executable writes
-MULTI = {
-    'point': Qgis.WkbType.MultiPoint,
-    'line': Qgis.WkbType.MultiLineString,
-    'polygon': Qgis.WkbType.MultiPolygon,
-}
 # The layer that each utility writes
 UTILITY_LAYERS = {
     'merge-lines': 'merged_line',
@@ -64,12 +67,8 @@ UTILITY_LAYERS = {
 }
 # What the executable says when a tolerance is in degrees
 ANGULAR = 'tolerance is in angular units; calculations are planar'
-# The id of "Undefined geographic SRS", which the executable gives a layer
-# without a CRS
-NO_CRS = 'SRID=0'
-# The columns of an error as the executable writes them: texts of any
-# length and 64-bit integers
-COLUMNS = FIELDS.replace(':string', ':string(0)').replace(':integer', ':long')
+# How often a run that waits for a rule looks whether it was canceled
+POLL_SECONDS = 0.1
 
 Skips = t.Mapping[object, t.Mapping[int, str]]
 
@@ -293,7 +292,7 @@ def run_once(
     exported: set[object],
     made: dict[object, tuple[object, Snapshot]],
 ) -> Outcome:
-    """Runs the jobs with the package, which writes the errors to the
+    """Runs the jobs with the package, and writes the errors to the
     GeoPackage at the output as the executable does.
 
     The inputs are named as for the executable: after their file where it
@@ -328,9 +327,19 @@ def run_once(
         by_key[key] = registered[who]
     for job in jobs:
         add_rule(topology, job, by_key)
-    errors = validate(topology, registered.values(), feedback)
-    if errors.rows:
-        write_errors(output, errors, crs, context)
+    layers = {
+        entry.name: layer_id
+        for key, entry in by_key.items()
+        if (layer_id := found[key].item.layer_id) is not None
+    }
+    errors = validate(
+        topology,
+        registered.values(),
+        jobs,
+        layers,
+        feedback,
+        ErrorsFile(output, crs, context),
+    )
     for warning in errors.warnings + [
         note
         for entry in registered.values()
@@ -342,18 +351,14 @@ def run_once(
     feedback.setProgress(100)
     return Outcome(
         errors.counts,
-        {},
-        {
-            entry.name: layer_id
-            for key, entry in by_key.items()
-            if (layer_id := found[key].item.layer_id) is not None
-        },
+        layers,
         [
             Invalid(entry.name, skipped.fid, skipped.geometry, skipped.reason)
             for entry in registered.values()
             for skipped in entry.snapshot.skipped
         ],
         target,
+        errors.written,
     )
 
 
@@ -392,70 +397,167 @@ def add_rule(
         )
 
 
-@dataclasses.dataclass
-class Errors:
-    """The errors of a run, as the rows of the layer of each family of
-    geometry, and what the package said about the data."""
-
-    rows: dict[str, list[tuple[QgsGeometry, list[object]]]]
-    counts: list[int]
-    warnings: list[str]
+class Canceled(Exception):
+    """The run was canceled while a rule was checked."""
 
 
-def from_wkb(wkb: bytes) -> QgsGeometry:
-    geometry = QgsGeometry()
-    geometry.fromWkb(wkb)
-    return geometry
+class Reports:
+    """The report of each rule of the topology as soon as the rule is done.
+
+    The package checks the rules outside the lock of Python, in a thread
+    that waits for them, so that a canceled run stops at once: the stream is
+    closed, which stops the rule that is checked then and drops it.
+    """
+
+    def __init__(self, topology: tc.Topology) -> None:
+        self.found: queue.Queue[object] = queue.Queue()
+        self.stopped = threading.Event()
+        self.summary: tc.ReportSummary | None = None
+        self.ended = False
+        self.stream = stream = topology.iter_reports()
+        self.thread = threading.Thread(
+            target=self.read, args=(stream,), name='topology-reports'
+        )
+        self.thread.daemon = True
+        self.thread.start()
+
+    def read(self, stream: tc.ReportStream) -> None:
+        try:
+            with stream:
+                for report in stream:
+                    if self.stopped.is_set():
+                        return
+                    self.found.put(report)
+                    # Not kept while the next rule is checked
+                    del report
+                self.found.put(Ended(stream.summary))
+        except BaseException as error:
+            # Raised where the reports are read
+            self.found.put(error)
+
+    def next(self, feedback: QgsProcessingFeedback) -> tc.RuleReport | None:
+        """The next report, or None when all rules are done. Raises
+        Canceled when the run is canceled first."""
+        while not self.ended:
+            if feedback.isCanceled():
+                raise Canceled
+            try:
+                item = self.found.get(timeout=POLL_SECONDS)
+            except queue.Empty:
+                continue
+            if isinstance(item, Ended):
+                self.ended = True
+                self.summary = item.summary
+            elif isinstance(item, BaseException):
+                self.ended = True
+                raise item
+            else:
+                return t.cast('tc.RuleReport', item)
+        return None
+
+    def ready(self) -> bool:
+        """Whether the next report is at hand already."""
+        return not self.found.empty()
+
+    def __enter__(self) -> Reports:
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.stopped.set()
+        if self.ended:
+            self.close()
+            return
+        # Stopped first: the rule that is checked stops at once, and the run
+        # ends without waiting for the package, which can take seconds to
+        # stop a large rule. A daemon thread that is still in the package
+        # when Python exits is ended inside native code; this goes once the
+        # package stops any rule within a fraction of a second
+        closing = threading.Thread(
+            target=self.close, name='topology-reports-close'
+        )
+        closing.daemon = True
+        closing.start()
+
+    def close(self) -> None:
+        with contextlib.suppress(Exception):
+            self.stream.close()
 
 
-def members(geometry: QgsGeometry) -> c.Iterator[QgsGeometry]:
-    """The geometry, or each member of a collection, which the executable
-    writes to the layer of its family."""
-    collection = Qgis.WkbType.GeometryCollection
-    if QgsWkbTypes.flatType(geometry.wkbType()) == collection:
-        for part in geometry.asGeometryCollection():
-            yield from members(part)
-    else:
-        yield geometry
+@dataclasses.dataclass(frozen=True)
+class Ended:
+    summary: tc.ReportSummary | None
 
 
 def validate(
     topology: tc.Topology,
     registered: c.Iterable[Registered],
+    jobs: t.Sequence[Job],
+    layers: t.Mapping[str, str],
     feedback: QgsProcessingFeedback,
+    file: ErrorsFile,
 ) -> Errors:
-    """Runs the rules, which the package does outside the lock of Python, and
-    stops between two errors when the run is canceled."""
+    """Runs the rules, telling the feedback of each as soon as it is done,
+    and writing its errors to the file.
+
+    A canceled run stops at once, with the errors of the rules that are
+    done and the warnings known by then. When no rule is done, it raises.
+    """
     import topology_checker as tc
 
     names = {entry.layer: entry.name for entry in registered}
-    rows: dict[str, list[tuple[QgsGeometry, list[object]]]] = {}
+    gathered = Gathered(jobs, layers, feedback, file)
     if feedback.isCanceled():
         raise RunError(tr('Canceled'))
+    staged(feedback, Stage.CHECKING, 0, len(jobs))
     try:
-        with topology.iter_validate() as stream:
-            for index, violation in enumerate(stream):
-                if feedback.isCanceled():
-                    raise RunError(tr('Canceled'))
-                values = attributes(index, violation, names)
-                for member in members(from_wkb(violation.wkb)):
-                    family = wkb_kind(member.wkbType())
-                    rows.setdefault(family, []).append((member, values))
-            summary = not_none(stream.summary)
+        warnings = gather(topology, names, gathered, feedback)
     except (ValueError, tc.PrecisionError) as error:
         raise RunError(str(error)) from error
-    return Errors(
-        rows,
-        [rule.error_count for rule in summary.rules],
-        list(summary.warnings),
-    )
+    if warnings is None:
+        if not gathered.counts:
+            # Raised here, where no report was held: the error keeps the
+            # frames of its traceback, and Processing keeps the error
+            raise RunError(tr('Canceled'))
+        warnings = topology.warnings()
+    return gathered.errors(warnings)
+
+
+def gather(
+    topology: tc.Topology,
+    names: c.Mapping[tc.LayerId, str],
+    gathered: Gathered,
+    feedback: QgsProcessingFeedback,
+) -> tuple[str, ...] | None:
+    """Gathers the errors of each rule as soon as it is done. The warnings
+    of the run, or None when it is canceled first."""
+    index = 0
+    try:
+        with Reports(topology) as stream:
+            while (report := stream.next(feedback)) is not None:
+                found: list[Found] = []
+                for violation in report.violations:
+                    if feedback.isCanceled():
+                        return None
+                    values = attributes(index, violation, names)
+                    index += 1
+                    found += found_in(from_wkb(violation.wkb), values)
+                count = report.error_count
+                # Neither the report nor its rows are kept once the rule is
+                # told and written: a later failure keeps them in its
+                # traceback otherwise
+                del report
+                gathered.add(found, count, stream.ready())
+                del found
+            return not_none(stream.summary).warnings
+    except Canceled:
+        return None
 
 
 def attributes(
     index: int,
     violation: tc.Violation,
     names: t.Mapping[tc.LayerId, str],
-) -> list[object]:
+) -> tuple[object, ...]:
     """The columns of an error, in the order of FIELDS."""
     values: list[object] = [
         index,
@@ -468,84 +570,7 @@ def attributes(
             if feature is None
             else [names[feature.layer], feature.fid, feature.part]
         )
-    return values
-
-
-def create_layer(
-    path: str,
-    name: str,
-    fields: QgsFields,
-    kind: Qgis.WkbType,
-    crs: QgsCoordinateReferenceSystem,
-    first: bool,
-    context: QgsProcessingContext,
-) -> QgsVectorFileWriter:
-    """A new layer of the GeoPackage at the path, which the first one
-    creates."""
-    options = QgsVectorFileWriter.SaveVectorOptions()
-    options.driverName = 'GPKG'
-    options.fileEncoding = 'UTF-8'
-    options.layerName = name
-    options.actionOnExistingFile = (
-        QgsVectorFileWriter.ActionOnExistingFile.CreateOrOverwriteFile
-        if first
-        else QgsVectorFileWriter.ActionOnExistingFile.CreateOrOverwriteLayer
-    )
-    if not crs.isValid():
-        options.layerOptions = [NO_CRS]
-    writer = QgsVectorFileWriter.create(
-        path, fields, kind, crs, context.transformContext(), options
-    )
-    if writer is None or (
-        writer.hasError() != QgsVectorFileWriter.WriterError.NoError
-    ):
-        message = '' if writer is None else writer.errorMessage()
-        raise RunError(
-            tr('Could not write {layer} to {path}: {error}').format(
-                layer=name, path=path, error=message
-            )
-        )
-    return writer
-
-
-def write_rows(
-    writer: QgsVectorFileWriter,
-    rows: c.Iterable[tuple[QgsGeometry, list[object]]],
-    fields: QgsFields,
-    name: str,
-) -> None:
-    """Writes the geometries, as multi geometries, with their columns."""
-    batch: list[QgsFeature] = []
-    for geometry, values in rows:
-        geometry.convertToMultiType()
-        feature = QgsFeature(fields)
-        feature.setGeometry(geometry)
-        feature.setAttributes(values)
-        batch.append(feature)
-        if len(batch) == BATCH:
-            write(writer, batch, name)
-    write(writer, batch, name)
-
-
-def write_errors(
-    path: str,
-    errors: Errors,
-    crs: QgsCoordinateReferenceSystem,
-    context: QgsProcessingContext,
-) -> None:
-    """Writes the errors to the layers `errors_line`, `errors_point` and
-    `errors_polygon` of the GeoPackage, those that have any."""
-    columns = QgsVectorLayer(f'None?field={COLUMNS}', 'errors', 'memory')
-    fields = columns.fields()
-    for index, family in enumerate(sorted(errors.rows)):
-        name = f'errors_{family}'
-        writer = create_layer(
-            path, name, fields, MULTI[family], crs, index == 0, context
-        )
-        try:
-            write_rows(writer, errors.rows[family], fields, name)
-        finally:
-            del writer
+    return tuple(values)
 
 
 def run_utility(
@@ -588,7 +613,7 @@ def run_utility(
         fields,
         MULTI['line'],
         snapshot.crs,
-        True,
+        QgsVectorFileWriter.ActionOnExistingFile.CreateOrOverwriteFile,
         context,
     )
     try:

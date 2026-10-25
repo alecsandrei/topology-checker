@@ -14,14 +14,20 @@ import pytest
 from qgis.core import (
     QgsFeature,
     QgsGeometry,
+    QgsMultiLineString,
+    QgsMultiPoint,
     QgsPointXY,
     QgsProject,
+    QgsRectangle,
     QgsVectorLayer,
 )
+from qgis.gui import QgisInterface
 
 from topology_rules.panel.dock import Dock
+from topology_rules.utils import not_none
 
 from .helpers import (
+    NO_ERRORS_REPORT,
     add,
     both_engines,
     calls,
@@ -33,9 +39,11 @@ from .helpers import (
     polygon_layer,
     save,
     script_executable,
+    select_error,
     wait_for,
 )
 from .test_invalid import ELSEWHERE, FAKE_RULES, OVERLAPS, SQUARE
+from .test_results import highlights
 
 pytestmark = both_engines
 
@@ -180,7 +188,6 @@ for number, (blob,) in enumerate(rows, start=1):
         error += ': coordinates must be finite'
         print(json.dumps({'error': error}), file=sys.stderr)
         sys.exit(2)
-print(json.dumps({'rules': [{'counts': {}}] * config.count('[[rules]]')}))
 """
 
 
@@ -191,7 +198,7 @@ def counted(
     """A dock whose tool writes each call to a log, which is returned."""
     wait_for(lambda: dock.probing is None)
     log = tmp_path / 'calls'
-    body = f'import json\nLOG = {str(log)!r}\n{CHECKING}'
+    body = f'import json\nLOG = {str(log)!r}\n{CHECKING}{NO_ERRORS_REPORT}'
     configure(script_executable(tmp_path, body, rules=TOOL_RULES))
     dock.refresh()
     wait_for(lambda: dock.probing is None and dock.available)
@@ -218,6 +225,32 @@ def test_every_feature_with_coordinates_that_are_not_finite_is_reported(
     click_run(dock)
     (node,) = layer_nodes(dock)
     assert node.text(0) == f'bad · {BAD} invalid'
+
+
+@pytest.mark.parametrize('kind', ['point', 'line'])
+@executable_only
+def test_an_error_without_a_geometry_leaves_the_map_as_it_is(
+    dock: Dock,
+    counted: Path,
+    kind: str,
+    tmp_path: Path,
+    qgis_iface: QgisInterface,
+):
+    add(dock, RULE[kind], bad_layer(kind, 4, BAD, tmp_path))
+    click_run(dock)
+    canvas = not_none(qgis_iface.mapCanvas())
+    canvas.setExtent(QgsRectangle(0, 0, 100, 100))
+    before = canvas.extent()
+    select_error(dock, 0)
+    assert canvas.extent() == before
+    assert not highlights(canvas)
+    # The same while the error has no layer yet
+    empty = QgsGeometry(
+        QgsMultiPoint() if kind == 'point' else QgsMultiLineString()
+    )
+    dock.results.focus.show_geometry(empty, QgsProject.instance().crs())
+    assert canvas.extent() == before
+    assert not highlights(canvas)
 
 
 # The real tool, which says 'coordinates must be finite'

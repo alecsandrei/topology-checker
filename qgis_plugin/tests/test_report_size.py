@@ -1,15 +1,18 @@
-"""A run with many errors counts them without keeping the whole report of the
-tool in memory: the errors are in the file that the tool writes, and only the
-counts are needed from what it prints."""
+"""A run with many errors does not keep the whole report of the tool in
+memory: each line of the report is read as it comes and let go, and only
+what the tool says otherwise is kept."""
 
 from __future__ import annotations
 
 import collections.abc as c
+import typing as t
 from pathlib import Path
 
 import pytest
 from qgis.core import QgsProject
 
+from topology_rules.core import checks
+from topology_rules.core.runner import Completed
 from topology_rules.panel.dock import Dock
 
 from .helpers import (
@@ -28,7 +31,8 @@ from .helpers import (
 
 DANGLES = 'line/must-not-have-dangles'
 LINES = 500
-# Bytes that what the tool prints may come to, for a run of a thousand errors
+# Bytes that what is kept of the output may come to, for a run of a thousand
+# errors
 BUDGET = 20_000
 
 
@@ -55,27 +59,29 @@ def many_errors() -> None:
     QgsProject.instance().addMapLayer(layer)
 
 
-def test_what_the_tool_prints_for_many_errors_is_small(
-    dock: Dock, measured: Path
+def test_what_is_kept_of_the_report_of_many_errors_is_small(
+    dock: Dock, measured: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    many_errors()
-    add(dock, DANGLES, QgsProject.instance().mapLayersByName('scattered')[0])
-    click_run(dock)
-    sizes = output_sizes(measured, 'validate')
-    assert sizes
-    assert max(sizes) < BUDGET
+    kept: list[Completed] = []
+    real = checks.run_validate
 
+    def run_validate(*args: t.Any, **kwargs: t.Any) -> Completed:
+        completed = real(*args, **kwargs)
+        kept.append(completed)
+        return completed
 
-def test_the_errors_are_all_counted_without_the_whole_report(
-    dock: Dock, measured: Path
-):
+    monkeypatch.setattr(checks, 'run_validate', run_validate)
     many_errors()
     add(dock, DANGLES, QgsProject.instance().mapLayersByName('scattered')[0])
     click_run(dock)
     assert queue_column(dock, 3) == [str(2 * LINES)]
+    # The tool said much more
+    assert max(output_sizes(measured, 'validate')) > BUDGET
+    assert len(kept) == 1
+    assert len(kept[0].stdout) + len(kept[0].stderr) < BUDGET
 
 
-# A tool that does not know the flag for a short report
+# A tool that does not know the flag for a report of each rule
 
 
 @pytest.fixture
@@ -83,7 +89,8 @@ def older_tool(
     dock: Dock, tmp_path: Path, configure: c.Callable[[str | Path], None]
 ) -> Path:
     """The real tool behind a script that logs each call and refuses the
-    flag for a short report, as a tool that is older than the flag does."""
+    flag for a report of each rule, as a tool that is older than the flag
+    does."""
     real = real_executable()
     assert real is not None
     wait_for(lambda: dock.probing is None)
@@ -95,8 +102,8 @@ def older_tool(
         'import os, sys\n'
         f'with open({str(log)!r}, "a") as log:\n'
         '    log.write(" ".join(sys.argv[1:]) + "\\n")\n'
-        'if "--summary" in sys.argv:\n'
-        '    print(\'{"error":"unexpected argument \\\'--summary\\\'"}\','
+        'if "--stream" in sys.argv:\n'
+        '    print("error: unexpected argument \'--stream\' found",'
         ' file=sys.stderr)\n'
         '    sys.exit(2)\n' + hand_over(real),
     )
@@ -126,5 +133,5 @@ def test_a_tool_that_refused_the_flag_is_not_asked_with_it_again(
     runs = calls(older_tool, 'validate')
     # The first run asks with the flag and again without it, the second
     # run only without
-    assert [run for run in runs if '--summary' in run.split()] == runs[:1]
+    assert [run for run in runs if '--stream' in run.split()] == runs[:1]
     assert len(runs) == 3

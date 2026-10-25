@@ -14,7 +14,6 @@ from qgis.core import (
 )
 
 from .._typing import Parameters
-from ..core.checks import ID_COLUMNS, IdMap, source_id
 from ..core.invalid import Invalid, error_fields
 from ..core.layers import geometry_word
 from ..core.style import ErrorStyle
@@ -79,7 +78,6 @@ class SinkAlgorithm(Planned):
         context: QgsProcessingContext,
         crs: QgsCoordinateReferenceSystem,
         path: str,
-        ids: IdMap,
         invalid: c.Sequence[Invalid],
         title: str,
     ) -> Parameters:
@@ -112,11 +110,6 @@ class SinkAlgorithm(Planned):
                     'c.Iterable[QgsFeature]', errors.getFeatures()
                 ):
                     row = [error[n] if n in present else None for n in names]
-                    for layer_column, id_column in ID_COLUMNS:
-                        index = names.index(id_column)
-                        row[index] = source_id(
-                            ids, row[names.index(layer_column)], row[index]
-                        )
                     copy = QgsFeature(fields)
                     copy.setGeometry(error.geometry())
                     copy.setAttributes(row)

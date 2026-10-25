@@ -10,6 +10,7 @@ from __future__ import annotations
 import collections.abc as c
 import dataclasses
 import faulthandler
+import functools
 import json
 import os
 import re
@@ -44,6 +45,7 @@ from topology_rules.core import engine
 from topology_rules.core.engine import Engine, Package
 from topology_rules.enums import PROVIDER_ID
 from topology_rules.exceptions import PackageError
+from topology_rules.panel.rows import Row, number, value_text, wkb_shape
 
 if t.TYPE_CHECKING:
     from topology_rules.panel.dock import Dock
@@ -101,6 +103,32 @@ def hand_over(real: str) -> str:
             f'sys.exit(subprocess.call([{real!r}, *sys.argv[1:]]))\n'
         )
     return f'os.execv({real!r}, [{real!r}, *sys.argv[1:]])\n'
+
+
+# The end of a script that prints, as `--json validate` does, the report of
+# a run of the definition that is in `config` which finds no errors
+NO_ERRORS_REPORT = r"""
+import json, re
+checked = re.findall(
+    r'^rule = "([^"]*)"\nlayer = "([^"]*)"(?:\nother = "([^"]*)")?$',
+    config,
+    re.M,
+)
+print(json.dumps({
+    'tolerance': 0.0,
+    'rules': [
+        {
+            'spec': {'rule': rule, 'layer': 0, 'other': 1 if other else None},
+            'layer': layer,
+            'other': other or None,
+            'counts': {},
+            'errors': [],
+        }
+        for rule, layer, other in checked
+    ],
+    'warnings': [],
+}))
+"""
 
 
 def fake_executable(directory: Path, rules: object = None) -> Path:
@@ -271,7 +299,14 @@ def process_alive(number: int) -> bool:
         return False
     except PermissionError:
         return True
-    return True
+    # A process that has ended is there until its parent reaps it. One whose
+    # parent ended first is reaped by the first process of the system, which
+    # in a container may never do it
+    try:
+        stat = Path(f'/proc/{number}/stat').read_text()
+    except OSError:
+        return True
+    return stat.rpartition(')')[2].split()[:1] != ['Z']
 
 
 def gated_executable(
@@ -303,6 +338,22 @@ REAL_PATH = str(Path(REAL).absolute()) if REAL else None
 def real_executable() -> str | None:
     """The tool named by TOPOLOGY_CHECKER, or the one on the PATH."""
     return REAL_PATH
+
+
+@functools.cache
+def real_streams() -> bool:
+    """Whether the real tool says the report of each rule as soon as the
+    rule is done, which a tool before 0.3 does not."""
+    if REAL_PATH is None:
+        return True
+    shown = subprocess.run(
+        [REAL_PATH, 'validate', '--help'],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    return '--stream' in shown.stdout
 
 
 # Set to 1 where the tests must run with the Python package, as in CI where
@@ -663,6 +714,61 @@ def click_run(dock: Dock) -> None:
     """Clicks Run and waits for the end of the task."""
     dock.run_button.click()
     wait_for(lambda: dock.task is None)
+    rows_match_layers(dock)
+
+
+def rows_match_layers(dock: Dock) -> None:
+    """Checks that each error of the panel is the feature of its id in the
+    error layer of its family, as the map shows it, and that each feature
+    of those layers is an error of the panel. Before a run has put its
+    layers in the project, the errors have none."""
+    results = dock.results
+    layers = results.error_layers()
+    if not layers:
+        return
+    rows: dict[str, list[Row]] = {}
+    for row in results.rows:
+        rows.setdefault(row.family, []).append(row)
+    assert set(rows) <= set(layers)
+    for family, layer in layers.items():
+        # All of the features, the hidden ones too
+        subset = layer.subsetString()
+        assert layer.setSubsetString('')
+        try:
+            features = {
+                feature.id(): feature
+                for feature in t.cast(
+                    'c.Iterable[QgsFeature]', layer.getFeatures()
+                )
+            }
+        finally:
+            assert layer.setSubsetString(subset)
+        found = rows.get(family, [])
+        assert sorted(row.error_fid for row in found) == sorted(features)
+        for row in found:
+            feature = features[row.error_fid]
+            geometry = feature.geometry()
+            told = (
+                row.rule_name,
+                row.error,
+                row.layer_alias,
+                row.feature,
+                row.other_alias,
+                row.other_feature,
+                row.key,
+                row.shape,
+            )
+            stored = (
+                value_text(feature['rule']),
+                value_text(feature['error_type']),
+                value_text(feature['origin_layer']),
+                number(value_text(feature['origin_fid'])),
+                value_text(feature['destination_layer']),
+                number(value_text(feature['destination_fid'])),
+                results.grouping.key_of(feature),
+                '' if geometry.isNull() else wkb_shape(bytes(geometry.asWkb())),
+            )
+            assert told == stored, (family, row.error_fid)
 
 
 # The list of rules: layers that hold their rules

@@ -1,14 +1,17 @@
 from __future__ import annotations
 
+import collections.abc as c
 import typing as t
 
 from qgis.PyQt.QtCore import QEvent, Qt, pyqtSignal
-from qgis.PyQt.QtGui import QKeyEvent
+from qgis.PyQt.QtGui import QFont, QFontMetrics, QIcon, QKeyEvent
 from qgis.PyQt.QtWidgets import (
     QAbstractItemView,
     QHBoxLayout,
     QHeaderView,
     QPushButton,
+    QStyle,
+    QStyleOptionViewItem,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -18,12 +21,38 @@ from qgis.PyQt.QtWidgets import (
 from ..utils import not_none
 from .entries import Entry, project_layer, unit_of
 from .hint import Hint
-from .icons import decorate
+from .icons import decorate, icon
 from .marks import ENTRY, LAYER, OTHER, layer_text, mark_nodes, tip, tr
 from .narrow import shrink_buttons
-from .wrapping import wrap_long_text
+from .wrapping import WrapDelegate, wrap_long_text
 
 COLUMNS = ('Rule', 'Errors')
+# A rule that can be ticked, and one that a run keeps as it is. PyQt5
+# types the union of two flags as an int.
+EDITABLE: t.Any = (
+    Qt.ItemFlag.ItemIsSelectable
+    | Qt.ItemFlag.ItemIsEnabled
+    | Qt.ItemFlag.ItemIsUserCheckable
+)
+READ_ONLY: t.Any = Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsEnabled
+# Where the count of a rule is: on the line of its label, at the right
+COUNT_ALIGNMENT: t.Any = (
+    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+)
+# The fewest digits that the column of the counts has room for
+DIGITS = 4
+
+
+class CountDelegate(WrapDelegate):
+    """Draws the icon of the rule that runs at the right of its cell, where
+    its count comes."""
+
+    def initStyleOption(  # pyright: ignore[reportIncompatibleMethodOverride]
+        self, *args: t.Any
+    ) -> None:
+        super().initStyleOption(*args)
+        option = t.cast(QStyleOptionViewItem, args[0])
+        option.decorationPosition = QStyleOptionViewItem.Position.Right
 
 
 class RuleList(QWidget):
@@ -40,6 +69,10 @@ class RuleList(QWidget):
         # How many features of each layer a run left out as invalid
         self.invalid: dict[str, int] = {}
         self.filling = False
+        # During a run: the rules stay as they are, and can still be read
+        self.locked = False
+        # The rule that the run checks now
+        self.running: Entry | None = None
         self.tree = QTreeWidget()
         self.tree.setColumnCount(len(COLUMNS))
         self.tree.setHeaderLabels(['', ''])
@@ -55,12 +88,10 @@ class RuleList(QWidget):
         header.setStretchLastSection(False)
         header.setMinimumSectionSize(8)
         header.setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        # Room for a number of four digits, whatever the font, and no more
+        # As wide as the counts need, which fit_counts sees to
         header.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
-        header.resizeSection(
-            1, self.tree.fontMetrics().horizontalAdvance('0000') + 2
-        )
         wrap_long_text(self.tree)
+        self.tree.setItemDelegateForColumn(1, CountDelegate(self.tree))
         self.placeholder = Hint(
             self.tree, tr('Choose a layer and a rule above, then add the rule.')
         )
@@ -130,8 +161,77 @@ class RuleList(QWidget):
         self.show_entries()
 
     def update_buttons(self) -> None:
-        self.remove_button.setEnabled(bool(self.tree.selectedItems()))
-        self.clear_button.setEnabled(bool(self.entries))
+        self.remove_button.setEnabled(
+            not self.locked and bool(self.tree.selectedItems())
+        )
+        self.clear_button.setEnabled(not self.locked and bool(self.entries))
+
+    def rule_items(self) -> c.Iterator[QTreeWidgetItem]:
+        for top in range(self.tree.topLevelItemCount()):
+            node = not_none(self.tree.topLevelItem(top))
+            for row in range(node.childCount()):
+                yield not_none(node.child(row))
+
+    def set_locked(self, locked: bool) -> None:
+        """Keeps the rules as they are while a run checks them: they cannot
+        be ticked or taken off, and read as usual."""
+        self.locked = locked
+        was = self.filling
+        self.filling = True
+        try:
+            for item in self.rule_items():
+                item.setFlags(READ_ONLY if locked else EDITABLE)
+        finally:
+            self.filling = was
+        self.update_buttons()
+
+    def set_running(self, entry: Entry | None) -> None:
+        """Marks the rule that the run checks now, or none."""
+        self.running = entry
+        was = self.filling
+        self.filling = True
+        try:
+            for item in self.rule_items():
+                self.mark_running(item)
+        finally:
+            self.filling = was
+
+    def mark_running(self, item: QTreeWidgetItem) -> None:
+        """Makes the rule that runs bold, with the icon of a running task
+        where its count comes."""
+        index = item.data(0, ENTRY)
+        running = index is not None and self.entries[index] is self.running
+        for column in range(len(COLUMNS)):
+            font = item.font(column)
+            if font.bold() != running:
+                font.setBold(running)
+                item.setFont(column, font)
+        if item.icon(1).isNull() == running:
+            item.setIcon(1, icon('running') if running else QIcon())
+
+    def fit_counts(self) -> None:
+        """Makes the column of the counts as wide as the widest count, of
+        four digits at least, with the margins of the text, so that a count
+        never runs into the rule."""
+        font = QFont(self.tree.font())
+        # The rule that runs is bold
+        font.setBold(True)
+        metrics = QFontMetrics(font)
+        texts = ['0' * DIGITS] + [
+            str(entry.errors) for entry in self.entries if entry.errors
+        ]
+        widest = max(metrics.horizontalAdvance(text) for text in texts)
+        style = not_none(self.tree.style())
+        margin = (
+            style.pixelMetric(
+                QStyle.PixelMetric.PM_FocusFrameHMargin, None, self.tree
+            )
+            + 1
+        )
+        width = widest + 2 * margin + 2
+        header = not_none(self.tree.header())
+        if header.sectionSize(1) != width:
+            header.resizeSection(1, width)
 
     def item_changed(self, item: QTreeWidgetItem, column: int) -> None:
         index = item.data(0, ENTRY)
@@ -193,7 +293,8 @@ class RuleList(QWidget):
         if event.type() == QEvent.Type.KeyPress and t.cast(
             QKeyEvent, event
         ).key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
-            self.remove_selected()
+            if not self.locked:
+                self.remove_selected()
             return True
         return super().eventFilter(*args)
 
@@ -213,6 +314,26 @@ class RuleList(QWidget):
         finally:
             self.filling = was
 
+    def set_count(self, entry: Entry) -> None:
+        """Shows the errors of one rule, as they are known, and leaves the
+        rest of the list as it is."""
+        index = next(
+            (i for i, other in enumerate(self.entries) if other is entry), None
+        )
+        if index is None:
+            return
+        was = self.filling
+        self.filling = True
+        try:
+            for item in self.rule_items():
+                if item.data(0, ENTRY) == index:
+                    item.setText(
+                        1, '' if entry.errors is None else str(entry.errors)
+                    )
+        finally:
+            self.filling = was
+        self.fit_counts()
+
     def show_entries(self) -> None:
         """Fills the tree from the entries, marking the layers that have left
         the project."""
@@ -230,7 +351,7 @@ class RuleList(QWidget):
                 [entry.title, '' if entry.errors is None else str(entry.errors)]
             )
             child.setData(0, ENTRY, index)
-            child.setFlags(child.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            child.setFlags(READ_ONLY if self.locked else EDITABLE)
             child.setCheckState(
                 0,
                 Qt.CheckState.Checked
@@ -239,10 +360,13 @@ class RuleList(QWidget):
             )
             child.setData(0, OTHER, entry.other)
             child.setToolTip(0, tip(entry))
-            child.setTextAlignment(1, Qt.AlignmentFlag.AlignRight)
+            child.setTextAlignment(1, COUNT_ALIGNMENT)
             child.setToolTip(1, tr('Errors found in the last run'))
             parent.addChild(child)
+            if self.running is not None:
+                self.mark_running(child)
         self.refresh_marks()
+        self.fit_counts()
         self.tree.expandAll()
         self.placeholder.set_empty(not self.entries)
         self.filling = False

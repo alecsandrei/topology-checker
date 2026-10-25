@@ -14,8 +14,9 @@ from qgis.core import (
 )
 
 from .._typing import Parameters
-from ..core.commands import ERROR_LAYERS, rule_counts, run_validate
+from ..core.commands import ERROR_LAYERS, definition_command, rule_counts
 from ..core.engine import describe
+from ..core.runner import execute
 from ..core.toml import TomlUnavailable, loads
 from ..utils import QgsProcessingException, double_type, not_none, tr
 from .base import (
@@ -166,13 +167,16 @@ class CheckDefinition(SinkAlgorithm):
             path = str(Path(tmp) / 'errors.gpkg')
             feedback.pushInfo(describe(plan.executable))
             counts = rule_counts(
-                run_validate(
-                    plan.executable,
-                    str(plan.definition),
-                    plan.tolerance,
-                    path,
+                execute(
+                    definition_command(
+                        plan.executable,
+                        str(plan.definition),
+                        plan.tolerance,
+                        path,
+                    ),
                     feedback,
-                )
+                ),
+                feedback,
             )
             with memory_copy(path) as source:
                 results = self.write_sinks(
@@ -180,7 +184,6 @@ class CheckDefinition(SinkAlgorithm):
                     context,
                     errors_crs(source),
                     source,
-                    {},
                     [],
                     plan.definition.stem,
                 )

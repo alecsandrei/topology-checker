@@ -32,6 +32,7 @@ from .helpers import (
     select_error,
     select_result,
     shown,
+    without_count,
 )
 
 pytestmark = both_engines
@@ -229,6 +230,85 @@ def test_stopping_to_ignore_brings_the_error_back(dock: Dock, tmp_path: Path):
     assert shown(dock) == 3
     assert dock.show_ignored.text() == 'Show ignored (0)'
     assert visible(0) == 3
+
+
+# The tree as the user left it
+
+
+def open_nodes(dock: Dock) -> list[str]:
+    """The groups and kinds of errors that are open, without their
+    counts."""
+    return [
+        without_count(node_text(index))
+        for depth in (0, 1)
+        for index in result_nodes(dock, depth)
+        if dock.results_view.isExpanded(index)
+    ]
+
+
+def all_open(dock: Dock, tmp_path: Path) -> list[str]:
+    """The three errors, with their two rules and kinds open."""
+    run_three(dock, tmp_path)
+    dock.results_view.expandAll()
+    opened = open_nodes(dock)
+    assert len(opened) == 4
+    return opened
+
+
+def test_ignoring_an_error_keeps_the_tree_open(dock: Dock, tmp_path: Path):
+    opened = all_open(dock, tmp_path)
+    select_error(dock, 1)
+    action(dock, 'Ignore error').trigger()
+    assert open_nodes(dock) == opened
+    # The error is gone, and the map shows all the others
+    assert not dock.results_view.currentIndex().isValid()
+    assert shown(dock) == 2
+    assert visible(0) == 2
+
+
+def test_ignoring_and_stopping_to_ignore_a_shown_error_keeps_the_tree_open(
+    dock: Dock, tmp_path: Path
+):
+    opened = all_open(dock, tmp_path)
+    dock.show_ignored.setChecked(True)
+    assert open_nodes(dock) == opened
+    ignore(dock, 1)
+    assert open_nodes(dock) == opened
+    assert greyed(result_nodes(dock, 2)[1])
+    select_error(dock, 1)
+    action(dock, 'Stop ignoring').trigger()
+    assert open_nodes(dock) == opened
+    assert not greyed(result_nodes(dock, 2)[1])
+
+
+def test_showing_the_ignored_errors_keeps_the_tree_open(
+    dock: Dock, tmp_path: Path
+):
+    opened = all_open(dock, tmp_path)
+    ignore(dock, 0)
+    dock.show_ignored.setChecked(True)
+    assert open_nodes(dock) == opened
+    dock.show_ignored.setChecked(False)
+    assert open_nodes(dock) == opened
+
+
+def test_a_closed_rule_stays_closed_when_an_error_is_ignored(
+    dock: Dock, tmp_path: Path
+):
+    all_open(dock, tmp_path)
+    dock.results_view.collapse(result_nodes(dock, 0)[1])
+    opened = open_nodes(dock)
+    ignore(dock, 0)
+    assert open_nodes(dock) == opened
+
+
+def test_ignoring_the_last_error_of_a_rule_keeps_the_others_open(
+    dock: Dock, tmp_path: Path
+):
+    opened = all_open(dock, tmp_path)
+    ignore(dock, 2)
+    # The rule and its kind are gone
+    assert open_nodes(dock) == opened[:1] + opened[2:3]
 
 
 # The counts

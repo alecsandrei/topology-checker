@@ -33,7 +33,7 @@ MODULE = 'topology_checker'
 NEEDED = (
     'Topology.add_layer',
     'Topology.add_rule',
-    'Topology.iter_validate',
+    'Topology.iter_reports',
     'Violation.wkb',
     'Rule',
     'GeometryKind',
