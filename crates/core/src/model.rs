@@ -714,9 +714,19 @@ mod tests {
         }
         features
     }
+    /// A corner of each of [`mixed`]'s boxes, so repeated features give equal points.
+    fn corners(count: usize) -> Vec<(i64, Geometry)> {
+        mixed(count)
+            .into_iter()
+            .map(|(fid, geometry)| {
+                let corner = geometry.bounding_rect().expect("a box").min();
+                (fid, Point::from(corner).into())
+            })
+            .collect()
+    }
 
     #[test]
-    fn line_and_polygon_indexes_search_in_the_order_of_a_bulk_loaded_r_tree() {
+    fn layer_indexes_search_in_the_order_of_a_bulk_loaded_r_tree() {
         use crate::engine::{
             index::{Index, Search},
             parallel::Workers,
@@ -765,20 +775,36 @@ mod tests {
             }
             let pairs = index::pairs(line_index, polygon_index, 0.5, false);
             assert!(pairs.eq(index::pairs(&lines, &polygons, 0.5, false)));
+            let layer = Layer::from_features("corners", corners(3000));
+            let parts = layer.parts().unwrap();
+            let tree = built(
+                parts
+                    .points
+                    .iter()
+                    .map(|p| Some(Rect::new(p.geometry.0, p.geometry.0)))
+                    .collect(),
+            );
+            let packed = Workers::forced(threads, 64, || parts.point_index());
+            assert!(packed.items().eq(tree.items()), "{threads}");
+            for &query in &queries {
+                assert!(packed.search(query).eq(tree.search(query)), "{threads}");
+            }
+            let pairs = index::pairs(packed, packed, 0., true);
+            assert!(pairs.eq(index::pairs(&tree, &tree, 0., true)), "{threads}");
         }
     }
 
     #[test]
-    fn line_and_polygon_indexes_stop_in_each_step_when_cancelled() {
+    fn layer_indexes_stop_in_each_step_when_cancelled() {
         use crate::cancel::{self, hooks};
         use crate::engine::{index::Search, parallel::Workers};
         let threads = 4;
-        let features = mixed(20_000);
-        for lines in [true, false] {
-            let step = if lines {
-                "index.lines"
+        let (shapes, points) = (mixed(20_000), corners(20_000));
+        for step in ["index.points", "index.lines", "index.polygons"] {
+            let features = if step == "index.points" {
+                &points
             } else {
-                "index.polygons"
+                &shapes
             };
             let run = |token: &cancel::CancellationToken| {
                 let layer = Layer::from_features("mixed", features.clone());
@@ -786,10 +812,10 @@ mod tests {
                 std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     cancel::scope(Some(token.clone()), || {
                         Workers::forced(threads, 64, || {
-                            let index = if lines {
-                                parts.line_index()
-                            } else {
-                                parts.polygon_index()
+                            let index = match step {
+                                "index.points" => parts.point_index(),
+                                "index.lines" => parts.line_index(),
+                                _ => parts.polygon_index(),
                             };
                             index.items().count()
                         })
