@@ -6,7 +6,6 @@ import os
 import platform
 import shutil
 import subprocess
-from contextlib import ExitStack
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -17,10 +16,9 @@ from benchmarks.gis.fixtures import CATALOG, FIXTURES, ROOT, workload, write_cas
 from benchmarks.gis.sessions import EngineFailure, atomic_json
 
 from .adapters import HERE, create_session
-from .catalog import CONTAINMENT_RULES, ENGINES, HEADLINE_RULES, NATIVE_RULES, SUPPORT
+from .catalog import CONTAINMENT_RULES, ENGINES, HEADLINE_RULES, SUPPORT
 from .common import (
     Session,
-    WorkerSession,
     capture,
     eligibility,
     normalize,
@@ -46,11 +44,6 @@ def discover(engines: list[str]) -> dict[str, dict[str, Any]]:
         }.get(engine)
         if executable and not shutil.which(executable):
             reason = f"Executable unavailable: {Path(executable).name}"
-        if (
-            engine == "gvsig"
-            and not Path(os.environ.get("GIS_GVSIG_HOME", "/opt/gvsig")).is_dir()
-        ):
-            reason = "gvSIG distribution unavailable"
         result[engine] = {"status": "unavailable" if reason else "ready"}
         if reason:
             result[engine]["reason"] = reason
@@ -144,14 +137,6 @@ def start(
     data: dict[str, Any],
 ) -> Session:
     """Launch a session and record exact engine versions."""
-    available = data["engines"][engine].get("available_rules")
-    if (
-        engine == "gvsig"
-        and rule not in NATIVE_RULES
-        and available
-        and SUPPORT[engine][rule] not in available
-    ):
-        raise EngineFailure("unsupported", "Mapped rule absent from installed gvSIG")
     session = create_session(engine, rule, fixture, directory, args.startup_timeout)
     data["engines"][engine].update(session.metadata)
     data["engines"][engine]["status"] = "ready"
@@ -187,95 +172,81 @@ def run_probes(
     rule: str, directory: Path, args: argparse.Namespace, data: dict[str, Any]
 ) -> tuple[list[dict[str, Any]], dict[str, bool]]:
     """Check each competitor independently against Rust expectations and identities."""
-    with ExitStack() as stack:
-        gates = {engine: True for engine in args.engines}
-        records = []
-        resident: dict[str, Session] = {}
-        for index, case in enumerate(probe_cases(rule)):
-            fixture = write_case(
-                directory / f"probe-{index}", case["input"], case.get("other")
-            )
-            record: dict[str, Any] = {
-                "name": case["name"],
-                "fixture": fixture,
-                "engines": {},
-            }
-            raw: dict[str, dict[str, Any]] = {}
-            for engine in ("rust", *args.engines):
-                if engine != "rust" and rule not in SUPPORT[engine]:
-                    record["engines"][engine] = {"status": "unsupported"}
-                    gates[engine] = False
-                    continue
-                session = None
-                try:
-                    if data["engines"][engine]["status"] == "unavailable":
-                        raise FileNotFoundError(data["engines"][engine]["reason"])
-                    session = resident.get(engine)
-                    if session is not None and isinstance(session, WorkerSession):
-                        session.reload(fixture, args.startup_timeout)
-                    else:
-                        session = start(
-                            engine,
-                            rule,
-                            fixture,
-                            directory / f"probe-{index}" / engine,
-                            args,
-                            data,
-                        )
-                        if engine == "gvsig":
-                            resident[engine] = session
-                            stack.callback(session.close)
-                    response = capture(session, rule, args.timeout)
-                except ERRORS as error:
-                    response = {"status": "startup_failed", "error": str(error)}
-                finally:
-                    if session is not None and engine != "gvsig":
-                        session.close()
-                if engine == "gvsig" and response.get("status") != "ok":
-                    failed_session = resident.pop(engine, None)
-                    if failed_session is not None:
-                        failed_session.close()
-                raw[engine] = response
-                record["engines"][engine] = response
-            rust = raw["rust"]
-            expected = False
-            if rust["status"] == "ok":
-                count = normalize(rule, rust)["count"]
-                expected = (
-                    count == case["expected"]
-                    if "expected" in case
-                    else (count == 0 if case["name"] == "clean" else count > 0)
-                )
-            if expected and case.get("identity"):
-                identity = normalize(rule, rust)
-                expected = all(
-                    identity.get(key) == value
-                    for key, value in case["identity"].items()
-                )
-            if expected and "expected_gaps" in case:
-                expected = normalize(rule, rust) == normalize(
+    gates = {engine: True for engine in args.engines}
+    records = []
+    for index, case in enumerate(probe_cases(rule)):
+        fixture = write_case(
+            directory / f"probe-{index}", case["input"], case.get("other")
+        )
+        record: dict[str, Any] = {
+            "name": case["name"],
+            "fixture": fixture,
+            "engines": {},
+        }
+        raw: dict[str, dict[str, Any]] = {}
+        for engine in ("rust", *args.engines):
+            if engine != "rust" and rule not in SUPPORT[engine]:
+                record["engines"][engine] = {"status": "unsupported"}
+                gates[engine] = False
+                continue
+            session = None
+            try:
+                if data["engines"][engine]["status"] == "unavailable":
+                    raise FileNotFoundError(data["engines"][engine]["reason"])
+                session = start(
+                    engine,
                     rule,
-                    {
-                        "errors": [
-                            {"kind": "gap", "geometry": geometry}
-                            for geometry in case["expected_gaps"]
-                        ]
-                    },
+                    fixture,
+                    directory / f"probe-{index}" / engine,
+                    args,
+                    data,
                 )
-            record["rust_expected"] = expected
-            for engine in args.engines:
-                response = raw.get(engine, {})
-                agrees = (
-                    expected
-                    and response.get("status") == "ok"
-                    and normalize(rule, rust) == normalize(rule, response)
-                )
-                gates[engine] &= bool(agrees)
-                record["engines"][engine]["agrees"] = bool(agrees)
-                if response.get("status") == "ok" and not agrees:
-                    record["engines"][engine]["reason"] = "provenance or count differs"
-            records.append(record)
-        return records, gates
+                response = capture(session, rule, args.timeout)
+            except ERRORS as error:
+                response = {"status": "startup_failed", "error": str(error)}
+            finally:
+                if session is not None:
+                    session.close()
+            raw[engine] = response
+            record["engines"][engine] = response
+        rust = raw["rust"]
+        expected = False
+        if rust["status"] == "ok":
+            count = normalize(rule, rust)["count"]
+            expected = (
+                count == case["expected"]
+                if "expected" in case
+                else (count == 0 if case["name"] == "clean" else count > 0)
+            )
+        if expected and case.get("identity"):
+            identity = normalize(rule, rust)
+            expected = all(
+                identity.get(key) == value for key, value in case["identity"].items()
+            )
+        if expected and "expected_gaps" in case:
+            expected = normalize(rule, rust) == normalize(
+                rule,
+                {
+                    "errors": [
+                        {"kind": "gap", "geometry": geometry}
+                        for geometry in case["expected_gaps"]
+                    ]
+                },
+            )
+        record["rust_expected"] = expected
+        for engine in args.engines:
+            response = raw.get(engine, {})
+            agrees = (
+                expected
+                and response.get("status") == "ok"
+                and normalize(rule, rust) == normalize(rule, response)
+            )
+            gates[engine] &= bool(agrees)
+            record["engines"][engine]["agrees"] = bool(agrees)
+            if response.get("status") == "ok" and not agrees:
+                record["engines"][engine]["reason"] = "provenance or count differs"
+        records.append(record)
+    return records, gates
 
 
 def measure(

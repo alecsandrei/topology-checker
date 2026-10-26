@@ -2,7 +2,7 @@
 
 from benchmarks.gis.fixtures import MAPPINGS
 
-ENGINES = ("qgis", "grass", "postgis", "gvsig")
+ENGINES = ("qgis", "grass", "postgis")
 CONTAINMENT_RULES = ("point/must-be-inside", "polygon/must-contain-point")
 HEADLINE_RULES = (
     *CONTAINMENT_RULES,
@@ -16,7 +16,6 @@ LABELS = {
     "qgis": "QGIS",
     "grass": "GRASS GIS",
     "postgis": "PostGIS SQL",
-    "gvsig": "gvSIG",
 }
 CHECK_LABELS = (
     "Points inside\npolygons",
@@ -26,25 +25,14 @@ CHECK_LABELS = (
     "Polygon\noverlaps",
     "Polygon\ngaps",
 )
-GVSIG = {
-    "point/must-be-inside": "PointMustBeProperlyInsidePolygon",
-    "line/must-not-overlap-with": "MustNotOverlapWithLine",
-    "line/must-be-inside": "MustBeInsideLine",
-    "line/must-not-intersect": "MustNotIntersectLine",
-    "line/must-not-intersect-with": "MustNotIntersectWithLine",
-    "point/must-be-covered-by-lines": "PointsMustBeCoveredByLinePoint",
-    "point/must-be-covered-by-line-endpoints": "MustBeCoveredByEndpointOfPoint",
-    "point/must-be-covered-by-polygon-boundaries": "MustBeCoveredByBoundaryOfPoint",
-    "polygon/must-contain-point": "PolygonContainsPoint",
-}
 NATIVE_RULES = HEADLINE_RULES[2:]
-NATIVE_GVSIG = {
-    NATIVE_RULES[0]: "native STRtree and JTS equalsTopo pairs",
-    NATIVE_RULES[1]: "native STRtree and JTS endpoint incidence",
-    NATIVE_RULES[2]: "native STRtree and JTS positive-area intersection pairs",
-    NATIVE_RULES[3]: "native JTS unary union and bounded void difference",
-}
-GVSIG.update(NATIVE_GVSIG)
+# Line rules PostGIS runs as SQL workflows beyond the QGIS mappings.
+POSTGIS_LINE_RULES = (
+    "line/must-be-inside",
+    "line/must-not-intersect",
+    "line/must-not-intersect-with",
+    "line/must-not-overlap-with",
+)
 GRASS = {
     "point/must-be-inside": "v.select within, reverse selection",
     "point/must-be-covered-by-lines": "v.select intersects, reverse selection",
@@ -65,9 +53,10 @@ GRASS = {
 }
 SUPPORT = {
     "qgis": {rule: mapping[0] for rule, mapping in MAPPINGS.items()},
-    "gvsig": GVSIG,
     "grass": GRASS,
-    "postgis": {rule: "SQL workflow" for rule in sorted(set(MAPPINGS) | set(GVSIG))},
+    "postgis": {
+        rule: "SQL workflow" for rule in sorted({*MAPPINGS, *POSTGIS_LINE_RULES})
+    },
 }
 SUPPORT["qgis"].update(
     dict(

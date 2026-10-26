@@ -19,8 +19,9 @@ COLORS = {
     "qgis": "#b45309",
     "grass": "#15803d",
     "postgis": "#7c3aed",
-    "gvsig": "#0891b2",
 }
+# Check and tool pairs the figure requires, topology-checker included.
+COMBINATIONS = len(HEADLINE_RULES) * (len(ENGINES) + 1)
 
 
 def quantile(values: list[float], fraction: float) -> float:
@@ -75,7 +76,7 @@ def complete_workload(work: dict[str, Any], repetitions: int, warmups: int) -> b
 
 
 def headline_size(data: dict[str, Any]) -> int:
-    """Choose a size only when all thirty combinations have complete measurements."""
+    """Choose a size only when every check and tool has complete measurements."""
     paired_sizes = []
     repetitions = data["metadata"].get("repetitions", 10)
     for rule in HEADLINE_RULES:
@@ -152,7 +153,7 @@ def draw(data: dict[str, Any], output: Path) -> None:
         }
     )
     figure, axis = plt.subplots(figsize=(11, 4))
-    width = 0.15
+    width = 0.75 / len(engines)
     for offset, engine in enumerate(engines):
         values = []
         for rule in HEADLINE_RULES:
@@ -162,7 +163,7 @@ def draw(data: dict[str, Any], output: Path) -> None:
             assert stats is not None
             values.append(stats["median_s"] * 1000)
         axis.bar(
-            [x + (offset - 2) * width for x in range(6)],
+            [x + (offset - (len(engines) - 1) / 2) * width for x in range(6)],
             values,
             width=width,
             color=COLORS[engine],
@@ -171,7 +172,12 @@ def draw(data: dict[str, Any], output: Path) -> None:
     axis.set_xticks(range(6), CHECK_LABELS)
     axis.set_yscale("log")
     axis.set_ylabel("Median validation time (ms)")
-    axis.legend(ncols=5, loc="upper center", bbox_to_anchor=(0.5, 1.18), frameon=False)
+    axis.legend(
+        ncols=len(engines),
+        loc="upper center",
+        bbox_to_anchor=(0.5, 1.18),
+        frameon=False,
+    )
     axis.grid(False)
     for side in ("top", "right"):
         axis.spines[side].set_visible(False)
@@ -196,7 +202,7 @@ def publish(data: dict[str, Any], output: Path) -> None:
         "",
         "![Six checks](comparison.png)"
         if headline_size(data)
-        else "Figure withheld: all thirty comparisons must pass at one common size.",
+        else f"Figure withheld: all {COMBINATIONS} comparisons must pass at one common size.",
         "",
         "Times include fresh index or topology construction and materialized violations. "
         "Application startup, input loading, fresh copies and response extraction are excluded. "
