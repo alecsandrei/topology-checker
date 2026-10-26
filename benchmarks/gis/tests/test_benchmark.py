@@ -32,7 +32,7 @@ def result(seconds: float = 0.01, ids: tuple[int, ...] = ()) -> dict[str, Any]:
 
 
 def complete_data() -> dict[str, Any]:
-    """Make a complete native CI report with all provenance and thirty combinations."""
+    """Make a complete native CI report with all provenance and combinations."""
     return {
         "metadata": {
             "source_revision": "test",
@@ -78,11 +78,16 @@ def complete_data() -> dict[str, Any]:
 def test_catalog_coverage() -> None:
     """All engines expose all six checks using validation workflows."""
     assert len(HEADLINE_RULES) == 6
-    assert len(LABELS) == 5
+    assert set(LABELS) == {"rust", *ENGINES} and len(LABELS) == 4
     for engine in ENGINES:
         assert set(HEADLINE_RULES) <= set(SUPPORT[engine])
         assert all("repair" not in SUPPORT[engine][rule] for rule in HEADLINE_RULES)
-    assert set(SUPPORT["postgis"]) == set(SUPPORT["qgis"]) | set(SUPPORT["gvsig"])
+    assert set(SUPPORT["postgis"]) == set(SUPPORT["qgis"]) | {
+        "line/must-be-inside",
+        "line/must-not-intersect",
+        "line/must-not-intersect-with",
+        "line/must-not-overlap-with",
+    }
     assert "fme" not in SUPPORT
 
 
@@ -204,7 +209,7 @@ def test_rotating_order_and_stop() -> None:
 @pytest.mark.parametrize("rule", HEADLINE_RULES)
 @pytest.mark.parametrize("engine", ("rust", *ENGINES))
 def test_every_combination_required(rule: str, engine: str) -> None:
-    """Removing any of the thirty combinations blocks the graph and publication."""
+    """Removing any of the 24 combinations blocks the graph and publication."""
     data = complete_data()
     work = next(record for record in data["rules"] if record["rule"] == rule)[
         "workloads"
@@ -240,11 +245,11 @@ def test_common_size_and_provenance() -> None:
 
 
 def test_minimal_graph_and_failure_report(tmp_path: Path) -> None:
-    """Thirty bars, six groups and five legends; failures remain in reports only."""
+    """Four bar series, six groups and a four-tool legend; failures stay in reports."""
     data = complete_data()
     with patch.object(Axes, "bar", autospec=True, wraps=Axes.bar) as bar:
         publish(data, tmp_path)
-        assert bar.call_count == 5
+        assert bar.call_count == 4
         assert all(len(call.args[1]) == 6 for call in bar.call_args_list)
     # Render with the real artist as well to verify SVG text and plot count.
     publish(data, tmp_path)
@@ -263,28 +268,23 @@ def test_minimal_graph_and_failure_report(tmp_path: Path) -> None:
     publish(data, tmp_path)
     assert not (tmp_path / "comparison.svg").exists()
     assert not (tmp_path / "publishable.json").exists()
-    assert "timeout" in (tmp_path / "README.md").read_text()
+    report = (tmp_path / "README.md").read_text()
+    assert "timeout" in report and "all 24 comparisons" in report
     assert (tmp_path / "samples.csv").is_file()
 
 
-def test_resident_probe_loading(
+def test_probes_start_fresh_sessions(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
-    """Reuse gvSIG only across probes, loading each new input outside validation."""
+    """Every probe starts and closes its own session for each engine."""
     from argparse import Namespace
 
-    from benchmarks.gis.common import WorkerSession
     from benchmarks.gis.run import run_probes
 
     calls: list[str] = []
 
-    class FakeWorker(WorkerSession):
-        def __init__(self) -> None:
-            self.metadata = {"version": "test"}
-
-        def reload(self, fixture: dict[str, Any], timeout: float) -> None:
-            assert Path(fixture["input"]["path"]).name == "input.geojson"
-            calls.append("reload")
+    class FakeSession:
+        metadata: dict[str, Any] = {"version": "test"}
 
         def sample(self, rule: str, timeout: float) -> dict[str, Any]:
             calls.append("sample")
@@ -293,9 +293,10 @@ def test_resident_probe_loading(
         def close(self) -> None:
             calls.append("close")
 
-    def start(engine: str, *args: Any) -> FakeWorker:
+    def start(engine: str, rule: str, fixture: dict[str, Any], *args: Any) -> Any:
+        assert Path(fixture["input"]["path"]).name == "input.geojson"
         calls.append("start:" + engine)
-        return FakeWorker()
+        return FakeSession()
 
     cases = [{"name": "clean", "input": [], "other": None, "expected": 0}] * 2
     monkeypatch.setattr("benchmarks.gis.run.start", start)
@@ -303,12 +304,12 @@ def test_resident_probe_loading(
     records, gates = run_probes(
         HEADLINE_RULES[0],
         tmp_path,
-        Namespace(engines=["gvsig"], timeout=1, startup_timeout=1),
-        {"engines": {"rust": {"status": "ready"}, "gvsig": {"status": "ready"}}},
+        Namespace(engines=["grass"], timeout=1, startup_timeout=1),
+        {"engines": {"rust": {"status": "ready"}, "grass": {"status": "ready"}}},
     )
-    assert len(records) == 2 and gates == {"gvsig": True}
-    assert calls.count("start:gvsig") == 1 and calls.count("reload") == 1
-    assert calls.count("close") == 3
+    assert len(records) == 2 and gates == {"grass": True}
+    assert calls.count("start:rust") == calls.count("start:grass") == 2
+    assert calls.count("sample") == calls.count("close") == 4
 
 
 def test_malformed_results_fail_explicitly() -> None:

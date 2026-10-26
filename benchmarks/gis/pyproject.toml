@@ -21,5 +21,5 @@ pythonpath = ["../.."]
 select = ["E4", "E7", "E9", "F", "I", "UP", "B"]
 
 [tool.pyright]
-exclude = ["gvsig_bridge.py", "grass_worker.py", "grass_native.py", "gvsig_native.py", "qgis_worker.py", "qgis_startup.py", ".venv"]
+exclude = ["grass_worker.py", "grass_native.py", "qgis_worker.py", "qgis_startup.py", ".venv"]
 extraPaths = ["../.."]

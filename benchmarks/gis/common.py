@@ -3,7 +3,6 @@
 import hashlib
 import json
 import os
-import shutil
 import signal
 import subprocess
 from collections.abc import Mapping
@@ -240,20 +239,6 @@ class WorkerSession:
         """Validate once, leaving response extraction outside the clock."""
         return self.request({"action": "sample", "rule": rule}, timeout)
 
-    def reload(self, fixture: dict[str, Any], timeout: float) -> None:
-        """Load another fixture in a resident gvSIG process, outside validation."""
-        from benchmarks.gis.fixtures import ROOT
-
-        self.request(
-            {
-                "action": "load",
-                "fixture": {
-                    name: str(ROOT / data["path"]) for name, data in fixture.items()
-                },
-            },
-            timeout,
-        )
-
     def close(self) -> None:
         """Stop the worker and its child processes without touching user processes."""
         if self.closed:
@@ -262,21 +247,13 @@ class WorkerSession:
         if self.process.poll() is None:
             os.killpg(self.process.pid, signal.SIGTERM)
         close_process(self.process)
-        # A launcher can exit while its JVM is still flushing preferences. Stop
-        # every remaining process in this worker's private group before cleanup.
+        # A launcher can exit while its children are still running. Stop every
+        # remaining process in this worker's private group.
         try:
             os.killpg(self.process.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
         self.log.close()
-        app = self.directory / "app"
-        native_log = app / "preferences/gvSIG/gvSIG.log"
-        if native_log.is_file():
-            with native_log.open("rb") as stream:
-                stream.seek(max(0, native_log.stat().st_size - 256000))
-                (self.directory / "gvsig.log").write_bytes(stream.read())
-        if app.is_dir():
-            shutil.rmtree(app)
 
 
 def command_output(parts: list[str]) -> str:

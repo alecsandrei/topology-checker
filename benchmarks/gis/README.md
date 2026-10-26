@@ -1,7 +1,7 @@
 # GIS validation benchmarks
 
-This suite compares topology-checker, QGIS 4.2, GRASS GIS, PostGIS SQL workflows
-and gvSIG on six checks: points inside polygons, polygons containing a point,
+This suite compares topology-checker, QGIS 4.2, GRASS GIS and PostGIS SQL
+workflows on six checks: points inside polygons, polygons containing a point,
 duplicate points, line dangles, polygon overlaps and polygon gaps. Every tool
 uses identical inputs at one common feature count. Full-suite mode retains the
 broader rule catalog and reports unsupported checks and semantic differences.
@@ -19,11 +19,9 @@ paths and hashes from their recorded source revision, including historical
 | QGIS | C++ Topology Checker plugin for containment, native geometry operations through PyQGIS for the other four checks |
 | GRASS | Native vector modules and topology bindings, driven by Python |
 | PostGIS | Server-side SQL spatial operations, submitted through `psycopg` |
-| gvSIG | Stock topology rules for containment, bundled Java/JTS operations through Jython for the other four checks |
 
-The official QGIS 4.2 Ubuntu image is pinned by digest. gvSIG 2.7.0 build 5016 is
-pinned by archive SHA-256 and runs with OpenJDK. The report records exact versions
-and resolved package versions.
+The official QGIS 4.2 Ubuntu image is pinned by digest. The report records exact
+versions and resolved package versions.
 
 ## Run
 
@@ -44,8 +42,6 @@ docker run --rm --platform linux/amd64 --cpuset-cpus=0 \
 Use `--smoke` for the same six checks with small inputs and one repetition.
 Select workloads with `--rules`, `--sizes` and `--engines`. Defaults retain all
 38 Rust rules, supported external counterparts and 1,000/10,000/100,000 features.
-Keep work files on the container's Linux filesystem when using macOS to avoid
-case-sensitive gvSIG asset collisions.
 
 The manual `GIS benchmarks` workflow offers `headline` and `full` modes.
 Headline mode measures all six checks at 1,000 features per input layer, with
@@ -63,14 +59,14 @@ intersection area, including equal and contained polygons. Boundary-only touches
 are permitted. Gaps are bounded uncovered faces of polygon coverage; the exterior
 is excluded, and covered islands remain holes in the gap geometry.
 
-| Check | QGIS | GRASS | PostGIS | gvSIG |
-| :--- | :--- | :--- | :--- | :--- |
-| Points inside polygons | Stock containment rule | `v.select within`, reversed | Indexed `ST_ContainsProperly`, reversed | Stock containment rule |
-| Polygons contain a point | Stock containment rule | `v.select contains`, reversed | Indexed `ST_ContainsProperly`, reversed | Stock containment rule |
-| Duplicate points | `QgsSpatialIndex`, geometry equality | `v.to.db` coordinates, indexed SQLite pair query, native error points | Indexed `ST_Equals` pairs | Native STRtree, JTS equality |
-| Line dangles | Indexed endpoint incidence | Native noding and node-degree inspection | Indexed endpoint-incidence SQL | Native STRtree, JTS endpoint incidence |
-| Polygon overlaps | Indexed positive-area intersection | Native spatial candidates and attributed `v.overlay` on original polygons | Indexed positive-area `ST_Intersection` | Native STRtree, positive-area JTS intersection |
-| Polygon gaps | Native union and bounded void difference | Bounded native faces with original-ring coverage classification | Native union and bounded void difference | Native JTS union and bounded void difference |
+| Check | QGIS | GRASS | PostGIS |
+| :--- | :--- | :--- | :--- |
+| Points inside polygons | Stock containment rule | `v.select within`, reversed | Indexed `ST_ContainsProperly`, reversed |
+| Polygons contain a point | Stock containment rule | `v.select contains`, reversed | Indexed `ST_ContainsProperly`, reversed |
+| Duplicate points | `QgsSpatialIndex`, geometry equality | `v.to.db` coordinates, indexed SQLite pair query, native error points | Indexed `ST_Equals` pairs |
+| Line dangles | Indexed endpoint incidence | Native noding and node-degree inspection | Indexed endpoint-incidence SQL |
+| Polygon overlaps | Indexed positive-area intersection | Native spatial candidates and attributed `v.overlay` on original polygons | Indexed positive-area `ST_Intersection` |
+| Polygon gaps | Native union and bounded void difference | Bounded native faces with original-ring coverage classification | Native union and bounded void difference |
 
 Each record names the operation actually used. GRASS retains separate original
 polygon maps for overlays so equal or contained source features keep their IDs.
@@ -78,8 +74,6 @@ Its duplicate query reads coordinates extracted by GRASS and writes native error
 vectors. Gap faces without centroids are classified against indexed original
 rings using the native GRASS point-in-ring operation, so covered overlap faces
 are retained as coverage. Noding constructs topology without repairing or removing violations.
-gvSIG uses its bundled JTS geometry plugin for the four additional workflows.
-The stock topology plans remain in use for containment and other mapped rules.
 
 See the [QGIS geometry API](https://api.qgis.org/api/classQgsGeometry.html),
 [GRASS coordinate extraction](https://grass.osgeo.org/grass84/manuals/v.to.db.html)
@@ -92,8 +86,7 @@ indexes, topology construction, validation and native error geometry creation
 are timed. Result extraction, serialization and common geometry comparison occur
 after timing. GRASS includes module launch and native output writes. PostGIS
 measures server-side GiST creation, `ANALYZE` and materialized SQL violations.
-QGIS containment runs the stock C++ plugin with painting disabled. gvSIG disables
-unrelated profile autoruns and UI work.
+QGIS containment runs the stock C++ plugin with painting disabled.
 
 Pair checks compare both original IDs. Dangles compare affected feature IDs.
 Gaps compare canonical bounded geometry, including islands. Rust emits union
@@ -110,9 +103,9 @@ islands, covered overlap faces and self-connected line endpoints. All measured r
 ## Results and publication
 
 The output includes `results.json`, `samples.csv`, `README.md`, `comparison.png`
-and `comparison.svg`. A figure is generated only when all thirty combinations
+and `comparison.svg`. A figure is generated only when all 24 combinations
 complete at one common size of at least 1,000 features. It has six groups of
-median-time bars, a logarithmic millisecond axis and a five-tool legend.
+median-time bars, a logarithmic millisecond axis and a four-tool legend.
 Statistics, versions, failures and provenance remain in the detailed report.
 
 `publishable.json` additionally requires native Linux CI, one CPU in the recorded

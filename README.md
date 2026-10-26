@@ -35,7 +35,7 @@
 
 topology-checker checks map data for duplicate points, gaps, overlaps, and disconnected lines. Use it with Python, the command line, the local web app, or as a [QGIS](https://alecsandrei.github.io/topology-checker/stable/qgis-plugin/) or [RustGIS](https://github.com/opengeos/RustGIS) plugin.
 
-![Validation time for topology-checker, QGIS 4.2, GRASS GIS, PostGIS and gvSIG](benchmarks/gis/results/comparison.png)
+![Validation time for topology-checker, QGIS 4.2, GRASS GIS and PostGIS](benchmarks/gis/results/comparison.png)
 
 See the [measurements](benchmarks/gis/results/README.md) and [benchmark methodology](benchmarks/gis/README.md).
 

@@ -9,7 +9,7 @@ from typing import Any
 from benchmarks.gis.fixtures import ROOT
 from benchmarks.gis.sessions import QgisSession, RustSession
 
-from .catalog import GVSIG, NATIVE_RULES
+from .catalog import NATIVE_RULES
 from .common import WorkerSession
 from .postgis import PostgisSession
 
@@ -104,14 +104,6 @@ def create_session(
                 "/usr/bin/python3",
                 str(HERE / "grass_worker.py"),
             ],
-            directory,
-            startup_timeout,
-            environment,
-        )
-    if engine == "gvsig":
-        environment["GIS_WORKER_MAPPINGS"] = json.dumps(GVSIG)
-        return WorkerSession(
-            ["bash", str(HERE / "launch_gvsig.sh"), str(directory.resolve())],
             directory,
             startup_timeout,
             environment,
