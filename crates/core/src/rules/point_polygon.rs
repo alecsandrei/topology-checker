@@ -5,7 +5,6 @@ use crate::{
     aggregate::{Merge, aggregate},
     engine::{cross, index},
 };
-use rayon::prelude::*;
 
 /// How each point part relates to the polygon layer.
 #[derive(Debug, Clone, Copy)]
@@ -36,17 +35,16 @@ pub(super) fn points(
     let a = t.parts(spec.layer)?;
     let b = t.parts(other)?;
     let locations = crate::engine::location::locations(b);
-    let violations = a
-        .points
-        .par_iter()
-        .flat_map_iter(|p| {
+    let violations = super::flat_map(a.points.len(), |point| {
+        let p = &a.points[point];
+        let hits = t.cancellable(|| {
             let mut candidates = b
                 .polygon_index()
-                .locate_in_envelope_intersecting(&index::at(p.geometry.0, t.tolerance()))
-                .map(|i| i.data)
+                .locate(index::at(p.geometry.0, t.tolerance()))
+                .map(|i| i.id)
                 .collect::<Vec<_>>();
             candidates.sort_unstable();
-            let hits = candidates
+            candidates
                 .into_iter()
                 .filter(|&i| {
                     let polygon = &locations[i];
@@ -61,38 +59,38 @@ pub(super) fn points(
                         }
                     }
                 })
-                .collect::<Vec<_>>();
-            let origin = Some(p.reference.at(spec.layer));
-            let kind = match test {
-                PointTest::Covered => {
-                    return if hits.is_empty() {
-                        vec![violation(
-                            spec,
-                            ViolationKind::NotCovered,
-                            p.geometry,
-                            origin,
-                            None,
-                        )]
-                    } else {
-                        Vec::new()
-                    };
-                }
-                PointTest::NotInside => ViolationKind::Contained,
-                PointTest::NotIntersecting => ViolationKind::Intersection,
-            };
-            hits.into_iter()
-                .map(|i| {
-                    violation(
+                .collect::<Vec<_>>()
+        });
+        let origin = Some(p.reference.at(spec.layer));
+        let kind = match test {
+            PointTest::Covered => {
+                return if hits.is_empty() {
+                    vec![violation(
                         spec,
-                        kind,
+                        ViolationKind::NotCovered,
                         p.geometry,
                         origin,
-                        Some(b.polygons[i].reference.at(other)),
-                    )
-                })
-                .collect()
-        })
-        .collect();
+                        None,
+                    )]
+                } else {
+                    Vec::new()
+                };
+            }
+            PointTest::NotInside => ViolationKind::Contained,
+            PointTest::NotIntersecting => ViolationKind::Intersection,
+        };
+        hits.into_iter()
+            .map(|i| {
+                violation(
+                    spec,
+                    kind,
+                    p.geometry,
+                    origin,
+                    Some(b.polygons[i].reference.at(other)),
+                )
+            })
+            .collect()
+    });
     Ok(aggregate(violations, Merge::AllDimensions))
 }
 
@@ -105,24 +103,27 @@ pub(super) fn contained_points(
     let a = t.parts(spec.layer)?;
     let b = t.parts(other)?;
     let locations = crate::engine::location::locations(a);
-    let violations = index::pairs(a.polygon_index(), b.point_index(), t.tolerance(), false)
-        .par_bridge()
-        .filter_map(|(i, j)| {
-            let (p, q) = (&a.polygons[i], &b.points[j]);
-            (locations[i].position(q.geometry.0) == 1
-                && !locations[i].near(q.geometry.0, t.tolerance()))
-            .then(|| {
-                violation(
-                    spec,
-                    ViolationKind::Contained,
-                    q.geometry,
-                    Some(p.reference.at(spec.layer)),
-                    Some(q.reference.at(other)),
-                )
-            })
+    let pairs = index::nearby(a.polygon_order(), b.point_index(), t.tolerance());
+    let contained = |(i, j): (usize, usize)| {
+        let (p, q) = (&a.polygons[i], &b.points[j]);
+        t.cancellable(|| {
+            locations[i].position(q.geometry.0) == 1
+                && !locations[i].near(q.geometry.0, t.tolerance())
         })
-        .collect();
-    Ok(aggregate(violations, Merge::AllDimensions))
+        .then(|| {
+            violation(
+                spec,
+                ViolationKind::Contained,
+                q.geometry,
+                Some(p.reference.at(spec.layer)),
+                Some(q.reference.at(other)),
+            )
+        })
+    };
+    Ok(aggregate(
+        super::each_pair(pairs, contained),
+        Merge::AllDimensions,
+    ))
 }
 
 /// Count point features whose retained parts all lie strictly inside a polygon feature.

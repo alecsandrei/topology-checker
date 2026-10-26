@@ -1,10 +1,9 @@
 //! Merge part-level violations into one violation per rule, kind and feature pair.
-use crate::{FeatureRef, LayerId, Rule, Violation, ViolationKind};
+use crate::{FeatureRef, Violation, engine::parallel::Workers};
 use geo::{
     Geometry, GeometryCollection, LineString, MultiLineString, MultiPoint, MultiPolygon, Point,
     Polygon,
 };
-use std::collections::BTreeMap;
 
 /// How the geometries of merged violations are combined.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -132,52 +131,119 @@ impl Collected {
 
 /// Merge violations sharing a rule, kind and origin and destination features.
 /// Part indices are cleared when several parts contributed; groups follow key order.
-pub(crate) fn aggregate(violations: Vec<Violation>, merge: Merge) -> Vec<Violation> {
-    type Key = (
-        Rule,
-        ViolationKind,
-        Option<(LayerId, i64)>,
-        Option<(LayerId, i64)>,
-    );
-    let mut groups: BTreeMap<Key, Vec<Violation>> = BTreeMap::new();
-    for v in violations {
-        groups
-            .entry((
-                v.rule,
-                v.kind,
-                v.origin.map(FeatureRef::feature),
-                v.destination.map(FeatureRef::feature),
-            ))
-            .or_default()
-            .push(v);
+/// Groups are found by sorting, without an allocation each, so a cancelled
+/// aggregation frees little, and merge on several threads. Each violation moves once
+/// before its merge, into the task of its group.
+pub(crate) fn aggregate(mut violations: Vec<Violation>, merge: Merge) -> Vec<Violation> {
+    let len = violations.len();
+    let workers = Workers::new(len);
+    let mut order = Vec::with_capacity(len);
+    for (i, v) in violations.iter().enumerate() {
+        crate::cancel::every(i, "aggregate");
+        order.push(place(v, i));
     }
-    groups
-        .into_values()
-        .map(|group| {
-            let mut group = group.into_iter();
-            let mut first = group.next().expect("aggregation groups are nonempty");
-            let mut geometries = vec![std::mem::replace(
-                &mut first.geometry,
-                Geometry::GeometryCollection(GeometryCollection(Vec::new())),
-            )];
-            for v in group {
-                if let (Some(a), Some(b)) = (&mut first.origin, v.origin) {
-                    a.aggregate(b);
-                }
-                if let (Some(a), Some(b)) = (&mut first.destination, v.destination) {
-                    a.aggregate(b);
-                }
-                geometries.push(v.geometry);
-            }
-            first.geometry = merge.geometry(geometries);
-            first
+    workers.sort(&mut order, "aggregate.sort", Ord::cmp);
+    let same = |a: &Place, b: &Place| a[..GROUP] == b[..GROUP];
+    // Whole groups for each task: their places, the number of groups before them
+    // and their violations in order.
+    let mut tasks = Vec::new();
+    let (mut start, mut groups) = (0, 0);
+    for range in workers.ranges(len) {
+        let mut end = range.end.max(start);
+        while end < len && same(&order[end], &order[end - 1]) {
+            end += 1;
+        }
+        if end == start {
+            continue;
+        }
+        let places = &order[start..end];
+        let mut members = Vec::with_capacity(places.len());
+        for (k, place) in places.iter().enumerate() {
+            crate::cancel::every(start + k, "aggregate.gather");
+            let at = usize::try_from(place[GROUP]).expect("a position");
+            members.push(take(&mut violations[at]));
+        }
+        tasks.push((places, groups, members));
+        groups += 1 + places.windows(2).filter(|w| !same(&w[0], &w[1])).count();
+        start = end;
+    }
+    drop(violations);
+    let merged = workers.each(tasks, |(places, before, members)| {
+        let mut members = members.into_iter();
+        let mut out = Vec::new();
+        let mut k = 0;
+        while k < places.len() {
+            crate::cancel::every(before + out.len(), "aggregate.merge");
+            let size = places[k..].partition_point(|other| same(other, &places[k]));
+            out.push(merged(members.by_ref().take(size), merge));
+            k += size;
+        }
+        out
+    });
+    let total = merged.iter().map(Vec::len).sum::<usize>();
+    let mut out = Vec::new();
+    for part in merged {
+        crate::cancel::checkpoint("aggregate.join");
+        // The others join the first part, which stays where it is.
+        if out.is_empty() {
+            out = part;
+            out.reserve(total - out.len());
+        } else {
+            out.extend(part);
+        }
+    }
+    out
+}
+/// Move a violation out, leaving it without a geometry.
+fn take(v: &mut Violation) -> Violation {
+    let empty = Geometry::GeometryCollection(GeometryCollection(Vec::new()));
+    Violation {
+        geometry: std::mem::replace(&mut v.geometry, empty),
+        ..*v
+    }
+}
+
+/// Words of a violation's group, then its position, which sort as the rule, kind,
+/// origin and destination features, then the order of the violations.
+type Place = [u64; GROUP + 1];
+/// Words of the group in a [`Place`].
+const GROUP: usize = 5;
+fn place(v: &Violation, position: usize) -> Place {
+    // Layers count from one, so a missing feature sorts first.
+    let feature = |f: Option<FeatureRef>| {
+        f.map_or([0, 0], |f| {
+            [f.layer.0 as u64 + 1, f.fid.cast_unsigned() ^ (1 << 63)]
         })
-        .collect()
+    };
+    let ([a, b], [c, d]) = (feature(v.origin), feature(v.destination));
+    let kind = (v.rule as u64) << 32 | v.kind as u64;
+    [kind, a, b, c, d, position as u64]
+}
+
+/// One violation for a nonempty group sharing a key, in group order.
+fn merged(mut group: impl Iterator<Item = Violation>, merge: Merge) -> Violation {
+    let mut first = group.next().expect("aggregation groups are nonempty");
+    let mut geometries = vec![std::mem::replace(
+        &mut first.geometry,
+        Geometry::GeometryCollection(GeometryCollection(Vec::new())),
+    )];
+    for v in group {
+        if let (Some(a), Some(b)) = (&mut first.origin, v.origin) {
+            a.aggregate(b);
+        }
+        if let (Some(a), Some(b)) = (&mut first.destination, v.destination) {
+            a.aggregate(b);
+        }
+        geometries.push(v.geometry);
+    }
+    first.geometry = merge.geometry(geometries);
+    first
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{LayerId, Rule, ViolationKind};
     use geo::{Rect, coord};
 
     fn violation(geometry: Geometry, part: u32) -> Violation {
@@ -283,5 +349,121 @@ mod tests {
         );
         let single = Merge::HighestDimension.geometry([line.into()]);
         assert_eq!(single, Geometry::LineString(line.into()));
+    }
+
+    /// Violations of a few rules and feature pairs, with points, lines and polygons,
+    /// which merge in input order.
+    fn many(n: usize, features: usize) -> Vec<Violation> {
+        (0..n)
+            .map(|i| {
+                let x = (i * 7 % 13) as f64;
+                let geometry = match i % 4 {
+                    0 => Point::new(x, 0.).into(),
+                    1 => LineString::from(vec![(x, 0.), (x + 1., 1.)]).into(),
+                    2 => Rect::new(coord! {x: x, y: 0.}, coord! {x: x + 1., y: i as f64 + 1.})
+                        .to_polygon()
+                        .into(),
+                    _ => Point::new(x, 1.).into(),
+                };
+                let feature = |layer, fid: usize| FeatureRef {
+                    layer: LayerId(layer),
+                    fid: (fid % features) as i64 - 3,
+                    part: Some((i % 4) as u32),
+                };
+                Violation {
+                    rule: [Rule::LineMustNotIntersect, Rule::PointMustNotOverlap][i % 2],
+                    kind: ViolationKind::Crossing,
+                    geometry,
+                    origin: Some(feature(0, i * 31)),
+                    destination: (i % 5 != 0).then(|| feature(1, i * 17 / 3)),
+                }
+            })
+            .collect()
+    }
+
+    #[test]
+    fn groups_merge_in_key_then_input_order_for_any_split() {
+        for (n, features) in [
+            (0, 1),
+            (1, 1),
+            (9, 2),
+            (5000, 1),
+            (20_000, 40),
+            (20_000, 50_000),
+        ] {
+            let violations = many(n, features);
+            let mut groups = std::collections::BTreeMap::<_, Vec<_>>::new();
+            for v in violations.clone() {
+                let origin = v.origin.map(FeatureRef::feature);
+                let destination = v.destination.map(FeatureRef::feature);
+                groups
+                    .entry((v.rule, v.kind, origin, destination))
+                    .or_default()
+                    .push(v);
+            }
+            let expected = groups
+                .into_values()
+                .map(|group| merged(group.into_iter(), Merge::AllDimensions))
+                .collect::<Vec<_>>();
+            for (threads, grain) in [(1, 4096), (3, 1), (4, 64)] {
+                let found = Workers::forced(threads, grain, || {
+                    aggregate(violations.clone(), Merge::AllDimensions)
+                });
+                assert_eq!(found, expected, "{n} with {features} on {threads}");
+            }
+        }
+    }
+
+    #[test]
+    fn aggregation_stops_in_each_step_when_cancelled() {
+        use crate::cancel::{self, hooks};
+        let threads = 4;
+        let violations = many(20_000, 400);
+        let run = |token: &cancel::CancellationToken| {
+            std::panic::catch_unwind(|| {
+                cancel::scope(Some(token.clone()), || {
+                    Workers::forced(threads, 64, || {
+                        aggregate(violations.clone(), Merge::AllDimensions).len()
+                    })
+                })
+            })
+        };
+        let token = hooks::watched(None);
+        run(&token).expect("merged");
+        let visits = hooks::record(&token).visits;
+        let steps = visits.keys().copied().collect::<Vec<_>>();
+        assert_eq!(
+            steps,
+            [
+                "aggregate",
+                "aggregate.gather",
+                "aggregate.join",
+                "aggregate.merge",
+                "aggregate.sort",
+                "sort.buckets",
+                "sort.classes",
+                "sort.copy",
+                "sort.moves",
+                "sort.samples"
+            ]
+        );
+        for (step, count) in visits {
+            for visit in [0, count / 2, count - 1] {
+                let token = hooks::watched(Some((step, visit)));
+                let result = run(&token);
+                let record = hooks::record(&token);
+                assert!(
+                    result.expect_err("cancelled").is::<cancel::Cancelled>(),
+                    "{step} {visit}"
+                );
+                // Each other thread passes at most one more checkpoint.
+                let after = record.visits[step];
+                assert!(
+                    (visit + 1..=visit + threads).contains(&after),
+                    "{step} {visit}: {after}"
+                );
+                assert_eq!(record.live, 0);
+            }
+        }
     }
 }

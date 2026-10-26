@@ -5,6 +5,9 @@ use std::sync::{Mutex, OnceLock, TryLockError};
 pub(crate) struct Cache<T> {
     value: OnceLock<T>,
     initialize: Mutex<()>,
+    /// Whether one parallel task made the cache for itself. Caches that tasks share
+    /// build the same way whichever of them needs it first.
+    local: bool,
 }
 impl<T> Default for Cache<T> {
     fn default() -> Self {
@@ -12,10 +15,16 @@ impl<T> Default for Cache<T> {
     }
 }
 impl<T> Cache<T> {
-    pub const fn new() -> Self {
+    /// A cache of whatever runs on this thread now.
+    pub fn new() -> Self {
+        Self::owned(crate::engine::parallel::local())
+    }
+    /// A cache of one parallel task when `local`, else one that tasks share.
+    pub fn owned(local: bool) -> Self {
         Self {
             value: OnceLock::new(),
             initialize: Mutex::new(()),
+            local,
         }
     }
     pub fn get_or_init(&self, initialize: impl FnOnce() -> T) -> &T {
@@ -36,7 +45,13 @@ impl<T> Cache<T> {
                     continue;
                 }
             };
-            let value = self.value.get_or_init(initialize);
+            let value = self.value.get_or_init(|| {
+                if self.local {
+                    initialize()
+                } else {
+                    crate::engine::parallel::shared(initialize)
+                }
+            });
             drop(guard);
             return value;
         }

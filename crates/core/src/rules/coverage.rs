@@ -7,7 +7,6 @@ use crate::{
     model::{Part, Parts},
 };
 use geo::{Line, Point};
-use rayon::prelude::*;
 
 /// Secondary-layer features that cover a point within tolerance.
 #[derive(Debug, Clone, Copy)]
@@ -31,9 +30,9 @@ fn on_segments(
     tree.locate_in_envelope_intersecting(&index::at(point.0, tolerance))
         .any(|i| proximity::near_segment(point.0, segments[i.data].geometry, tolerance))
 }
-fn on_points(point: &Point, points: &[Part<Point>], tree: &index::Index, tolerance: f64) -> bool {
-    tree.locate_in_envelope_intersecting(&index::at(point.0, tolerance))
-        .any(|i| proximity::coincident(points[i.data].geometry.0, point.0, tolerance))
+fn on_points(point: &Point, points: &[Part<Point>], tree: &index::Packed, tolerance: f64) -> bool {
+    tree.locate(index::at(point.0, tolerance))
+        .any(|i| proximity::coincident(points[i.id].geometry.0, point.0, tolerance))
 }
 fn covered(point: &Point, target: Target, parts: &Parts, tolerance: f64) -> bool {
     match target {
@@ -54,8 +53,8 @@ fn covered(point: &Point, target: Target, parts: &Parts, tolerance: f64) -> bool
             let locations = crate::engine::location::locations(parts);
             parts
                 .polygon_index()
-                .locate_in_envelope_intersecting(&index::at(point.0, tolerance))
-                .any(|item| locations[item.data].near(point.0, tolerance))
+                .locate(index::at(point.0, tolerance))
+                .any(|item| locations[item.id].near(point.0, tolerance))
         }
         Target::Points => on_points(point, &parts.points, parts.point_index(), tolerance),
     }
@@ -69,14 +68,13 @@ fn uncovered(
     endpoints: Option<&cross::Endpoints>,
 ) -> Result<Vec<Violation>, Error> {
     let b = t.parts(other)?;
-    let violations = sources
-        .par_iter()
-        .enumerate()
-        .filter(|(i, p)| {
-            endpoints.is_none_or(|ends| ends.is_open(*i, t.tolerance()))
+    let violations = super::flat_map(sources.len(), |i| {
+        let p = &sources[i];
+        t.cancellable(|| {
+            endpoints.is_none_or(|ends| ends.is_open(i, t.tolerance()))
                 && !covered(&p.geometry, target, b, t.tolerance())
         })
-        .map(|(_, p)| {
+        .then(|| {
             violation(
                 spec,
                 ViolationKind::NotCovered,
@@ -85,7 +83,7 @@ fn uncovered(
                 None,
             )
         })
-        .collect();
+    });
     Ok(aggregate(violations, Merge::AllDimensions))
 }
 
@@ -116,23 +114,26 @@ pub(super) fn line_contacts(
 ) -> Result<Vec<Violation>, Error> {
     let a = t.parts(spec.layer)?;
     let b = t.parts(other)?;
-    let violations = index::pairs(a.point_index(), b.line_index(), t.tolerance(), false)
-        .par_bridge()
-        .filter_map(|(i, j)| {
-            let (p, l) = (&a.points[i], &b.lines[j]);
+    let pairs = index::nearby(a.point_order(), b.line_index(), t.tolerance());
+    let contact = |(i, j): (usize, usize)| {
+        let (p, l) = (&a.points[i], &b.lines[j]);
+        t.cancellable(|| {
             l.geometry
                 .lines()
                 .any(|line| proximity::near_segment(p.geometry.0, line, t.tolerance()))
-                .then(|| {
-                    violation(
-                        spec,
-                        ViolationKind::Intersection,
-                        p.geometry,
-                        Some(p.reference.at(spec.layer)),
-                        Some(l.reference.at(other)),
-                    )
-                })
         })
-        .collect();
-    Ok(aggregate(violations, Merge::AllDimensions))
+        .then(|| {
+            violation(
+                spec,
+                ViolationKind::Intersection,
+                p.geometry,
+                Some(p.reference.at(spec.layer)),
+                Some(l.reference.at(other)),
+            )
+        })
+    };
+    Ok(aggregate(
+        super::each_pair(pairs, contact),
+        Merge::AllDimensions,
+    ))
 }

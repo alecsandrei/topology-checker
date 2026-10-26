@@ -2,7 +2,6 @@ use crate::{
     Error, LayerId, RuleSpec, Topology, Violation, ViolationKind,
     engine::{index, proximity::coincident},
 };
-use rayon::prelude::*;
 
 pub(crate) fn overlap(t: &Topology, spec: RuleSpec) -> Result<Vec<Violation>, Error> {
     let mut errors = Vec::new();
@@ -22,14 +21,14 @@ pub(crate) fn inside(
     let a = t.parts(spec.layer)?;
     let b = t.parts(other)?;
     let locations = crate::engine::location::locations(b);
-    Ok(a.points
-        .par_iter()
-        .filter_map(|p| {
+    Ok(super::flat_map(a.points.len(), |i| {
+        let p = &a.points[i];
+        t.cancellable(|| {
             let inside = b
                 .polygon_index()
-                .locate_in_envelope_intersecting(&index::at(p.geometry.0, t.tolerance()))
+                .locate(index::at(p.geometry.0, t.tolerance()))
                 .any(|item| {
-                    let polygon = &locations[item.data];
+                    let polygon = &locations[item.id];
                     polygon.position(p.geometry.0) == 1
                         && !polygon.near(p.geometry.0, t.tolerance())
                 });
@@ -41,7 +40,7 @@ pub(crate) fn inside(
                 destination: None,
             })
         })
-        .collect())
+    }))
 }
 
 /// Aggregate and emit one feature pair at a time, preserving every duplicate pair.
@@ -56,6 +55,7 @@ pub(crate) fn overlap_into<E>(
     let b = t.parts(other)?;
     let mut features: BTreeMap<i64, Vec<usize>> = BTreeMap::new();
     for (i, p) in a.points.iter().enumerate() {
+        crate::cancel::every(i, "point.features");
         features.entry(p.reference.fid).or_default().push(i);
     }
     let ranks = t.layer(spec.layer)?.ranks();
@@ -66,9 +66,9 @@ pub(crate) fn overlap_into<E>(
             let p = &a.points[i];
             for item in b
                 .point_index()
-                .locate_in_envelope_intersecting(&index::at(p.geometry.0, t.tolerance()))
+                .locate(index::at(p.geometry.0, t.tolerance()))
             {
-                let q = &b.points[item.data];
+                let q = &b.points[item.id];
                 if spec.other.is_none() && ranks[&q.reference.fid] <= ranks[&fid] {
                     continue;
                 }

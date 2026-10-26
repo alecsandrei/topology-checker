@@ -2,7 +2,6 @@ use crate::{
     Error, LayerId, RuleSpec, Topology, Violation, ViolationKind,
     engine::{arrangement, index, location, polygons, precision, validity},
 };
-use rayon::prelude::*;
 use std::collections::BTreeMap;
 
 pub(crate) fn overlap(t: &Topology, spec: RuleSpec) -> Result<Vec<Violation>, Error> {
@@ -41,9 +40,9 @@ pub(crate) fn overlap(t: &Topology, spec: RuleSpec) -> Result<Vec<Violation>, Er
         ai.push(i);
         bj.push(j);
     }
-    groups
-        .into_par_iter()
-        .map(|((afid, bfid), (mut ai, mut bj))| {
+    super::each(
+        groups.into_iter().collect(),
+        |((afid, bfid), (mut ai, mut bj))| {
             ai.sort_unstable();
             ai.dedup();
             bj.sort_unstable();
@@ -104,9 +103,11 @@ pub(crate) fn overlap(t: &Topology, spec: RuleSpec) -> Result<Vec<Violation>, Er
                 origin: Some(origin),
                 destination: Some(destination),
             }))
-        })
-        .collect::<Result<Vec<_>, Error>>()
-        .map(|v| v.into_iter().flatten().collect())
+        },
+    )
+    .into_iter()
+    .collect::<Result<Vec<_>, Error>>()
+    .map(|v| v.into_iter().flatten().collect())
 }
 pub(crate) fn gaps(t: &Topology, spec: RuleSpec) -> Result<Vec<Violation>, Error> {
     let union = polygons::union(t.parts(spec.layer)?);

@@ -131,12 +131,17 @@ impl ContainsCoordinate for Rect {
         p.x >= self.min().x && p.x <= self.max().x && p.y >= self.min().y && p.y <= self.max().y
     }
 }
+/// The location of each polygon part, built once. Each part builds an index of its
+/// own, so the build checks for cancellation before each.
 pub(crate) fn locations(parts: &crate::model::Parts) -> &[Location] {
     parts.locations.get_or_init(|| {
         parts
             .polygons
             .iter()
-            .map(|p| Location::new(&p.geometry))
+            .map(|p| {
+                crate::cancel::checkpoint("locations");
+                Location::new(&p.geometry)
+            })
             .collect()
     })
 }

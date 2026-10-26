@@ -937,23 +937,27 @@ mod tests {
     }
     /// The checkpoints it passes.
     const STEPS: &str = "\
-        cluster cluster.batch cluster.ends cluster.points cluster.sort collapsed \
-        connected.components connected.join connected.sort connected.spans contacts \
-        contacts.features contacts.nodes contacts.sort contacts.values crack cuts directions edges \
-        edges.count edges.cursor edges.group edges.incident edges.incident.init edges.offsets \
-        edges.sort ends ends.init ends.sort fill gather.contacts gather.edges index index.arrange \
-        matches.features matches.index matches.pairs matches.retain matches.sort noding order \
-        pairs pairs.join parts retain.components retain.confined retain.found retain.groups \
-        retain.ids retain.junctions retain.junctions.sort retain.meetings retain.meetings.sort \
-        retain.positions retain.runs retain.spans retain.spans.join retain.spans.sort \
-        retain.support retain.support.spans returns.chord returns.first returns.last returns.near \
-        returns.segments sort.buckets sort.classes sort.copy sort.moves sort.samples sort.serial \
-        support.each support.evidence support.groups support.ids support.lengths support.order \
-        support.participants support.passages support.roles support.roles.assign support.runs \
-        support.runs.join support.runs.sort sustained.component sustained.lengths sustained.lines \
-        sustained.merge sustained.pending sustained.restore sustained.sort sustained.sources \
-        sustained.widths sweep.cells sweep.cells.sort sweep.earlier ties trim.dropped trim.edges \
-        trim.ends trim.own trim.parts trim.removed zones.explained zones.meetings zones.relevant";
+        aggregate aggregate.gather aggregate.join aggregate.merge aggregate.sort cluster \
+        cluster.batch cluster.ends cluster.points cluster.sort collapsed connected.components connected.join connected.sort connected.spans contacts \
+        contacts.features contacts.nodes contacts.sort contacts.values crack cuts dangles \
+        directions edges edges.count edges.cursor edges.group edges.incident edges.incident.init \
+        edges.offsets edges.sort ends ends.init ends.sort feature.lines fill gather.contacts \
+        gather.edges index \
+        index.arrange index.bounds index.nodes matches.features matches.index matches.pairs \
+        matches.retain matches.sort \
+        noding order pairs pairs.join parts pseudos retain.components retain.confined \
+        retain.found retain.groups retain.ids retain.junctions retain.junctions.sort \
+        retain.meetings retain.meetings.sort retain.positions retain.runs retain.spans \
+        retain.spans.join retain.spans.sort retain.support retain.support.spans returns.chord \
+        returns.first returns.last returns.near returns.segments sort.buckets sort.classes \
+        sort.copy sort.moves sort.samples sort.serial support.each support.evidence \
+        support.groups support.ids support.lengths support.order support.participants \
+        support.passages support.roles support.roles.assign support.runs support.runs.join \
+        support.runs.sort sustained.component sustained.lengths sustained.lines sustained.merge \
+        sustained.pending sustained.restore sustained.sort sustained.sources sustained.widths \
+        sweep.cells sweep.cells.sort sweep.earlier ties trim.dropped trim.edges trim.ends \
+        trim.own trim.parts trim.removed violations.sort zones.explained zones.meetings \
+        zones.relevant";
 
     #[test]
     fn cancelling_at_any_step_stops_every_thread_and_keeps_the_topology_usable() {

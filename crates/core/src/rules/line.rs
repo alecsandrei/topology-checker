@@ -6,6 +6,7 @@ use geo::{
     Coord, Geometry, Kernel, MultiLineString, Point,
     kernels::{Orientation, RobustKernel},
 };
+use rayon::prelude::*;
 use std::collections::{BTreeMap, BTreeSet};
 
 type Feature = (LayerId, i64);
@@ -35,49 +36,61 @@ pub(super) fn run_self(
     spec: RuleSpec,
     crossings: bool,
 ) -> Result<Vec<Violation>, Error> {
-    let mut out = Vec::new();
     let layer = t.layer(spec.layer)?;
-    let features: Box<dyn Iterator<Item = (i64, &Geometry)> + '_> =
-        if let Some((_, fid)) = t.selected_feature() {
-            Box::new(layer.feature(layer.ranks()[&fid]).into_iter())
-        } else {
-            Box::new(layer.features())
-        };
-    for (fid, geometry) in features {
-        crate::cancel::check();
-        let mut isolated = Topology::new(t.tolerance())?;
-        let layer = isolated.add_layer(crate::Layer::from_features(
+    let features = if let Some((_, fid)) = t.selected_feature() {
+        layer.feature(layer.ranks()[&fid]).into_iter().collect()
+    } else {
+        layer.features().collect::<Vec<_>>()
+    };
+    // Features are independent. Keep layer order, and its first failure.
+    let mut out = Vec::new();
+    for errors in features
+        .into_par_iter()
+        .map(|(fid, geometry)| t.cancellable(|| self_feature(t, spec, crossings, fid, geometry)))
+        .collect::<Vec<_>>()
+    {
+        out.extend(errors?);
+    }
+    Ok(out)
+}
+fn self_feature(
+    t: &Topology,
+    spec: RuleSpec,
+    crossings: bool,
+    fid: i64,
+    geometry: &Geometry,
+) -> Result<Vec<Violation>, Error> {
+    let mut isolated = Topology::new(t.tolerance())?;
+    let layer = isolated.add_layer(crate::Layer::from_features(
+        "self",
+        [(fid, geometry.clone())],
+    ));
+    let graph = isolated.graph(vec![layer])?;
+    let mut errors = overlaps(&graph, spec, true, None, None);
+    if crossings {
+        // Original passages retain crossings that tolerance clustering
+        // would collapse onto a neighboring bend or source endpoint.
+        let mut exact = Topology::new(0.)?;
+        let exact_layer = exact.add_layer(crate::Layer::from_features(
             "self",
             [(fid, geometry.clone())],
         ));
-        let graph = isolated.graph(vec![layer])?;
-        let mut errors = overlaps(&graph, spec, true, None, None);
-        if crossings {
-            // Original passages retain crossings that tolerance clustering
-            // would collapse onto a neighboring bend or source endpoint.
-            let mut exact = Topology::new(0.)?;
-            let exact_layer = exact.add_layer(crate::Layer::from_features(
-                "self",
-                [(fid, geometry.clone())],
-            ));
-            let original = exact.graph(vec![exact_layer])?;
-            errors.extend(
-                self_crossings(&original, spec, t.tolerance())
-                    .into_iter()
-                    .filter(|v| {
-                        Point::try_from(v.geometry.clone())
-                            .is_ok_and(|p| !near_open_endpoint(&original, p.0, t.tolerance()))
-                    }),
-            );
-        }
-        for mut error in errors {
-            if let Some(origin) = &mut error.origin {
-                origin.layer = spec.layer;
-            }
-            out.push(error);
+        let original = exact.graph(vec![exact_layer])?;
+        errors.extend(
+            self_crossings(&original, spec, t.tolerance())
+                .into_iter()
+                .filter(|v| {
+                    Point::try_from(v.geometry.clone())
+                        .is_ok_and(|p| !near_open_endpoint(&original, p.0, t.tolerance()))
+                }),
+        );
+    }
+    for error in &mut errors {
+        if let Some(origin) = &mut error.origin {
+            origin.layer = spec.layer;
         }
     }
-    Ok(out)
+    Ok(errors)
 }
 /// Whether `p` lies within `tolerance` of an endpoint of an open source part.
 fn near_open_endpoint(original: &LineGraph, p: Coord, tolerance: f64) -> bool {
@@ -136,7 +149,8 @@ fn point(
 }
 fn dangles(g: &LineGraph, spec: RuleSpec) -> Vec<Violation> {
     let mut out = Vec::new();
-    for part in &g.parts {
+    for (i, part) in g.parts.iter().enumerate() {
+        crate::cancel::every(i, "dangles");
         if part.closed() || part.nodes.len() < 2 {
             continue;
         }
@@ -160,6 +174,7 @@ fn dangles(g: &LineGraph, spec: RuleSpec) -> Vec<Violation> {
 fn pseudos(g: &LineGraph, spec: RuleSpec) -> Vec<Violation> {
     let mut out = Vec::new();
     for (node, uses) in g.incident.iter().enumerate() {
+        crate::cancel::every(node, "pseudos");
         if uses.len() != 2 {
             continue;
         }
