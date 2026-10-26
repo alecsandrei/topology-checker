@@ -168,7 +168,7 @@ jobs:
 
             RustGIS: install `topology-checker-*.rgplugin` with Plugin Manager > Install from File.
 
-            QGIS: install the `topology_rules` zip with Plugins > Manage and Install Plugins > Install from ZIP. The plugin needs the CLI.
+            QGIS: install the `topology_rules` zip with Plugins > Manage and Install Plugins > Install from ZIP. The plugin runs with the Python package, which its panel installs, or with the CLI.
 
             macOS: the binaries are unsigned. If macOS blocks them, run `xattr -dr com.apple.quarantine .` in the unzipped folder.
         run: |

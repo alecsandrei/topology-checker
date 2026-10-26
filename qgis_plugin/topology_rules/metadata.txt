@@ -11,8 +11,10 @@ server=False
 supportsQt6=True
 
 # Done automatically by qgis-plugin-ci
-changelog=Pass the plugin repository's security scan.
-version=0.2.1
+changelog=Choose the engine and install the Python package from the panel's gear menu.
+    Choose how errors are drawn from Style in the gear menu: colour by, size and colour ramp.
+    Show each rule's results as soon as the rule is done, and keep them when a run is canceled.
+version=0.3.0
 commitNumber=
 commitSha1=
 dateTime=

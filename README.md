@@ -120,7 +120,7 @@ topology-checker --json validate topology.toml -o errors.gpkg
 
 ## QGIS plugin
 
-The Topology Rules plugin adds a Processing tool for each rule and a panel where you queue several rules, run them in one pass and browse the errors. It runs the CLI (0.2.0 or newer), so install that first, then the plugin in **Plugins > Manage and Install Plugins**. See [QGIS plugin](https://alecsandrei.github.io/topology-checker/stable/qgis-plugin/).
+The Topology Rules plugin adds a Processing tool for each rule and a panel where you queue several rules, run them in one pass and browse the errors. Install it in **Plugins > Manage and Install Plugins**. It runs the Python package, which its panel installs, or the CLI (0.2.0 or newer). See [QGIS plugin](https://alecsandrei.github.io/topology-checker/stable/qgis-plugin/).
 
 ## Rust API
 
