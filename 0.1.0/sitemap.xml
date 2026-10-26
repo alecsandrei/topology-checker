@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+    <url>
+         <loc>https://alecsandrei.github.io/topology-checker/</loc>
+         <lastmod>2026-10-13</lastmod>
+    </url>
+    <url>
+         <loc>https://alecsandrei.github.io/topology-checker/cli/</loc>
+         <lastmod>2026-10-13</lastmod>
+    </url>
+    <url>
+         <loc>https://alecsandrei.github.io/topology-checker/install/</loc>
+         <lastmod>2026-10-13</lastmod>
+    </url>
+    <url>
+         <loc>https://alecsandrei.github.io/topology-checker/python-api/</loc>
+         <lastmod>2026-10-13</lastmod>
+    </url>
+    <url>
+         <loc>https://alecsandrei.github.io/topology-checker/python-usage/</loc>
+         <lastmod>2026-10-13</lastmod>
+    </url>
+    <url>
+         <loc>https://alecsandrei.github.io/topology-checker/rules/</loc>
+         <lastmod>2026-10-13</lastmod>
+    </url>
+    <url>
+         <loc>https://alecsandrei.github.io/topology-checker/web-app/</loc>
+         <lastmod>2026-10-13</lastmod>
+    </url>
+</urlset>

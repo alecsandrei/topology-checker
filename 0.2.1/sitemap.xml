@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+      <url>
+        <loc>https://alecsandrei.github.io/topology-checker/stable/</loc>
+      </url>
+      <url>
+        <loc>https://alecsandrei.github.io/topology-checker/stable/cli/</loc>
+      </url>
+      <url>
+        <loc>https://alecsandrei.github.io/topology-checker/stable/install/</loc>
+      </url>
+      <url>
+        <loc>https://alecsandrei.github.io/topology-checker/stable/python-api/</loc>
+      </url>
+      <url>
+        <loc>https://alecsandrei.github.io/topology-checker/stable/python-usage/</loc>
+      </url>
+      <url>
+        <loc>https://alecsandrei.github.io/topology-checker/stable/qgis-plugin/</loc>
+      </url>
+      <url>
+        <loc>https://alecsandrei.github.io/topology-checker/stable/rules/</loc>
+      </url>
+      <url>
+        <loc>https://alecsandrei.github.io/topology-checker/stable/rustgis-plugin/</loc>
+      </url>
+      <url>
+        <loc>https://alecsandrei.github.io/topology-checker/stable/web-app/</loc>
+      </url>
+</urlset>
