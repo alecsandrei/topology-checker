@@ -894,6 +894,7 @@ mod tests {
     fn threads_out_of_tasks_join_the_steps_of_tasks_still_running() {
         let token = cancel::hooks::watched(None);
         let ran = Mutex::new(std::collections::HashSet::new());
+        let free_after = Mutex::new(None);
         let found = cancel::scope(Some(token.clone()), || {
             Workers::with_threads(3).run_sharing(
                 3,
@@ -906,20 +907,26 @@ mod tests {
                     // A slow step on one thread, which the threads of the quick tasks join.
                     let caller = std::thread::current().id();
                     task(1, 3, || {
-                        Workers::all().run(50, |k| {
+                        let found = Workers::all().run(50, |k| {
                             let thread = std::thread::current().id();
                             ran.lock().unwrap().insert(thread);
                             std::thread::sleep(Duration::from_millis(2));
                             // The threads lent take no more for themselves.
                             assert!(thread == caller || Workers::all().alone());
                             k
-                        })
+                        });
+                        let spare = Workers::all().spare().expect("spare threads");
+                        *free_after.lock().unwrap() =
+                            Some(spare.free.load(atomic::Ordering::Relaxed));
+                        found
                     })
                 },
             )
         });
         assert_eq!(found, [(0..50).collect(), vec![1], vec![2]]);
         assert_eq!(ran.into_inner().unwrap().len(), 3);
+        // Both threads lent are free again once the step is done.
+        assert_eq!(free_after.into_inner().unwrap(), Some(2));
         // They serve the caller's token, as the two helpers and the two lent ones.
         let record = cancel::hooks::record(&token);
         assert_eq!((record.workers, record.live), (4, 0));
