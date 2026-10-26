@@ -1798,6 +1798,67 @@ mod tests {
     }
 
     #[test]
+    fn candidate_pairs_are_each_checked_once_in_their_order() {
+        // No two pairs alike, so one dropped, repeated or moved shows, for counts on and
+        // next to multiples of PAIR_TASK and PAIRS.
+        let pair = |i: usize| (i, i * 7 % 13);
+        let counts = [
+            0,
+            1,
+            PAIR_TASK - 1,
+            PAIR_TASK,
+            PAIR_TASK + 1,
+            5 * PAIR_TASK,
+            5 * PAIR_TASK + 1,
+            PAIRS - 1,
+            PAIRS,
+            PAIRS + 1,
+            PAIRS + PAIR_TASK,
+            2 * PAIRS,
+            3 * PAIRS + PAIR_TASK + 1,
+        ];
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .unwrap();
+        // Long enough per pair for spare threads to join a task's steps.
+        let slow = |pair| {
+            let start = Instant::now();
+            while start.elapsed() < Duration::from_micros(1) {}
+            Some(pair)
+        };
+        for count in counts {
+            let expected = (0..count).map(pair).collect::<Vec<_>>();
+            // The count found and the first position found wrong.
+            let wrong = |found: &[(usize, usize)]| {
+                let first = found.iter().zip(&expected).position(|(a, b)| a != b);
+                (found.len(), first)
+            };
+            let checked = || each_pair((0..count).map(pair), Some);
+            let right = (count, None);
+            assert_eq!(wrong(&pool.install(checked)), right, "{count} on rayon");
+            for threads in [1, 4] {
+                let found = parallel::task(threads, 1, checked);
+                assert_eq!(wrong(&found), right, "{count} in a task of {threads}");
+            }
+            let lent = Workers::with_threads(4).run_sharing(
+                2,
+                1,
+                || (),
+                |(), i| {
+                    let checked = || each_pair((0..count).map(pair), slow);
+                    if i == 0 {
+                        parallel::task(1, 1, checked)
+                    } else {
+                        Vec::new()
+                    }
+                },
+            );
+            assert_eq!(wrong(&lent[0]), right, "{count} with spare threads");
+        }
+    }
+
+    #[test]
     fn feature_batches_share_one_helper_budget() {
         static BUDGET: AtomicUsize = AtomicUsize::new(0);
         let used = || BUDGET.load(atomic::Ordering::Relaxed);
